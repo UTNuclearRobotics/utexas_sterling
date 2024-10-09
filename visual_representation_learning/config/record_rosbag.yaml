@@ -1,0 +1,4 @@
+topics:
+  - /imu
+  - /camera/rgb/image_raw/compressed
+  - /odom
