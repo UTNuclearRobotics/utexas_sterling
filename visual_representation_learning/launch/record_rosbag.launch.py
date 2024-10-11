@@ -22,6 +22,7 @@ import os
 from datetime import datetime
 
 import yaml
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -33,34 +34,23 @@ from launch.actions import (
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
+package_share_directory = get_package_share_directory("visual_representation_learning")
+
 
 def load_topics():
-    # Create the full path to the config file directory
-    config_dir = os.path.join(os.path.dirname(__file__), "..", "config")
-
     # Load the default topics from the YAML file
-    config_file = os.path.join(config_dir, "record_rosbag.yaml")
+    config_dir = os.path.join(package_share_directory, "config")
+    config_file = os.path.join(config_dir, "rosbag.yaml")
     with open(config_file, "r") as file:
         config = yaml.safe_load(file)
-    return config["topics"]
-
-
-def get_file_name():
-    # Create the full path to the bags file directory
-    bag_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "bags"))
-
-    # Ensure the directory exists
-    os.makedirs(bag_dir, exist_ok=True)
-
-    # Generate the timestamp and bag file name to ensure no overwriting of bags
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return bag_dir, f"vrl_data_{timestamp}"
+    return config["recorded_topics"]
 
 
 def launch_setup(context, *args, **kwargs):
     topics_list = load_topics()
-    bag_file_path, _ = get_file_name()
     bag_name = LaunchConfiguration("bag_name").perform(context)
+    output_dir = LaunchConfiguration("output_dir").perform(context)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Define the process to record the bag
     record_bag_process = ExecuteProcess(
@@ -69,7 +59,7 @@ def launch_setup(context, *args, **kwargs):
             "bag",
             "record",
             "-o",
-            PathJoinSubstitution([bag_file_path, bag_name]),
+            PathJoinSubstitution([output_dir, bag_name]),
         ]
         + topics_list,
         output="screen",
@@ -85,7 +75,7 @@ def launch_setup(context, *args, **kwargs):
                 target_action=record_bag_process,
                 on_exit=[
                     LogInfo(
-                        msg=f"Bags are stored at the directory: \033[0;33m{bag_file_path[bag_file_path.find('install'):]}\033[0m"
+                        msg=f"Bags are stored at the directory: \033[0;33m{output_dir}\033[0m"
                     ),
                     LogInfo(msg=f"Bag file name: \033[0;33m{bag_name}\033[0m"),
                 ],
@@ -96,13 +86,22 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     declared_arguments = []
-    _, default_bag_name = get_file_name()
 
+    default_bag_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".bag"
     declared_arguments.append(
         DeclareLaunchArgument(
             "bag_name",
             default_value=default_bag_name,
             description="Name of the bag file to save the recording",
+        ),
+    )
+
+    default_output_dir = os.path.expanduser("~/bags/utexas_sterling")
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "output_dir",
+            default_value=default_output_dir,
+            description="Directory to store generated bag files",
         ),
     )
 

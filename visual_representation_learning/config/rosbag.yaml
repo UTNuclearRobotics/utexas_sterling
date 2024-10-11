@@ -1,0 +1,23 @@
+# Topics recorded by the rosbag file.
+recorded_topics:
+  - /imu
+  - /camera/rgb/image_raw/compressed
+  - /odom
+
+# Camera intrinsic matrix for the specific camera setup used in the system.
+# These parameters are used to transform 3D points in the camera frame to 2D points in the image frame.
+# The matrix includes focal lengths and the optical center coordinates.
+#     [fx,  0, cx]
+#     [ 0, fy, cy]
+#     [ 0,  0,  1]
+# fx, fy: Focal lengths in pixels along the x and y axes.
+# cx, cy: Optical center coordinates in pixels (usually the center of the image).
+camera_intrinsics:
+  fx: 983.322571
+  fy: 983.123108
+  cx: 1024
+  cy: 768
+
+patch_parameters:
+  patch_size: 64
+  actuation_latency: 0.25
