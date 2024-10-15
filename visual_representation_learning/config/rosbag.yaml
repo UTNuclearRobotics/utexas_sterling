@@ -1,8 +1,10 @@
 # Topics recorded by the rosbag.
 recorded_topics:
-  imu: /imu
-  camera: /camera/rgb/image_raw/compressed
-  odom: /odom
+  # /tf
+  # /tf_static 
+  imu: /philbart/realsense_front/imu
+  camera: /philbart/realsense_front/color/image_raw/compressed
+  odom: /philbart/odom
 
 # Camera intrinsic matrix for the specific camera setup used in the system.
 # These parameters are used to transform 3D points in the camera frame to 2D points in the image frame.
@@ -21,3 +23,5 @@ camera_intrinsics:
 patch_parameters:
   patch_size: 64
   actuation_latency: 0.25
+
+topic_synchronization_threshold: 0.1
