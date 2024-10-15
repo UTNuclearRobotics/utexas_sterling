@@ -27,10 +27,11 @@ package_share_directory = get_package_share_directory("visual_representation_lea
 # Load the configuration from the YAML file
 with open(os.path.join(package_share_directory, "config", "rosbag.yaml"), "r") as file:
     config = yaml.safe_load(file)
-
+    TOPIC_DICT = config["recorded_topics"]
 
 def launch_setup(context, *args, **kwargs):
-    topics_list = config["recorded_topics"]
+    topics_list = list(TOPIC_DICT.values())
+    
     bag_name = LaunchConfiguration("bag_name").perform(context)
     output_dir = LaunchConfiguration("output_dir").perform(context)
     bag_file_path = os.path.join(output_dir, bag_name)
@@ -40,7 +41,7 @@ def launch_setup(context, *args, **kwargs):
 
     # Check if the bag file already exists
     if os.path.exists(bag_file_path):
-        raise FileExistsError(f"The bag file '{bag_file_path}' already exists.")
+        raise FileExistsError(f"The bag file '{bag_file_path}' already exists")
 
     # Define the process to record the bag
     record_bag_process = ExecuteProcess(
@@ -57,9 +58,7 @@ def launch_setup(context, *args, **kwargs):
             OnProcessExit(
                 target_action=record_bag_process,
                 on_exit=[
-                    LogInfo(
-                        msg=f"Bags are stored at the directory: \033[0;33m{output_dir}\033[0m"
-                    ),
+                    LogInfo(msg=f"Bags are stored at the directory: \033[0;33m{output_dir}\033[0m"),
                     LogInfo(msg=f"Bag file name: \033[0;33m{bag_name}\033[0m"),
                 ],
             )
@@ -81,11 +80,9 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "output_dir",
-            default_value=os.path.expanduser("~/bags/utexas_sterling"),
+            default_value=os.path.expanduser("~/utexas_sterling_ws/bags"),
             description="Directory to store generated bag files",
         ),
     )
 
-    return LaunchDescription(
-        declared_arguments + [OpaqueFunction(function=launch_setup)]
-    )
+    return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])
