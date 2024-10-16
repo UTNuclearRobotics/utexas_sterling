@@ -14,9 +14,8 @@ The main functionalities include:
 
 import os
 import pickle
-
+import pdb
 import cv2
-import message_filters
 import numpy as np
 import rclpy
 import rosbag2_py
@@ -81,10 +80,7 @@ class ProcessRosbag(Node):
         self.bag_path = self.get_parameter("bag_path").get_parameter_value().string_value
         self.visualize_results = self.get_parameter("visualize_results").get_parameter_value().bool_value
 
-        self.imuBuffer = np.zeros((200, 6), dtype=np.float32)
-
-        self.tfBuffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self.tfBuffer, self)
+        self.imu_buffer = np.zeros((200, 6), dtype=np.float32)
 
         self.msg_data = {
             "image_msg": [],
@@ -93,22 +89,23 @@ class ProcessRosbag(Node):
             "odom": [],
         }
 
-        # # Keep track of number of messages received
-        # self.counter = 0
-
-        # # Subscribe to the IMU topic
-        # self.create_subscription(Imu, RECORDED_TOPICS["imu"], self.imu_callback, 10)
-
-        # # Synchronize the camera and odometry topics using an approximate time synchronizer
-        # image_topic = message_filters.Subscriber(self, CompressedImage, RECORDED_TOPICS["camera"])
-        # odom_topic = message_filters.Subscriber(self, Odometry, RECORDED_TOPICS["odom"])
-        # ts = message_filters.ApproximateTimeSynchronizer([image_topic, odom_topic], 10, 0.05, allow_headerless=True)
-        # ts.registerCallback(self.image_odom_callback)
+        # self.tf_buffer = tf2_ros.Buffer()
+        # self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
     def read_rosbag(self):
+        """
+        Reads and processes messages from a ROS2 bag file.
+
+        The main functionalities include:
+        1. Sets up storage and converter options for reading the rosbag.
+        2. Opens the rosbag using a SequentialReader.
+        3. Iterates through the messages in the rosbag and processes them based on their topic types.
+        4. Synchronizes image and odometry messages based on their timestamps.
+        """
+
         # Check if the bag file exists
         if not os.path.exists(self.bag_path):
-            raise FileNotFoundError(f"Bag file does not exist: {self.bag_path}")
+            raise FileNotFoundError(f"Bag file does not exist: bag_path:={self.bag_path}")
 
         # Set up storage and converter options for reading the rosbag
         storage_options = rosbag2_py.StorageOptions(uri=self.bag_path, storage_id="sqlite3")
@@ -120,54 +117,46 @@ class ProcessRosbag(Node):
         metadata = reader.get_metadata()
         self.get_logger().info(f"{metadata}")
 
-        # Variables for iterator
+        # Iterator variables
         topic_types = reader.get_all_topics_and_types()
         type_map = {topic.name: topic.type for topic in topic_types}
-        last_image_msg = None 
+        last_image_msg = None
         last_odom_msg = None
-        image_msg_count = 0
-        odom_msg_count = 0
-        processed_msg_count = 0
-        synchronized_msg_count = 0
 
         # Iterate through the messages in the rosbag
-        while reader.has_next():
-            (topic, msg, t) = reader.read_next()
-            topic_type = type_map.get(topic)
+        with tqdm(total=metadata.message_count, desc="Reading rosbag messages") as pbar:
+            while reader.has_next():
+                (topic, msg, t) = reader.read_next()
+                topic_type = type_map.get(topic)
 
-            if topic_type == "sensor_msgs/msg/CompressedImage":
-                msg = deserialize_message(msg, CompressedImage)
-                last_image_msg = msg
-                image_msg_count += 1
-            elif topic_type == "nav_msgs/msg/Odometry":
-                msg = deserialize_message(msg, Odometry)
-                last_odom_msg = msg
-                odom_msg_count += 1
-            elif topic_type == "sensor_msgs/msg/Imu":
-                msg = deserialize_message(msg, Imu)
-                self.imu_callback(msg)
+                if topic_type == "sensor_msgs/msg/CompressedImage":
+                    msg = deserialize_message(msg, CompressedImage)
+                    last_image_msg = msg
+                elif topic_type == "nav_msgs/msg/Odometry":
+                    msg = deserialize_message(msg, Odometry)
+                    last_odom_msg = msg
+                elif topic_type == "sensor_msgs/msg/Imu":
+                    msg = deserialize_message(msg, Imu)
+                    self.imu_callback(msg)
 
-            # Synchronize messages based on timestamps
-            if last_image_msg and last_odom_msg:
-                image_time = last_image_msg.header.stamp.sec + last_image_msg.header.stamp.nanosec * 1e-9
-                odom_time = last_odom_msg.header.stamp.sec + last_odom_msg.header.stamp.nanosec * 1e-9
-                time_diff = abs(image_time - odom_time)
+                # Synchronize messages based on timestamps
+                if last_image_msg and last_odom_msg:
+                    # Calculate time difference
+                    image_time = last_image_msg.header.stamp.sec + last_image_msg.header.stamp.nanosec * 1e-9
+                    odom_time = last_odom_msg.header.stamp.sec + last_odom_msg.header.stamp.nanosec * 1e-9
+                    time_diff = abs(image_time - odom_time)
 
-                if time_diff < 0.05:
-                    self.image_odom_callback(last_image_msg, last_odom_msg)
-                    last_image_msg = None
-                    last_odom_msg = None
-                    synchronized_msg_count += 1
+                    if time_diff < 0.05:
+                        self.image_odom_callback(last_image_msg, last_odom_msg)
+                        last_image_msg = None
+                        last_odom_msg = None
 
-            processed_msg_count += 1
-
-        total_msgs = sum(topic.message_count for topic in metadata.topics_with_message_count)
-        self.get_logger().info(f"Processed {processed_msg_count}/{total_msgs} messages")
-        self.get_logger().info(f"Synchronized {synchronized_msg_count}/{min(image_msg_count, odom_msg_count)} messages")
+                pbar.update(1)
 
     def imu_callback(self, msg):
-        self.imuBuffer = np.roll(self.imuBuffer, -1, axis=0)
-        self.imuBuffer[-1] = np.array(
+        # self.get_logger().info(f"IMU Callback: {msg}")
+        self.imu_buffer = np.roll(self.imu_buffer, -1, axis=0)
+        self.imu_buffer[-1] = np.array(
             [
                 msg.linear_acceleration.x,
                 msg.linear_acceleration.y,
@@ -177,9 +166,11 @@ class ProcessRosbag(Node):
                 msg.angular_velocity.z,
             ]
         )
-        self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
+        self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, 1])
+        # self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
 
     def image_odom_callback(self, image, odom):
+        # Extract the yaw angle (rotation around the Z-axis) from the odometry message
         orientation = R.from_quat(
             [
                 odom.pose.pose.orientation.x,
@@ -192,13 +183,13 @@ class ProcessRosbag(Node):
         odom_val = np.asarray([odom.pose.pose.position.x, odom.pose.pose.position.y, orientation])
 
         self.msg_data["image_msg"].append(image)
-        self.msg_data["imu_history"].append(self.imuBuffer.flatten())
+        self.msg_data["imu_history"].append(self.imu_buffer.flatten())
         self.msg_data["imu_orientation"].append(self.imu_orientation)
         self.msg_data["odom"].append(odom_val.copy())
 
     def get_localization(self):
         try:
-            self.trans = self.tfBuffer.lookup_transform(
+            self.trans = self.tf_buffer.lookup_transform(
                 "map",
                 "base_link",
                 rclpy.time.Time(),
@@ -217,34 +208,42 @@ class ProcessRosbag(Node):
         Odometry Data: Position and orientation data from odometry.
         Orientation Data: Orientation data from the robot.
         """
-
+        
+        # for key, value in self.msg_data.items():
+        #     self.get_logger().info(f"Length of {key}: {len(value)}")
+        
         # Dictionary to hold all the processed data
         data = {"patches": [], "imu": []}
 
-        # Storage buffer to hold the past recent 20 BEV images for patch extraction
-        self.storage_buffer = {"image": [], "odom": []}
+        # Buffer to hold the recent 20 BEV images for patch extraction
+        buffer = {"image": [], "odom": []}
+        pdb.set_trace()
 
-        for i in tqdm(range(len(self.msg_data["image_msg"]))):
-            bevImage, _ = ProcessRosbag.camera_imu_homography(
+        for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
+            bev_image, _ = ProcessRosbag.camera_imu_homography(
                 self.msg_data["imu_orientation"][i],
                 self.msg_data["image_msg"][i],
             )
-            self.storage_buffer["image"].append(bevImage)
-            self.storage_buffer["odom"].append(self.msg_data["odom"][i])
+            buffer["image"].append(bev_image)
+            buffer["odom"].append(self.msg_data["odom"][i])
+            
+            # for key, value in buffer.items():
+            #     self.get_logger().info(f"Length of {key}: {len(value)}")
 
             if self.visualize_results:
-                bevImage = cv2.resize(bevImage, (bevImage.shape[1] // 3, bevImage.shape[0] // 3))
+                bev_image = cv2.resize(bev_image, (bev_image.shape[1] // 3, bev_image.shape[0] // 3))
 
             curr_odom = self.msg_data["odom"][i]
             patch_list = []
 
-            for j in range(0, len(self.storage_buffer["odom"])):
-                prev_image = self.storage_buffer["image"][j]
-                prev_odom = self.storage_buffer["odom"][j]
+            for j in range(0, len(buffer["image"])):
+                prev_image = buffer["image"][j]
+                prev_odom = buffer["odom"][j]
 
                 patch, vis_img = ProcessRosbag.get_patch_from_odom_delta(
                     curr_odom, prev_odom, prev_image, visualize=self.visualize_results
                 )
+
                 if patch is not None:
                     patch_list.append(patch)
 
@@ -252,27 +251,27 @@ class ProcessRosbag(Node):
                         vis_img = cv2.resize(vis_img, (vis_img.shape[1] // 3, vis_img.shape[0] // 3))
                         cv2.imshow(
                             "current img <-> previous img",
-                            np.hstack((bevImage, vis_img)),
+                            np.hstack((bev_image, vis_img)),
                         )
                         cv2.waitKey(5)
 
                 if len(patch_list) >= 10:
                     break
 
-            while len(self.storage_buffer["image"]) > 20:
-                self.storage_buffer["image"].pop(0)
-                self.storage_buffer["odom"].pop(0)
+            # Remove the oldest image and odometry data from the buffer
+            while len(buffer["image"]) > 20:
+                buffer["image"].pop(0)
+                buffer["odom"].pop(0)
 
             if len(patch_list) > 0:
                 self.get_logger().info(f"Num patches : {len(patch_list)}")
                 data["patches"].append(patch_list)
                 data["imu"].append(self.msg_data["imu_history"][i])
-                data["imu_kinect"].append(self.msg_data["imu_kinect_history"][i])
 
         # Ensure the output directory exists
         os.makedirs(self.save_path, exist_ok=True)
 
-        cprint(f"Saving data of size {len(data['imu_kinect'])}", "yellow")
+        cprint(f"Saving data of size {len(data['imu'])}", "yellow")
         cprint(f"Keys in the dataset : {data.keys()}", "yellow")
         pickle.dump(data, open(self.save_path + "_data.pkl", "wb"))
         cprint("Saved data successfully ", "yellow", attrs=["blink"])
@@ -308,7 +307,9 @@ class ProcessRosbag(Node):
         return output, img.copy()
 
     @staticmethod
-    def get_patch_from_odom_delta(curr_pos, prev_pos, prev_image, visualize=False):
+    def get_patch_from_odom_delta(curr_pos, prev_pos, prev_image, visualize=True):
+        # print(f"curr_pos: {curr_pos}, prev_pos: {prev_pos}, visualize: {visualize}")
+        
         curr_pos_np = np.array([curr_pos[0], curr_pos[1], 1])
 
         prev_pos_transform = np.zeros((3, 3))
@@ -334,10 +335,10 @@ class ProcessRosbag(Node):
         ]
 
         scaled_patch_corners = [
-            (patch_corners_prev_frame[0] * 132.003788).astype(np.int),
-            (patch_corners_prev_frame[1] * 132.003788).astype(np.int),
-            (patch_corners_prev_frame[2] * 132.003788).astype(np.int),
-            (patch_corners_prev_frame[3] * 132.003788).astype(np.int),
+            (patch_corners_prev_frame[0] * 132.003788).astype(np.int32),
+            (patch_corners_prev_frame[1] * 132.003788).astype(np.int32),
+            (patch_corners_prev_frame[2] * 132.003788).astype(np.int32),
+            (patch_corners_prev_frame[3] * 132.003788).astype(np.int32),
         ]
 
         CENTER = np.array((1024 - 20, (768 - 55) * 2))
@@ -417,7 +418,7 @@ def main(args=None):
 
     try:
         node.read_rosbag()
-        # node.save_data()
+        node.save_data()
     except Exception as e:
         node.get_logger().error(f"{e}")
     finally:
