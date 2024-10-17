@@ -39,6 +39,7 @@ with open(os.path.join(package_share_directory, "config", "rosbag.yaml"), "r") a
     config = yaml.safe_load(file)
     RECORDED_TOPICS = config["recorded_topics"]
     CAMERA_INTRINSICS = config["camera_intrinsics"]
+    CAMERA_IMU_TRANSFORM = config["camera_imu_transform"]
     PATCH_PARAMETERS = config["patch_parameters"]
 
 PATCH_SIZE = PATCH_PARAMETERS["patch_size"]
@@ -193,6 +194,7 @@ class ProcessRosbag(Node):
     def get_camera_intrinsics(self):
         """
         Get camera intrinsics and its inverse.
+        Take from topic if available, else use config values.
         """
         if self.camera_info is not None:
             fx = self.camera_info.K[0]
@@ -225,13 +227,8 @@ class ProcessRosbag(Node):
         # Buffer to hold the recent 20 BEV images for patch extraction
         buffer = {"bev_img": [], "odom": []}
 
-        # Get camera intrinsics and its inverse
-        C_i, C_i_inv = self.get_camera_intrinsics()
-
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
-            bev_img, _ = ProcessRosbag.camera_imu_homography(
-                self.msg_data["imu_orientation"][i], self.msg_data["image_msg"][i], C_i, C_i_inv
-            )
+            bev_img, _ = self.camera_imu_homography(self.msg_data["imu_orientation"][i], self.msg_data["image_msg"][i])
             buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
 
@@ -242,9 +239,7 @@ class ProcessRosbag(Node):
                 prev_image = buffer["bev_img"][j]
                 prev_odom = buffer["odom"][j]
 
-                patch, patch_img = ProcessRosbag.get_patch_from_odom_delta(
-                    curr_odom, prev_odom, prev_image, visualize=self.visual
-                )
+                patch, patch_img = self.get_patch_from_odom_delta(curr_odom, prev_odom, prev_image)
 
                 if patch is not None:
                     patch_list.append(patch)
@@ -268,7 +263,7 @@ class ProcessRosbag(Node):
                 buffer["odom"].pop(0)
 
             if len(patch_list) > 0:
-                self.get_logger().info(f"Num patches : {len(patch_list)}")
+                # self.get_logger().info(f"Num patches : {len(patch_list)}")
                 data["patches"].append(patch_list)
                 data["imu"].append(self.msg_data["imu_history"][i])
 
@@ -286,24 +281,42 @@ class ProcessRosbag(Node):
         except Exception as e:
             self.get_logger().info(f"Failed to save data to {file_path}: {e}")
 
-    @staticmethod
-    def camera_imu_homography(orientation_quat, image, C_i, C_i_inv):
+    def camera_imu_homography(self, orientation_quat, image):
+        """
+        Compute a homography matrix based on camera displacement
+        and orientation changes.
+        """
+
+        # Extract parameters from the configuration file
+        R_cam_imu_angles = CAMERA_IMU_TRANSFORM["R_cam_imu"]
+        R_pitch_angles = CAMERA_IMU_TRANSFORM["R_pitch"]
+        t1_values = CAMERA_IMU_TRANSFORM["t1"]
+        R2_angles = CAMERA_IMU_TRANSFORM["R2"]
+        t2_values = CAMERA_IMU_TRANSFORM["t2"]
+
+        # Convert IMU orientation quaternion to Euler angles
         R_imu_world = R.from_quat(orientation_quat)
         R_imu_world = R_imu_world.as_euler("XYZ", degrees=True)
 
-        R_cam_imu = R.from_euler("xyz", [-90, 90, 0], degrees=True)
-        R_pitch = R.from_euler("XYZ", [26.5, 0, 0], degrees=True)
-
+        # Rotation matrix from IMU to camera frame
+        R_cam_imu = R.from_euler("xyz", R_cam_imu_angles, degrees=True)
+        R_pitch = R.from_euler("XYZ", R_pitch_angles, degrees=True)
         R1 = R_pitch * R_cam_imu
         R1 = R1.as_matrix()
-        t1 = R1 @ np.array([0.0, 0.0, 0.75]).reshape((3, 1))
+        # Translation vector from IMU to camera frame
+        t1 = R1 @ np.array(t1_values).reshape((3, 1))
 
-        R2 = R.from_euler("XYZ", [-180, 0, 90], degrees=True).as_matrix()
-        t2 = R2 @ np.array([4.20, 0.0, 6.0]).reshape((3, 1))
+        # Rotation matrix from camera frame to BEV camera frame
+        R2 = R.from_euler("XYZ", R2_angles, degrees=True).as_matrix()
+        # Translation vector from camera frame to BEV camera frame
+        t2 = R2 @ np.array(t2_values).reshape((3, 1))
 
+        # Normal vector of camera
         n = np.array([0, 0, 1]).reshape((3, 1))
         n1 = R1 @ n
 
+        # Compute the homography matrix
+        C_i, C_i_inv = self.get_camera_intrinsics()
         H12 = ProcessRosbag.homography_camera_displacement(R1, R2, t1, t2, n1)
         homography_matrix = C_i @ H12 @ C_i_inv
         homography_matrix /= homography_matrix[2, 2]
@@ -329,8 +342,7 @@ class ProcessRosbag(Node):
         H12 /= H12[2, 2]
         return H12
 
-    @staticmethod
-    def get_patch_from_odom_delta(curr_pos, prev_pos, prev_image, visualize=False):
+    def get_patch_from_odom_delta(self, curr_pos, prev_pos, prev_image):
         """
         Extracts a specific patch (sub-image) from a previous image
         based on the current and previous positions and orientations.
@@ -391,7 +403,7 @@ class ProcessRosbag(Node):
         ]
 
         patch_img = None
-        if visualize:
+        if self.visual:
             patch_img = prev_image.copy()
 
             # Draw lines between patch corners
