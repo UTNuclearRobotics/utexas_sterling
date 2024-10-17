@@ -14,23 +14,19 @@ The main functionalities include:
 
 import os
 import pickle
-import pdb
+
 import cv2
 import numpy as np
 import rclpy
 import rosbag2_py
-import tf2_ros
 import yaml
-from rclpy.serialization import deserialize_message
-
 from ament_index_python.packages import get_package_share_directory
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.serialization import deserialize_message
 from scipy.spatial.transform import Rotation as R
-from sensor_msgs.msg import CompressedImage, Imu
+from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
 from tqdm import tqdm
-from termcolor import cprint
-from sensor_msgs.msg import CameraInfo
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
 
@@ -75,9 +71,6 @@ class ProcessRosbag(Node):
         }
 
         self.camera_info = None
-
-        # self.tf_buffer = tf2_ros.Buffer()
-        # self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
     def read_rosbag(self):
         """
@@ -157,7 +150,7 @@ class ProcessRosbag(Node):
             ]
         )
 
-        # TODO: Check if the orientation is correct, w is 0
+        # TODO: Check if the orientation from topic is correct (returned w as 0)
         self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, 1])
         # self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
 
@@ -178,18 +171,6 @@ class ProcessRosbag(Node):
         self.msg_data["imu_history"].append(self.imu_buffer.flatten())
         self.msg_data["imu_orientation"].append(self.imu_orientation)
         self.msg_data["odom"].append(odom_val.copy())
-
-    def get_localization(self):
-        try:
-            self.trans = self.tf_buffer.lookup_transform(
-                "map",
-                "base_link",
-                rclpy.time.Time(),
-                rclpy.duration.Duration(seconds=1.0),
-            )
-        except Exception as e:
-            self.trans = None
-            self.get_logger().error(str(e))
 
     def get_camera_intrinsics(self):
         """
