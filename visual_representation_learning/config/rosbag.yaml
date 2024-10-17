@@ -1,7 +1,5 @@
 # Topics recorded by the rosbag.
 recorded_topics:
-  # /tf
-  # /tf_static
   imu: /philbart/realsense_front/imu
   camera: /philbart/realsense_front/color/image_raw/compressed
   camera_info: /philbart/realsense_front/color/camera_info
@@ -15,18 +13,18 @@ recorded_topics:
 #     [ 0,  0,  1]
 # fx, fy: Focal lengths in pixels along the x and y axes.
 # cx, cy: Optical center coordinates in pixels (usually the center of the image).
-# camera_intrinsics:
-#   fx: 983.322571
-#   fy: 983.123108
-#   cx: 1024
-#   cy: 768
-
-# RealSense on Philbart
 camera_intrinsics:
+  # RealSense on Philbart
   fx: 611.1929931640625
   fy: 609.9984130859375
   cx: 317.29180908203125
   cy: 251.459716796875
+
+  # Kinect on AMRL Spot
+  #   fx: 983.322571
+  #   fy: 983.123108
+  #   cx: 1024
+  #   cy: 768
 
 # Rotation and translation parameters for the camera-IMU setup.
 camera_imu_transform:

@@ -21,9 +21,13 @@ from launch_ros.actions import Node
 os.environ["RCUTILS_CONSOLE_OUTPUT_FORMAT"] = "[{severity}] [{name}]: {message}"
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
+ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
 
 
 def launch_setup(context, *args, **kwargs):
+    bag_path = os.path.join(ros_ws_dir, "bags", LaunchConfiguration("bag_name").perform(context))
+    save_path = os.path.join(ros_ws_dir, "pickles")
+
     return [
         Node(
             package="visual_representation_learning",
@@ -32,8 +36,8 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
             parameters=[
                 {
-                    "bag_path": LaunchConfiguration("bag_path"),
-                    "save_path": LaunchConfiguration("save_path"),
+                    "bag_path": bag_path,
+                    "save_path": save_path,
                     "visual": LaunchConfiguration("visual"),
                 }
             ],
@@ -47,24 +51,14 @@ def generate_launch_description():
     # Declare the launch arguments
     declared_arguments.append(
         DeclareLaunchArgument(
-            "bag_path",
-            default_value=os.path.join("~utexas_sterling_ws", "bags", "default_bag"),
-            description="Path to the ROS bag folder containing the bag file",
+            "bag_name",
+            default_value="",
+            description="Name of the ROS bag folder containing the bag files",
         ),
     )
 
     declared_arguments.append(
-        DeclareLaunchArgument(
-            "save_path",
-            default_value=os.path.expanduser("~/utexas_sterling_ws/pickles"),
-            description="Path to save the processed data",
-        ),
-    )
-
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "visual", default_value="false", description="Whether to visualize the results"
-        ),
+        DeclareLaunchArgument("visual", default_value="false", description="Whether to visualize the results"),
     )
 
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])
