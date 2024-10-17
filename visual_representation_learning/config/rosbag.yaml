@@ -4,6 +4,7 @@ recorded_topics:
   # /tf_static 
   imu: /philbart/realsense_front/imu
   camera: /philbart/realsense_front/color/image_raw/compressed
+  camera_info: /philbart/realsense_front/color/camera_info
   odom: /philbart/odom
 
 # Camera intrinsic matrix for the specific camera setup used in the system.
@@ -14,14 +15,18 @@ recorded_topics:
 #     [ 0,  0,  1]
 # fx, fy: Focal lengths in pixels along the x and y axes.
 # cx, cy: Optical center coordinates in pixels (usually the center of the image).
+# camera_intrinsics:
+#   fx: 983.322571
+#   fy: 983.123108
+#   cx: 1024
+#   cy: 768
+
+# RealSense on Philbart
 camera_intrinsics:
-  fx: 983.322571
-  fy: 983.123108
-  cx: 1024
-  cy: 768
+  fx: 611.1929931640625
+  fy: 609.9984130859375
+  cx: 317.29180908203125
+  cy: 251.459716796875
 
 patch_parameters:
   patch_size: 64
-  actuation_latency: 0.25
-
-topic_synchronization_threshold: 0.1

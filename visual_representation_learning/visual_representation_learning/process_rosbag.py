@@ -30,6 +30,7 @@ from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CompressedImage, Imu
 from tqdm import tqdm
 from termcolor import cprint
+from sensor_msgs.msg import CameraInfo
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
 
@@ -40,25 +41,8 @@ with open(os.path.join(package_share_directory, "config", "rosbag.yaml"), "r") a
     CAMERA_INTRINSICS = config["camera_intrinsics"]
     PATCH_PARAMETERS = config["patch_parameters"]
 
-
-# Function to get camera intrinsics and its inverse
-def get_camera_intrinsics():
-    fx = CAMERA_INTRINSICS["fx"]
-    fy = CAMERA_INTRINSICS["fy"]
-    cx = CAMERA_INTRINSICS["cx"]
-    cy = CAMERA_INTRINSICS["cy"]
-
-    C_i = np.asarray([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]).reshape((3, 3))
-    C_i_inv = np.linalg.inv(C_i)
-    return C_i, C_i_inv
-
-
-C_i, C_i_inv = get_camera_intrinsics()
-
-
 PATCH_SIZE = PATCH_PARAMETERS["patch_size"]
 PATCH_EPSILON = 0.5 * PATCH_SIZE * PATCH_SIZE
-ACTUATION_LATENCY = PATCH_PARAMETERS["actuation_latency"]
 
 
 class ProcessRosbag(Node):
@@ -88,6 +72,8 @@ class ProcessRosbag(Node):
             "imu_orientation": [],
             "odom": [],
         }
+
+        self.camera_info = None
 
         # self.tf_buffer = tf2_ros.Buffer()
         # self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -129,15 +115,19 @@ class ProcessRosbag(Node):
                 (topic, msg, t) = reader.read_next()
                 topic_type = type_map.get(topic)
 
-                if topic_type == "sensor_msgs/msg/CompressedImage":
-                    msg = deserialize_message(msg, CompressedImage)
-                    last_image_msg = msg
-                elif topic_type == "nav_msgs/msg/Odometry":
-                    msg = deserialize_message(msg, Odometry)
-                    last_odom_msg = msg
-                elif topic_type == "sensor_msgs/msg/Imu":
-                    msg = deserialize_message(msg, Imu)
-                    self.imu_callback(msg)
+                match topic_type:
+                    case "sensor_msgs/msg/CompressedImage":
+                        msg = deserialize_message(msg, CompressedImage)
+                        last_image_msg = msg
+                    case "sensor_msgs/msg/CameraInfo":
+                        msg = deserialize_message(msg, CameraInfo)
+                        self.camera_info = msg
+                    case "nav_msgs/msg/Odometry":
+                        msg = deserialize_message(msg, Odometry)
+                        last_odom_msg = msg
+                    case "sensor_msgs/msg/Imu":
+                        msg = deserialize_message(msg, Imu)
+                        self.imu_callback(msg)
 
                 # Synchronize messages based on timestamps
                 if last_image_msg and last_odom_msg:
@@ -165,8 +155,8 @@ class ProcessRosbag(Node):
                 msg.angular_velocity.z,
             ]
         )
-        
-        # TODO: Check if the orientation is correct
+
+        # TODO: Check if the orientation is correct, w is 0
         self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, 1])
         # self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
 
@@ -200,30 +190,24 @@ class ProcessRosbag(Node):
             self.trans = None
             self.get_logger().error(str(e))
 
-    def display_images(self):
+    def get_camera_intrinsics(self):
         """
-        Debugging function to loops through the 'image_msg' list and displays each image continuously.
+        Get camera intrinsics and its inverse.
         """
-        for image_msg in self.msg_data["image_msg"]:
-            try:
-                # Convert the compressed image message to an OpenCV image
-                img = np.frombuffer(image_msg.data, np.uint8)
-                img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+        if self.camera_info is not None:
+            fx = self.camera_info.K[0]
+            fy = self.camera_info.K[4]
+            cx = self.camera_info.K[2]
+            cy = self.camera_info.K[5]
+        else:
+            fx = CAMERA_INTRINSICS["fx"]
+            fy = CAMERA_INTRINSICS["fy"]
+            cx = CAMERA_INTRINSICS["cx"]
+            cy = CAMERA_INTRINSICS["cy"]
 
-                # Check if the image is correctly converted
-                if img is None:
-                    self.get_logger().error("Failed to decode compressed image.")
-                    continue
-
-                # Display the image
-                cv2.imshow("bev_Img", img)
-                cv2.waitKey(10)
-
-            except Exception as e:
-                self.get_logger().error(f"Failed to convert and display image: {e}")
-
-        # Close all OpenCV windows
-        cv2.destroyAllWindows()
+        C_i = np.asarray([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]).reshape((3, 3))
+        C_i_inv = np.linalg.inv(C_i)
+        return C_i, C_i_inv
 
     def save_data(self):
         """
@@ -241,10 +225,12 @@ class ProcessRosbag(Node):
         # Buffer to hold the recent 20 BEV images for patch extraction
         buffer = {"bev_img": [], "odom": []}
 
+        # Get camera intrinsics and its inverse
+        C_i, C_i_inv = self.get_camera_intrinsics()
+
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
             bev_img, _ = ProcessRosbag.camera_imu_homography(
-                self.msg_data["imu_orientation"][i],
-                self.msg_data["image_msg"][i],
+                self.msg_data["imu_orientation"][i], self.msg_data["image_msg"][i], C_i, C_i_inv
             )
             buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
@@ -267,11 +253,12 @@ class ProcessRosbag(Node):
                         # bev_img = cv2.resize(bev_img, (bev_img.shape[1] // 3, bev_img.shape[0] // 3))
                         # patch_img = cv2.resize(patch_img, (patch_img.shape[1] // 3, patch_img.shape[0] // 3))
                         cv2.imshow(
-                            "BEV Image <-> Patch Image",
-                            np.hstack((prev_image, patch_img)),
+                            "Current Image <-> Patch Image",
+                            np.hstack((bev_img, patch_img)),
                         )
                         cv2.waitKey(5)
 
+                # Collect max of 10 patches
                 if len(patch_list) >= 10:
                     break
 
@@ -281,7 +268,7 @@ class ProcessRosbag(Node):
                 buffer["odom"].pop(0)
 
             if len(patch_list) > 0:
-                # self.get_logger().info(f"Num patches : {len(patch_list)}")
+                self.get_logger().info(f"Num patches : {len(patch_list)}")
                 data["patches"].append(patch_list)
                 data["imu"].append(self.msg_data["imu_history"][i])
 
@@ -300,7 +287,7 @@ class ProcessRosbag(Node):
             self.get_logger().info(f"Failed to save data to {file_path}: {e}")
 
     @staticmethod
-    def camera_imu_homography(orientation_quat, image):
+    def camera_imu_homography(orientation_quat, image, C_i, C_i_inv):
         R_imu_world = R.from_quat(orientation_quat)
         R_imu_world = R_imu_world.as_euler("XYZ", degrees=True)
 
@@ -324,25 +311,34 @@ class ProcessRosbag(Node):
         # Convert the compressed image message to an OpenCV image
         img = np.frombuffer(image.data, np.uint8)
         img = cv2.imdecode(img, cv2.IMREAD_COLOR)
-        
-        return img, img.copy()
 
-        # TODO: Fix the homography transformation to create BEV image
+        # Homography transformation to create BEV image
         output = cv2.warpPerspective(img, homography_matrix, (img.shape[1], img.shape[0]))
         output = cv2.flip(output, 1)
 
         return output, img.copy()
 
     @staticmethod
+    def homography_camera_displacement(R1, R2, t1, t2, n1):
+        R12 = R2 @ R1.T
+        t12 = R2 @ (-R1.T @ t1) + t2
+
+        d = np.linalg.norm(n1.dot(t1.T))
+
+        H12 = R12 + ((t12 @ n1.T) / d)
+        H12 /= H12[2, 2]
+        return H12
+
+    @staticmethod
     def get_patch_from_odom_delta(curr_pos, prev_pos, prev_image, visualize=False):
         """
-        Extracts a specific patch (sub-image) from a previous image 
+        Extracts a specific patch (sub-image) from a previous image
         based on the current and previous positions and orientations.
         """
-        
+
         # Convert current position to homogeneous coordinates
         curr_pos_np = np.array([curr_pos[0], curr_pos[1], 1])
-        
+
         # Get image dimensions
         image_height, image_width = prev_image.shape[:2]
 
@@ -372,7 +368,7 @@ class ProcessRosbag(Node):
             inv_pos_transform @ patch_corners[2],
             inv_pos_transform @ patch_corners[3],
         ]
-        
+
         # Scale patch corners
         SCALING_FACTOR = 132.003788 * (image_width / 1024)  # Adjust scaling factor based on image width
         scaled_patch_corners = [
@@ -443,22 +439,11 @@ class ProcessRosbag(Node):
             patch[:, :, 2] == 0,
         )
 
-        # TODO: If the patch has too many zero pixels, return None
-        # if np.sum(zero_count) > PATCH_EPSILON:
-        #     return None, patch_img
+        # If the patch has too many zero pixels, return None
+        if np.sum(zero_count) > PATCH_EPSILON:
+            return None, patch_img
 
         return patch, patch_img
-
-    @staticmethod
-    def homography_camera_displacement(R1, R2, t1, t2, n1):
-        R12 = R2 @ R1.T
-        t12 = R2 @ (-R1.T @ t1) + t2
-
-        d = np.linalg.norm(n1.dot(t1.T))
-
-        H12 = R12 + ((t12 @ n1.T) / d)
-        H12 /= H12[2, 2]
-        return H12
 
 
 def main(args=None):
@@ -467,7 +452,6 @@ def main(args=None):
 
     try:
         node.read_rosbag()
-        # node.display_images()
         node.save_data()
     except Exception as e:
         node.get_logger().error(f"{e}")
