@@ -34,7 +34,7 @@ def launch_setup(context, *args, **kwargs):
                 {
                     "bag_path": LaunchConfiguration("bag_path"),
                     "save_path": LaunchConfiguration("save_path"),
-                    "visualize_results": LaunchConfiguration("visualize_results"),
+                    "visual": LaunchConfiguration("visual"),
                 }
             ],
         )
@@ -63,7 +63,7 @@ def generate_launch_description():
 
     declared_arguments.append(
         DeclareLaunchArgument(
-            "visualize_results", default_value="false", description="Whether to visualize the results"
+            "visual", default_value="false", description="Whether to visualize the results"
         ),
     )
 

@@ -73,12 +73,12 @@ class ProcessRosbag(Node):
         # Declare ROS parameters with default values
         self.declare_parameter("save_path", os.path.expanduser("~/utexas_sterling_ws/pickles"))
         self.declare_parameter("bag_path", "")
-        self.declare_parameter("visualize_results", False)
+        self.declare_parameter("visual", False)
 
         # Retrieve the parameter values
         self.save_path = self.get_parameter("save_path").get_parameter_value().string_value
         self.bag_path = self.get_parameter("bag_path").get_parameter_value().string_value
-        self.visualize_results = self.get_parameter("visualize_results").get_parameter_value().bool_value
+        self.visual = self.get_parameter("visual").get_parameter_value().bool_value
 
         self.imu_buffer = np.zeros((200, 6), dtype=np.float32)
 
@@ -154,7 +154,6 @@ class ProcessRosbag(Node):
                 pbar.update(1)
 
     def imu_callback(self, msg):
-        # self.get_logger().info(f"IMU Callback: {msg}")
         self.imu_buffer = np.roll(self.imu_buffer, -1, axis=0)
         self.imu_buffer[-1] = np.array(
             [
@@ -166,6 +165,8 @@ class ProcessRosbag(Node):
                 msg.angular_velocity.z,
             ]
         )
+        
+        # TODO: Check if the orientation is correct
         self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, 1])
         # self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
 
@@ -199,6 +200,31 @@ class ProcessRosbag(Node):
             self.trans = None
             self.get_logger().error(str(e))
 
+    def display_images(self):
+        """
+        Debugging function to loops through the 'image_msg' list and displays each image continuously.
+        """
+        for image_msg in self.msg_data["image_msg"]:
+            try:
+                # Convert the compressed image message to an OpenCV image
+                img = np.frombuffer(image_msg.data, np.uint8)
+                img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+
+                # Check if the image is correctly converted
+                if img is None:
+                    self.get_logger().error("Failed to decode compressed image.")
+                    continue
+
+                # Display the image
+                cv2.imshow("bev_Img", img)
+                cv2.waitKey(10)
+
+            except Exception as e:
+                self.get_logger().error(f"Failed to convert and display image: {e}")
+
+        # Close all OpenCV windows
+        cv2.destroyAllWindows()
+
     def save_data(self):
         """
         Processes the data stored in 'msg_data' and saves it into a pickle file:
@@ -208,50 +234,41 @@ class ProcessRosbag(Node):
         Odometry Data: Position and orientation data from odometry.
         Orientation Data: Orientation data from the robot.
         """
-        
-        # for key, value in self.msg_data.items():
-        #     self.get_logger().info(f"Length of {key}: {len(value)}")
-        
+
         # Dictionary to hold all the processed data
         data = {"patches": [], "imu": []}
 
         # Buffer to hold the recent 20 BEV images for patch extraction
-        buffer = {"image": [], "odom": []}
-        pdb.set_trace()
+        buffer = {"bev_img": [], "odom": []}
 
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
-            bev_image, _ = ProcessRosbag.camera_imu_homography(
+            bev_img, _ = ProcessRosbag.camera_imu_homography(
                 self.msg_data["imu_orientation"][i],
                 self.msg_data["image_msg"][i],
             )
-            buffer["image"].append(bev_image)
+            buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
-            
-            # for key, value in buffer.items():
-            #     self.get_logger().info(f"Length of {key}: {len(value)}")
-
-            if self.visualize_results:
-                bev_image = cv2.resize(bev_image, (bev_image.shape[1] // 3, bev_image.shape[0] // 3))
 
             curr_odom = self.msg_data["odom"][i]
             patch_list = []
 
-            for j in range(0, len(buffer["image"])):
-                prev_image = buffer["image"][j]
+            for j in range(0, len(buffer["bev_img"])):
+                prev_image = buffer["bev_img"][j]
                 prev_odom = buffer["odom"][j]
 
-                patch, vis_img = ProcessRosbag.get_patch_from_odom_delta(
-                    curr_odom, prev_odom, prev_image, visualize=self.visualize_results
+                patch, patch_img = ProcessRosbag.get_patch_from_odom_delta(
+                    curr_odom, prev_odom, prev_image, visualize=self.visual
                 )
 
                 if patch is not None:
                     patch_list.append(patch)
 
-                    if self.visualize_results:
-                        vis_img = cv2.resize(vis_img, (vis_img.shape[1] // 3, vis_img.shape[0] // 3))
+                    if self.visual:
+                        # bev_img = cv2.resize(bev_img, (bev_img.shape[1] // 3, bev_img.shape[0] // 3))
+                        # patch_img = cv2.resize(patch_img, (patch_img.shape[1] // 3, patch_img.shape[0] // 3))
                         cv2.imshow(
-                            "current img <-> previous img",
-                            np.hstack((bev_image, vis_img)),
+                            "BEV Image <-> Patch Image",
+                            np.hstack((prev_image, patch_img)),
                         )
                         cv2.waitKey(5)
 
@@ -259,22 +276,28 @@ class ProcessRosbag(Node):
                     break
 
             # Remove the oldest image and odometry data from the buffer
-            while len(buffer["image"]) > 20:
-                buffer["image"].pop(0)
+            while len(buffer["bev_img"]) > 20:
+                buffer["bev_img"].pop(0)
                 buffer["odom"].pop(0)
 
             if len(patch_list) > 0:
-                self.get_logger().info(f"Num patches : {len(patch_list)}")
+                # self.get_logger().info(f"Num patches : {len(patch_list)}")
                 data["patches"].append(patch_list)
                 data["imu"].append(self.msg_data["imu_history"][i])
 
         # Ensure the output directory exists
         os.makedirs(self.save_path, exist_ok=True)
 
-        cprint(f"Saving data of size {len(data['imu'])}", "yellow")
-        cprint(f"Keys in the dataset : {data.keys()}", "yellow")
-        pickle.dump(data, open(self.save_path + "_data.pkl", "wb"))
-        cprint("Saved data successfully ", "yellow", attrs=["blink"])
+        # Construct the full file path
+        file_path = os.path.join(self.save_path, self.bag_path.split("/")[-1] + ".pkl")
+
+        try:
+            # Open the file in write-binary mode and dump the data
+            with open(file_path, "wb") as file:
+                pickle.dump(data, file)
+            self.get_logger().info(f"Data saved successfully to {file_path}")
+        except Exception as e:
+            self.get_logger().info(f"Failed to save data to {file_path}: {e}")
 
     @staticmethod
     def camera_imu_homography(orientation_quat, image):
@@ -298,28 +321,43 @@ class ProcessRosbag(Node):
         homography_matrix = C_i @ H12 @ C_i_inv
         homography_matrix /= homography_matrix[2, 2]
 
+        # Convert the compressed image message to an OpenCV image
         img = np.frombuffer(image.data, np.uint8)
         img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+        
+        return img, img.copy()
 
+        # TODO: Fix the homography transformation to create BEV image
         output = cv2.warpPerspective(img, homography_matrix, (img.shape[1], img.shape[0]))
         output = cv2.flip(output, 1)
 
         return output, img.copy()
 
     @staticmethod
-    def get_patch_from_odom_delta(curr_pos, prev_pos, prev_image, visualize=True):
-        # print(f"curr_pos: {curr_pos}, prev_pos: {prev_pos}, visualize: {visualize}")
+    def get_patch_from_odom_delta(curr_pos, prev_pos, prev_image, visualize=False):
+        """
+        Extracts a specific patch (sub-image) from a previous image 
+        based on the current and previous positions and orientations.
+        """
         
+        # Convert current position to homogeneous coordinates
         curr_pos_np = np.array([curr_pos[0], curr_pos[1], 1])
+        
+        # Get image dimensions
+        image_height, image_width = prev_image.shape[:2]
 
+        # Create transformation matrix for previous position
         prev_pos_transform = np.zeros((3, 3))
         prev_pos_transform[:2, :2] = R.from_euler("XYZ", [0, 0, prev_pos[2]]).as_matrix()[:2, :2]
         prev_pos_transform[:, 2] = np.array([prev_pos[0], prev_pos[1], 1]).reshape((3))
 
+        # Invert the transformation matrix
         inv_pos_transform = np.linalg.inv(prev_pos_transform)
 
+        # Compute current Z rotation matrix
         curr_z_rotation = R.from_euler("XYZ", [0, 0, curr_pos[2]]).as_matrix()
 
+        # Define patch corners in the current frame
         patch_corners = [
             curr_pos_np + curr_z_rotation @ np.array([0.3, 0.3, 0]),
             curr_pos_np + curr_z_rotation @ np.array([0.3, -0.3, 0]),
@@ -327,22 +365,28 @@ class ProcessRosbag(Node):
             curr_pos_np + curr_z_rotation @ np.array([-0.3, 0.3, 0]),
         ]
 
+        # Transform patch corners to the previous frame
         patch_corners_prev_frame = [
             inv_pos_transform @ patch_corners[0],
             inv_pos_transform @ patch_corners[1],
             inv_pos_transform @ patch_corners[2],
             inv_pos_transform @ patch_corners[3],
         ]
-
+        
+        # Scale patch corners
+        SCALING_FACTOR = 132.003788 * (image_width / 1024)  # Adjust scaling factor based on image width
         scaled_patch_corners = [
-            (patch_corners_prev_frame[0] * 132.003788).astype(np.int32),
-            (patch_corners_prev_frame[1] * 132.003788).astype(np.int32),
-            (patch_corners_prev_frame[2] * 132.003788).astype(np.int32),
-            (patch_corners_prev_frame[3] * 132.003788).astype(np.int32),
+            (patch_corners_prev_frame[0] * SCALING_FACTOR).astype(np.int32),
+            (patch_corners_prev_frame[1] * SCALING_FACTOR).astype(np.int32),
+            (patch_corners_prev_frame[2] * SCALING_FACTOR).astype(np.int32),
+            (patch_corners_prev_frame[3] * SCALING_FACTOR).astype(np.int32),
         ]
 
-        CENTER = np.array((1024 - 20, (768 - 55) * 2))
+        # Define center point for the image frame
+        # CENTER = np.array((1024 - 20, (768 - 55) * 2))
 
+        # Transform patch corners to the image frame
+        CENTER = np.array((image_width // 2, image_height // 2))
         patch_corners_image_frame = [
             CENTER + np.array((-scaled_patch_corners[0][1], -scaled_patch_corners[0][0])),
             CENTER + np.array((-scaled_patch_corners[1][1], -scaled_patch_corners[1][0])),
@@ -350,55 +394,60 @@ class ProcessRosbag(Node):
             CENTER + np.array((-scaled_patch_corners[3][1], -scaled_patch_corners[3][0])),
         ]
 
-        vis_img = None
+        patch_img = None
         if visualize:
-            vis_img = prev_image.copy()
+            patch_img = prev_image.copy()
 
+            # Draw lines between patch corners
             cv2.line(
-                vis_img,
+                patch_img,
                 (patch_corners_image_frame[0][0], patch_corners_image_frame[0][1]),
                 (patch_corners_image_frame[1][0], patch_corners_image_frame[1][1]),
                 (0, 255, 0),
                 2,
             )
             cv2.line(
-                vis_img,
+                patch_img,
                 (patch_corners_image_frame[1][0], patch_corners_image_frame[1][1]),
                 (patch_corners_image_frame[2][0], patch_corners_image_frame[2][1]),
                 (0, 255, 0),
                 2,
             )
             cv2.line(
-                vis_img,
+                patch_img,
                 (patch_corners_image_frame[2][0], patch_corners_image_frame[2][1]),
                 (patch_corners_image_frame[3][0], patch_corners_image_frame[3][1]),
                 (0, 255, 0),
                 2,
             )
             cv2.line(
-                vis_img,
+                patch_img,
                 (patch_corners_image_frame[3][0], patch_corners_image_frame[3][1]),
                 (patch_corners_image_frame[0][0], patch_corners_image_frame[0][1]),
                 (0, 255, 0),
                 2,
             )
 
+        # Compute perspective transform matrix
         persp = cv2.getPerspectiveTransform(
             np.float32(patch_corners_image_frame),
             np.float32([[0, 0], [63, 0], [63, 63], [0, 63]]),
         )
 
+        # Warp the previous image to extract the patch
         patch = cv2.warpPerspective(prev_image, persp, (64, 64))
 
+        # Check for zero pixels in the extracted patch
         zero_count = np.logical_and(
             np.logical_and(patch[:, :, 0] == 0, patch[:, :, 1] == 0),
             patch[:, :, 2] == 0,
         )
 
-        if np.sum(zero_count) > PATCH_EPSILON:
-            return None, vis_img
+        # TODO: If the patch has too many zero pixels, return None
+        # if np.sum(zero_count) > PATCH_EPSILON:
+        #     return None, patch_img
 
-        return patch, vis_img
+        return patch, patch_img
 
     @staticmethod
     def homography_camera_displacement(R1, R2, t1, t2, n1):
@@ -418,6 +467,7 @@ def main(args=None):
 
     try:
         node.read_rosbag()
+        # node.display_images()
         node.save_data()
     except Exception as e:
         node.get_logger().error(f"{e}")
