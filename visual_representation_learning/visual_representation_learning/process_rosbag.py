@@ -172,26 +172,6 @@ class ProcessRosbag(Node):
         self.msg_data["imu_orientation"].append(self.imu_orientation)
         self.msg_data["odom"].append(odom_val.copy())
 
-    def get_camera_intrinsics(self):
-        """
-        Get camera intrinsics and its inverse.
-        Take from topic if available, else use config values.
-        """
-        if self.camera_info is not None:
-            fx = self.camera_info.K[0]
-            fy = self.camera_info.K[4]
-            cx = self.camera_info.K[2]
-            cy = self.camera_info.K[5]
-        else:
-            fx = CAMERA_INTRINSICS["fx"]
-            fy = CAMERA_INTRINSICS["fy"]
-            cx = CAMERA_INTRINSICS["cx"]
-            cy = CAMERA_INTRINSICS["cy"]
-
-        C_i = np.asarray([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]).reshape((3, 3))
-        C_i_inv = np.linalg.inv(C_i)
-        return C_i, C_i_inv
-
     def save_data(self):
         """
         Processes the data stored in 'msg_data' and saves it into a pickle file:
@@ -208,8 +188,12 @@ class ProcessRosbag(Node):
         # Buffer to hold the recent 20 BEV images for patch extraction
         buffer = {"bev_img": [], "odom": []}
 
+        C_i, C_i_inv = self.get_camera_intrinsics()
+
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
-            bev_img, _ = self.camera_imu_homography(self.msg_data["imu_orientation"][i], self.msg_data["image_msg"][i])
+            bev_img, _ = self.camera_imu_homography(
+                self.msg_data["imu_orientation"][i], self.msg_data["image_msg"][i], C_i, C_i_inv
+            )
             buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
 
@@ -262,7 +246,29 @@ class ProcessRosbag(Node):
         except Exception as e:
             self.get_logger().info(f"Failed to save data to {file_path}: {e}")
 
-    def camera_imu_homography(self, orientation_quat, image):
+    def get_camera_intrinsics(self):
+        """
+        Get camera intrinsics and its inverse.
+        Take from topic if available, else use config values.
+        """
+
+        if self.camera_info is not None:
+            fx = self.camera_info.K[0]
+            fy = self.camera_info.K[4]
+            cx = self.camera_info.K[2]
+            cy = self.camera_info.K[5]
+        else:
+            self.get_logger().warn("\033[0;33mCamera intrinsics not received. Using default values from config.\033[0m")
+            fx = CAMERA_INTRINSICS["fx"]
+            fy = CAMERA_INTRINSICS["fy"]
+            cx = CAMERA_INTRINSICS["cx"]
+            cy = CAMERA_INTRINSICS["cy"]
+
+        C_i = np.asarray([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]]).reshape((3, 3))
+        C_i_inv = np.linalg.inv(C_i)
+        return C_i, C_i_inv
+
+    def camera_imu_homography(self, orientation_quat, image, C_i, C_i_inv):
         """
         Compute a homography matrix based on camera displacement
         and orientation changes.
@@ -297,7 +303,6 @@ class ProcessRosbag(Node):
         n1 = R1 @ n
 
         # Compute the homography matrix
-        C_i, C_i_inv = self.get_camera_intrinsics()
         H12 = ProcessRosbag.homography_camera_displacement(R1, R2, t1, t2, n1)
         homography_matrix = C_i @ H12 @ C_i_inv
         homography_matrix /= homography_matrix[2, 2]
