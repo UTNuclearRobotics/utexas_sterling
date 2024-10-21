@@ -23,10 +23,9 @@ os.environ["RCUTILS_CONSOLE_OUTPUT_FORMAT"] = "[{severity}] [{name}]: {message}"
 package_share_directory = get_package_share_directory("visual_representation_learning")
 ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
 
-
 def launch_setup(context, *args, **kwargs):
     bag_path = os.path.join(ros_ws_dir, "bags", LaunchConfiguration("bag_name").perform(context))
-    save_path = os.path.join(ros_ws_dir, "pickles")
+    save_path = os.path.join(ros_ws_dir, "datasets")
 
     return [
         Node(

@@ -12,7 +12,15 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
+  <!-- Python libraries -->
+  <exec_depend>albumentations</exec_depend>
   <exec_depend>opencv-python</exec_depend>
+  <exec_depend>pytorch-lightning</exec_depend>
+  <exec_depend>tensorboard</exec_depend>
+  <exec_depend>tensorflow</exec_depend>
+  <exec_depend>torch</exec_depend>
+  <exec_depend>torchinfo</exec_depend>
+  <exec_depend>torchvision</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

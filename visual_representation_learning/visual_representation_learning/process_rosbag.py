@@ -2,11 +2,11 @@
 """
 process_rosbag.py
 
-ROS node that listens to camera, IMU, and odometry information, processes the data,
-and saves it into a pickle file.
+ROS node that processes a rosbag converting camera, IMU, and odometry data
+into a Python dictionary and saves it as a pickle file.
 
 The main functionalities include:
-1. Subscribing to ROS topics to receive IMU, camera, and odometry data.
+1. Read the rosbag sequentially.
 2. Synchronizing the received data.
 3. Processing the data to extract patches from images based on odometry information.
 4. Saving the processed data into a pickle file.
@@ -29,6 +29,7 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
 from tqdm import tqdm
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
+ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
 
 # Load the configuration from the YAML file
 with open(os.path.join(package_share_directory, "config", "rosbag.yaml"), "r") as file:
@@ -52,7 +53,7 @@ class ProcessRosbag(Node):
         super().__init__("process_rosbag")
 
         # Declare ROS parameters with default values
-        self.declare_parameter("save_path", os.path.expanduser("~/utexas_sterling_ws/pickles"))
+        self.declare_parameter("save_path", os.path.join(ros_ws_dir, "datasets"))
         self.declare_parameter("bag_path", "")
         self.declare_parameter("visual", False)
 
