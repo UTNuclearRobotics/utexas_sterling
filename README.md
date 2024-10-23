@@ -87,10 +87,11 @@ ros2 run visual_representation_learning train_auto_encoder
 - `--config`: Name of the `yaml` file that defines training and validation pickle file datasets.
 
 ### Output
-- Checkpoint (`.ckpt`) file is saved in `pytorch_model/terrain_representations`.
-- `_istat.yaml`
+- Checkpoint (`.ckpt`) file is saved in `torch/terrain_representations/checkpoints`.
+- Model (`.pt`) file is saved in `torch/terrain_representations/models`.
+- a `istat.yaml`
 
 ### Files
 - visual_representation_learning/config/`dataset.yaml`
-- visual_representation_learning/visual_representation_learning/train/representations/`data_loader.py`
-- visual_representation_learning/visual_representation_learning/train/representations/`train_auto_encoder.py`
+- visual_representation_learning/visual_representation_learning/train/terrain_representations/`data_loader.py`
+- visual_representation_learning/visual_representation_learning/train/terrain_representations/`train_auto_encoder.py`

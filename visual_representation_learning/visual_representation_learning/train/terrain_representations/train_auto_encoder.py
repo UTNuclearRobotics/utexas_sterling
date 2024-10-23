@@ -21,11 +21,15 @@ import tensorflow as tf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from ament_index_python.packages import get_package_share_directory
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from visual_representation_learning.train.representations.data_loader import MyDataModule
+from visual_representation_learning.train.terrain_representations.data_loader import MyDataModule
+
+package_share_directory = get_package_share_directory("visual_representation_learning")
+ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
 
 # tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
@@ -222,7 +226,7 @@ def main():
     # Define callbacks
     early_stopping_cb = EarlyStopping(monitor="val_loss", mode="min", min_delta=0.00, patience=1000)
     model_checkpoint_cb = ModelCheckpoint(
-        dirpath="pytorch_model/terrain_representations",
+        dirpath=os.path.join(ros_ws_dir, "torch", "terrain_representations", "checkpoints"),
         filename=f'auto_encoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
         monitor="val_loss",
         verbose=True,
@@ -235,7 +239,7 @@ def main():
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=[0],  # GPU 0
-        max_epochs=50,
+        max_epochs=1,
         callbacks=[early_stopping_cb, model_checkpoint_cb],
         log_every_n_steps=10,
         strategy="ddp",  # Distributed Data Parallel
@@ -247,3 +251,16 @@ def main():
 
     # Start training
     trainer.fit(model, dm)
+
+    print("Saving model...")
+
+    # Save the model
+    save_dir = os.path.join(ros_ws_dir, "torch", "terrain_representations", "models")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(
+        save_dir,
+        f'auto_encoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pt',
+    )
+    torch.save(model.state_dict(), save_path)
+
+    print(f"Saved model at: ${save_path}")
