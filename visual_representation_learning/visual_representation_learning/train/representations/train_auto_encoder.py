@@ -24,9 +24,9 @@ import torch.nn.functional as F
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 
-from visual_representation_learning.train.representations.data_loader import MyDataLoader
+from visual_representation_learning.train.representations.data_loader import MyDataModule
 
-tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
+# tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
 
 
@@ -187,35 +187,36 @@ class AutoEncoder(pl.LightningModule):
 
 
 def main():
-    print("hi...")
-
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Train AutoEncoder model")
-    parser.add_argument("--config", type=str, default="", help="Dataset config file")
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser(description="Train AutoEncoder model")
+    # parser.add_argument("--config", type=str, default="", help="Dataset config file")
+    # args = parser.parse_args()
 
-    # Use command line arguments if provided
-    if args.config:
-        DATA_CONFIG_PATH = args.config
-
-    # Check if the dataset config yaml file exists
-    if not os.path.exists(DATA_CONFIG_PATH):
-        raise FileNotFoundError(DATA_CONFIG_PATH)
-
+    # # Get dataset config yaml
+    # if not args.config:
+    #     raise ValueError("Please provide a dataset config file")
+    # DATA_CONFIG_PATH = args.config
+    # if not os.path.exists(DATA_CONFIG_PATH):
+    #     raise FileNotFoundError(DATA_CONFIG_PATH)
+    
+    DATA_CONFIG_PATH = "/home/nchan/utexas_sterling_ws/src/utexas_sterling/visual_representation_learning/config/dataset.yaml"
+    
     # Hyperparameters
     BATCH_SIZE = 64
     LR = 3e-4
     WEIGHT_DECAY = 1e-5
 
+    # Initialize data loader
+    dm = MyDataModule(data_config_path=DATA_CONFIG_PATH, batch_size=BATCH_SIZE)
+    # print("Data loader initialized.")
+    # return
+    
     # Set device to GPU if available, otherwise CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Initialize data loader
-    dm = MyDataLoader(data_config_path=DATA_CONFIG_PATH, batch_size=BATCH_SIZE)
-
     # Initialize the AutoEncoder model
     model = AutoEncoder(lr=LR, latent_size=512, weight_decay=WEIGHT_DECAY, batch_size=BATCH_SIZE).to(device)
-
+    
     # Define callbacks for early stopping and model checkpointing
     early_stopping_cb = EarlyStopping(monitor="val_loss", mode="min", min_delta=0.00, patience=1000)
     model_checkpoint_cb = ModelCheckpoint(
@@ -229,11 +230,13 @@ def main():
 
     # Initialize the PyTorch Lightning trainer
     trainer = pl.Trainer(
-        gpus=list(np.arange(2)),  # Use 2 GPUs
+        accelerator='gpu',  # Use GPU acceleration
+        devices=[0],
+        # devices=list(np.arange(2)),  # Use 2 GPUs
         max_epochs=10000,  # Maximum number of epochs
         callbacks=[model_checkpoint_cb],  # Add callbacks
         log_every_n_steps=10,  # Log every 10 steps
-        distributed_backend="ddp",  # Use Distributed Data Parallel
+        strategy="ddp",  # Use Distributed Data Parallel
         num_sanity_val_steps=0,  # Number of sanity validation steps
         logger=True,  # Enable logging
     )

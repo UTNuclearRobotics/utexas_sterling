@@ -86,7 +86,15 @@ class ProcessRosbag(Node):
 
         # Check if the bag file exists
         if not os.path.exists(self.bag_path):
-            raise FileNotFoundError(f"Bag file does not exist: bag_path:={self.bag_path}")
+            raise FileNotFoundError(f"Path does not exist: bag_path:={self.bag_path}")
+
+        # Validate the path is a rosbag by checking for metadata.yaml and .db3 file
+        yaml_files = [file for file in os.listdir(self.bag_path) if file.endswith(".yaml")]
+        db3_files = [file for file in os.listdir(self.bag_path) if file.endswith(".db3")]
+        if len(yaml_files) != 1 or len(db3_files) != 1:
+            raise FileNotFoundError(
+                f"Invalid bag. Bag must contain exactly one .yaml and one .db3 file: {self.bag_path}"
+            )
 
         # Set up storage and converter options for reading the rosbag
         storage_options = rosbag2_py.StorageOptions(uri=self.bag_path, storage_id="sqlite3")
@@ -206,6 +214,7 @@ class ProcessRosbag(Node):
                 prev_odom = buffer["odom"][j]
 
                 patch, patch_img = self.get_patch_from_odom_delta(curr_odom, prev_odom, prev_image)
+                print(f"Patch {patch} extracted from image {j}")
 
                 if patch is not None:
                     patch_list.append(patch)
@@ -333,6 +342,9 @@ class ProcessRosbag(Node):
         """
         Extracts a specific patch (sub-image) from a previous image
         based on the current and previous positions and orientations.
+
+        Patch: 3D array with shape (64, 64, 3), representing 64x64 pixel image 
+        with 3 color channels (RGB).
         """
 
         # Convert current position to homogeneous coordinates
