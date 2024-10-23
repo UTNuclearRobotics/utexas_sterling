@@ -75,3 +75,22 @@ ros2 launch visual_representation_learning process_rosbag.launch.py
 - visual_representation_learning/config/`rosbag.yaml`
 - visual_representation_learning/launch/`process_rosbag.launch.py`
 - visual_representation_learning/visual_representation_learning/`process_rosbag.py`
+
+## Train Terrain Representations
+Convert pickle files into tensors and train the terrain representations using a PyTorch script. To start the training process, use the command:
+
+```sh
+ros2 run visual_representation_learning train_auto_encoder
+```
+
+### Parameters
+- `--config`: Name of the `yaml` file that defines training and validation pickle file datasets.
+
+### Output
+- Checkpoint (`.ckpt`) file is saved in `pytorch_model/terrain_representations`.
+- `_istat.yaml`
+
+### Files
+- visual_representation_learning/config/`dataset.yaml`
+- visual_representation_learning/visual_representation_learning/train/representations/`data_loader.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`train_auto_encoder.py`

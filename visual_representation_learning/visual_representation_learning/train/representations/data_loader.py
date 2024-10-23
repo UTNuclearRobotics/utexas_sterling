@@ -34,9 +34,8 @@ class MyDataset(Dataset):
             pickle_file_path (str): Path to the pickle file containing the data.
             train (bool): Flag indicating whether the dataset is for training or validation.
         """
-        cprint("Loading data from {}".format(pickle_file_path))
+        cprint("Loading data from {} (train={})".format(pickle_file_path, train))
         self.data = pickle.load(open(pickle_file_path, "rb"))
-        print("Keys in the data:", self.data.keys())
         self.label = pickle_file_path.split("/")[-1]
         # self.label = pickle_file_path.split("/")[-2] # TODO: Folder name significance?
 
@@ -54,12 +53,13 @@ class MyDataset(Dataset):
                     ),
                     A.Blur(always_apply=False, p=1.0, blur_limit=(3, 7)),
                     A.MotionBlur(always_apply=False, p=1.0, blur_limit=(3, 9)),
-                    A.RandomBrightnessContrast(always_apply=False, p=1.0, limit=(-0.2, 0.2)),
+                    A.RandomBrightnessContrast(
+                        always_apply=False, p=1.0, brightness_limit=(-0.2, 0.2), contrast_limit=(-0.2, 0.2)
+                    ),
                     A.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0]),
                     ToTensorV2(),
                 ]
             )
-            print("done")
         else:
             self.transforms = A.Compose(
                 [
@@ -93,7 +93,7 @@ class MyDataset(Dataset):
         patch_2 = self.transforms(image=patch_2)["image"]
 
         inertial_data = self.data["imu"][idx]
-        inertial_data = np.expand_dims(inertial_data, axis=0)
+        # inertial_data = np.expand_dims(inertial_data, axis=0) # TODO: Why expand_dims?
 
         return patch_1, patch_2, inertial_data, self.label
 
@@ -118,11 +118,6 @@ class MyDataModule(pl.LightningDataModule):
         self.data_config_path = data_config_path
         self.batch_size = batch_size
 
-        # self.mean, self.std = {}, {}
-        # self.min, self.max = {}, {}
-
-        # self.setup()
-
     def setup(self, stage=None):
         """
         Sets up the datasets and computes or loads inertial data statistics.
@@ -140,24 +135,24 @@ class MyDataModule(pl.LightningDataModule):
 
             inertial_statistics_file_path = ".".join(self.data_config_path.split(".")[:-1]) + "_istat.yaml"
             if not os.path.exists(inertial_statistics_file_path):
-                print(inertial_statistics_file_path, " path does not exist. Computing statistics now..")
+                print(inertial_statistics_file_path, "path does not exist.")
 
                 tmp = DataLoader(self.train_dataset, batch_size=1, shuffle=False)
                 inertial_list = []
 
-                for _, _, i, _ in tqdm(tmp):
+                for _, _, i, _ in tqdm(tmp, desc="Computing inertial statistics"):
                     inertial_list.append(i)
 
                 inertial_list = torch.cat(inertial_list, dim=0).reshape((-1, 1200)).numpy()
                 max_inertial, min_inertial = inertial_list.max(axis=0), inertial_list.min(axis=0)
                 self.inertial_stat = {"max": max_inertial.tolist(), "min": min_inertial.tolist()}
 
-                print("Inertial data statistics have been found.")
+                print("Inertial data statistics have been created.")
 
                 with open(inertial_statistics_file_path, "w") as file:
                     yaml.dump(self.inertial_stat, file)
             else:
-                print(inertial_statistics_file_path, " path exists. Loading statistics now.")
+                print(inertial_statistics_file_path, "path exists. Loading statistics.")
                 with open(inertial_statistics_file_path, "r") as file:
                     tmp = yaml.full_load(file)
                     max_inertial = np.array(tmp["max"], dtype=np.float32)
@@ -166,8 +161,8 @@ class MyDataModule(pl.LightningDataModule):
 
                 print("Inertial data statistics have been loaded.")
 
-            print("Train dataset size:", len(self.train_dataset))
-            print("Val dataset size:", len(self.val_dataset))
+            print("Length of training dataset:", len(self.train_dataset))
+            print("Length of validation dataset:", len(self.val_dataset))
         except Exception as e:
             print("Error in setup method:", e)
             raise
@@ -191,7 +186,7 @@ class MyDataModule(pl.LightningDataModule):
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=10,
             drop_last=True if len(self.val_dataset) % self.batch_size != 0 else False,
         )

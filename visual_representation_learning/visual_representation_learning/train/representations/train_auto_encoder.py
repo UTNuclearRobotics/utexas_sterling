@@ -2,10 +2,10 @@
 """
 train_auto_encoder.py
 
-An autoencoder is a type of artificial neural network used to learn 
-efficient codings of unlabeled data. 
+An autoencoder is a type of artificial neural network used to learn
+efficient codings of unlabeled data.
 
-An autoencoder learns two functions: 
+An autoencoder learns two functions:
 - Encoding function that transforms the input data
 - Decoding function that recreates the input data from the encoded representation
 """
@@ -23,11 +23,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from visual_representation_learning.train.representations.data_loader import MyDataModule
 
 # tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
-
 
 
 class AutoEncoder(pl.LightningModule):
@@ -112,6 +112,7 @@ class AutoEncoder(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         visual1, _, inertial, _ = batch
         visual_recon, inertial_recon, v_enc, i_enc = self.forward_pass(visual1, inertial)
+
         recon_loss = F.mse_loss(visual_recon, visual1, reduction="mean") + F.mse_loss(
             inertial_recon, inertial, reduction="mean"
         )
@@ -137,13 +138,14 @@ class AutoEncoder(pl.LightningModule):
         latent_norm_loss = 1e-3 * torch.norm(v_enc, p=2, dim=1).mean() + 1e-3 * torch.norm(i_enc, p=2, dim=1).mean()
 
         loss = 100 * recon_loss + latent_loss + latent_norm_loss
-        self.log("val_loss", loss, prog_bar=True)
-        self.log("val_recon_loss", recon_loss, prog_bar=True)
-        self.log("val_latent_loss", latent_loss, prog_bar=True)
-        self.log("val_latent_norm_loss", latent_norm_loss, prog_bar=True)
+        self.log("val_loss", loss, sync_dist=True, prog_bar=True)
+        self.log("val_recon_loss", recon_loss, sync_dist=True, prog_bar=True)
+        self.log("val_latent_loss", latent_loss, sync_dist=True, prog_bar=True)
+        self.log("val_latent_norm_loss", latent_norm_loss, sync_dist=True, prog_bar=True)
         return loss
 
-    def on_validation_batch_start(self, batch, batch_idx, dataloader_idx):
+    def on_validation_batch_start(self, batch, batch_idx):
+        # def on_validation_batch_start(self, batch, batch_idx, dataloader_idx):
         if self.current_epoch % 10 == 0:
             visual_patch, visual_patch_2, imu_history, label = batch
             label = np.asarray(label)
@@ -198,51 +200,50 @@ def main():
     # DATA_CONFIG_PATH = args.config
     # if not os.path.exists(DATA_CONFIG_PATH):
     #     raise FileNotFoundError(DATA_CONFIG_PATH)
-    
-    DATA_CONFIG_PATH = "/home/nchan/utexas_sterling_ws/src/utexas_sterling/visual_representation_learning/config/dataset.yaml"
-    
+
+    DATA_CONFIG_PATH = (
+        "/home/nchan/utexas_sterling_ws/src/utexas_sterling/visual_representation_learning/config/dataset.yaml"
+    )
+
     # Hyperparameters
-    BATCH_SIZE = 64
+    BATCH_SIZE = 10
     LR = 3e-4
     WEIGHT_DECAY = 1e-5
 
     # Initialize data loader
     dm = MyDataModule(data_config_path=DATA_CONFIG_PATH, batch_size=BATCH_SIZE)
-    # print("Data loader initialized.")
-    # return
-    
+
     # Set device to GPU if available, otherwise CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize the AutoEncoder model
     model = AutoEncoder(lr=LR, latent_size=512, weight_decay=WEIGHT_DECAY, batch_size=BATCH_SIZE).to(device)
-    
-    # Define callbacks for early stopping and model checkpointing
+
+    # Define callbacks
     early_stopping_cb = EarlyStopping(monitor="val_loss", mode="min", min_delta=0.00, patience=1000)
     model_checkpoint_cb = ModelCheckpoint(
-        dirpath="checkpoint/",
-        filename=datetime.now().strftime("%d-%m-%Y-%H-%M-%S") + "_",
+        dirpath="pytorch_model/terrain_representations",
+        filename=f'auto_encoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
         monitor="val_loss",
         verbose=True,
     )
 
-    print("Training model...")
+    # TODO: Integrate with TensorBoard to visualize training progress
+    # logger = TensorBoardLogger("tb_logs", name="autoencoder")
 
     # Initialize the PyTorch Lightning trainer
     trainer = pl.Trainer(
-        accelerator='gpu',  # Use GPU acceleration
-        devices=[0],
-        # devices=list(np.arange(2)),  # Use 2 GPUs
-        max_epochs=10000,  # Maximum number of epochs
-        callbacks=[model_checkpoint_cb],  # Add callbacks
-        log_every_n_steps=10,  # Log every 10 steps
-        strategy="ddp",  # Use Distributed Data Parallel
-        num_sanity_val_steps=0,  # Number of sanity validation steps
-        logger=True,  # Enable logging
+        accelerator="gpu",
+        devices=[0],  # GPU 0
+        max_epochs=50,
+        callbacks=[early_stopping_cb, model_checkpoint_cb],
+        log_every_n_steps=10,
+        strategy="ddp",  # Distributed Data Parallel
+        num_sanity_val_steps=0,
+        logger=True,
     )
+
+    print("Training model...")
 
     # Start training
     trainer.fit(model, dm)
-
-if __name__ == "__main__":
-    main()
