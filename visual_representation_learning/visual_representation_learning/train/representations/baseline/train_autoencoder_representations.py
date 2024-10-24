@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-train_auto_encoder.py
+train_autoencoder_representations.py
 
-An autoencoder is a type of artificial neural network used to learn
+*This is used as a baseline to test against Sterling.
+
+A Regularized Auto-Encoder (RAE) is a type of artificial neural network used to learn
 efficient codings of unlabeled data.
 
 An autoencoder learns two functions:
@@ -26,7 +28,7 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from visual_representation_learning.train.terrain_representations.data_loader import MyDataModule
+from visual_representation_learning.train.representations.baseline.data_loader import MyDataModule
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
 ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
@@ -34,9 +36,9 @@ ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "
 # tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
 
 
-class AutoEncoder(pl.LightningModule):
+class AutoEncoderModel(pl.LightningModule):
     def __init__(self, lr, latent_size, batch_size, weight_decay):
-        super(AutoEncoder, self).__init__()
+        super(AutoEncoderModel, self).__init__()
         self.save_hyperparameters("lr", "latent_size", "batch_size", "weight_decay")
         self.lr = lr
         self.latent_size = latent_size
@@ -221,12 +223,12 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize the AutoEncoder model
-    model = AutoEncoder(lr=LR, latent_size=512, weight_decay=WEIGHT_DECAY, batch_size=BATCH_SIZE).to(device)
+    model = AutoEncoderModel(lr=LR, latent_size=512, weight_decay=WEIGHT_DECAY, batch_size=BATCH_SIZE).to(device)
 
     # Define callbacks
     early_stopping_cb = EarlyStopping(monitor="val_loss", mode="min", min_delta=0.00, patience=1000)
     model_checkpoint_cb = ModelCheckpoint(
-        dirpath=os.path.join(ros_ws_dir, "torch", "terrain_representations", "checkpoints"),
+        dirpath=os.path.join(ros_ws_dir, "torch", "representations", "checkpoints"),
         filename=f'auto_encoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
         monitor="val_loss",
         verbose=True,
@@ -255,11 +257,11 @@ def main():
     print("Saving model...")
 
     # Save the model
-    save_dir = os.path.join(ros_ws_dir, "torch", "terrain_representations", "models")
+    save_dir = os.path.join(ros_ws_dir, "torch", "representations", "models")
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(
         save_dir,
-        f'auto_encoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pt',
+        f'autoencoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pt',
     )
     torch.save(model.state_dict(), save_path)
 

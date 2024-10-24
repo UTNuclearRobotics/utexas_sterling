@@ -1,9 +1,9 @@
 # Names of the training datasets
 train:
   # - philbart_sample
-  - /home/nchan/utexas_sterling_ws/datasets/philbart_sample.pkl
+  - /home/nchan/utexas_sterling_ws/datasets/train/sample/philbart_sample.pkl
 
 # Names of the validation datasets
 val:
   # - philbart_sample
-  - /home/nchan/utexas_sterling_ws/datasets/philbart_sample.pkl
+  - /home/nchan/utexas_sterling_ws/datasets/train/sample/philbart_sample.pkl

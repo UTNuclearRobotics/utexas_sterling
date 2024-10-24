@@ -80,7 +80,7 @@ ros2 launch visual_representation_learning process_rosbag.launch.py
 Convert pickle files into tensors and train the terrain representations using a PyTorch script. To start the training process, use the command:
 
 ```sh
-ros2 run visual_representation_learning train_auto_encoder
+ros2 run visual_representation_learning train_autoencoder_representations
 ```
 
 ### Parameters
@@ -93,5 +93,5 @@ ros2 run visual_representation_learning train_auto_encoder
 
 ### Files
 - visual_representation_learning/config/`dataset.yaml`
-- visual_representation_learning/visual_representation_learning/train/terrain_representations/`data_loader.py`
-- visual_representation_learning/visual_representation_learning/train/terrain_representations/`train_auto_encoder.py`
+- visual_representation_learning/visual_representation_learning/train/terrain_representations/baseline/`data_loader.py`
+- visual_representation_learning/visual_representation_learning/train/terrain_representations/baseline/`train_auto_encoder.py`

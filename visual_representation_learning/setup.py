@@ -36,7 +36,9 @@ setup(
     entry_points={
         "console_scripts": [
             "process_rosbag = visual_representation_learning.process_rosbag:main",
-            "train_auto_encoder = visual_representation_learning.train.terrain_representations.train_auto_encoder:main",
+            "train_autoencoder_representations = visual_representation_learning.train.representations.baseline.train_autoencoder_representations:main",
+            "train_sterling_representations = visual_representation_learning.train.representations.train_sterling_representations:main",
+            "convert_pt_jit = visual_representation_learning.train.representations.convert_pt_jit:main",
         ],
     },
 )
