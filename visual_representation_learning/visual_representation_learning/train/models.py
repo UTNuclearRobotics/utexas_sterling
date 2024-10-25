@@ -58,9 +58,9 @@ class InertialEncoder(nn.Module):
     def __init__(self, latent_size=64, p=0.2, l2_normalize=True):
         super(InertialEncoder, self).__init__()
 
-        self.inertial_encoder = nn.Sequential(  # input shape : (batch_size, 1, 603)
+        self.inertial_encoder = nn.Sequential(  # input shape : (batch_size, 1, 1200)
             nn.Flatten(),
-            nn.Linear(201 * 3, 128),
+            nn.Linear(1200, 128),
             nn.Mish(),
             nn.Dropout(p),
             nn.Linear(128, latent_size),
@@ -208,17 +208,17 @@ class VisualEncoderTiny(nn.Module):
 def visualize_models():
     # IPT Encoder
     ipt_encoder = IPTEncoder()
-    leg, feet, inertial = torch.randn(1, 1, 900), torch.randn(1, 1, 500), torch.randn(1, 1, 603)
+    inertial, leg, feet = torch.randn(1, 1, 603), torch.randn(1, 1, 900), torch.randn(1, 1, 500)
     out = ipt_encoder(inertial, leg, feet)
     print(out.shape)
     summary(ipt_encoder, [(1, 1, 603), (1, 1, 900), (1, 1, 500)])
 
     # Inertial Encoder
-    ipt_encoder = InertialEncoder()
+    inertial_encoder = InertialEncoder()
     inertial = torch.randn(1, 1, 603)
-    out = ipt_encoder(inertial)
+    out = inertial_encoder(inertial)
     print(out.shape)
-    summary(ipt_encoder, (1, 1, 603))
+    summary(inertial_encoder, (1, 1, 603))
 
     # Visual Encoder
     vision_encoder = VisualEncoder()

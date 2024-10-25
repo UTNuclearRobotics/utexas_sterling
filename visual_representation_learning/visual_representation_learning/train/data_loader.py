@@ -1,7 +1,6 @@
 import glob
 import os
 import pickle
-from datetime import datetime
 
 import albumentations as A
 import cv2
@@ -28,6 +27,7 @@ IMU_TOPIC_RATE = 200.0
 class TerrainDataset(Dataset):
     def __init__(self, pickle_files_root, data_stats=None, img_augment=False):
         self.pickle_files_paths = glob.glob(pickle_files_root + "/*.pkl")
+        cprint(f"Number of pickle files: {len(self.pickle_files_paths)}", "green")
         self.label = pickle_files_root.split("/")[-2]
         self.data_stats = data_stats
 
@@ -52,10 +52,12 @@ class TerrainDataset(Dataset):
         patches = data["patches"]
 
         # Process IMU data
-        imu = imu[:, :-4]  # Exclude orientation data
-        imu = imu[:, [0, 1, 5]]  # Select angular_x, angular_y, linear_z
-        imu = periodogram(imu, fs=IMU_TOPIC_RATE, axis=0)[1]
-        imu = imu[-201:, :]  # Use the last 201 frequency components
+        # TODO: Reasoning behind this?
+        # imu = imu[:, :-4]  # Exclude orientation data
+        # imu = imu[:, [0, 1, 5]]  # Select angular_x, angular_y, linear_z
+        # imu = periodogram(imu, fs=IMU_TOPIC_RATE, axis=0)[1]
+        # imu = imu[-201:, :]  # Use the last 201 frequency components
+        imu = imu[idx]
 
         # Normalize IMU data if statistics are available
         if self.data_stats is not None:
@@ -66,6 +68,10 @@ class TerrainDataset(Dataset):
         patch1, patch2 = patches[patch_1_idx], patches[patch_2_idx]
 
         # Convert BGR to RGB
+        if not isinstance(patch1, np.ndarray):
+            patch1 = np.array(patch1)
+        if not isinstance(patch2, np.ndarray):
+            patch2 = np.array(patch2)
         patch1 = cv2.cvtColor(patch1, cv2.COLOR_BGR2RGB)
         patch2 = cv2.cvtColor(patch2, cv2.COLOR_BGR2RGB)
 
@@ -101,7 +107,7 @@ def get_transforms():
                 interpolation=0,
                 border_mode=0,
                 value=(0, 0, 0),
-                mask_value=None,
+                # mask_value=None,
                 rotate_method="largest_box",
             ),
             A.Perspective(
@@ -198,6 +204,9 @@ class SterlingDataModule(pl.LightningDataModule):
                 for pickle_files_root in self.data_config["val"]
             ]
         )
+        # Log the length of the train and validation datasets
+        cprint(f"Length of train dataset: {len(self.train_dataset)}", "green")
+        cprint(f"Length of validation dataset: {len(self.val_dataset)}", "green")
 
     def train_dataloader(self):
         return DataLoader(
@@ -214,7 +223,7 @@ class SterlingDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            shuffle=True,
+            shuffle=False,
             drop_last=True if len(self.val_dataset) % self.batch_size != 0 else False,
             pin_memory=True,
         )

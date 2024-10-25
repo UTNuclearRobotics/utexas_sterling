@@ -63,6 +63,7 @@ class AutoEncoderModel(pl.LightningModule):
             nn.ReLU(),  # 2 x 2 x 512
             nn.Flatten(),
         )
+        
         # Decoder takes 512 dimensional vector and outputs 128x128x3 image
         self.vdecoder = nn.Sequential(
             nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1, bias=False),
@@ -94,6 +95,7 @@ class AutoEncoderModel(pl.LightningModule):
             nn.ReLU(),
             nn.Linear(1024, 2 * 2 * 512),
         )
+        
         self.idecoder = nn.Sequential(
             nn.Linear(2 * 2 * 512, 1024, bias=False),
             nn.BatchNorm1d(1024),
@@ -175,6 +177,7 @@ class AutoEncoderModel(pl.LightningModule):
                 self.label = np.concatenate((self.label, label[:]))
 
     def on_validation_end(self) -> None:
+        # TODO: Save best model based on validation loss
         if self.current_epoch % 10 == 0:
             self.visual_patch = torch.cat(self.visual_patch, dim=0)
             self.visual_encoding = torch.cat(self.visual_encoding, dim=0)
@@ -228,7 +231,7 @@ def main():
     # Define callbacks
     early_stopping_cb = EarlyStopping(monitor="val_loss", mode="min", min_delta=0.00, patience=1000)
     model_checkpoint_cb = ModelCheckpoint(
-        dirpath=os.path.join(ros_ws_dir, "torch", "representations", "checkpoints"),
+        dirpath=os.path.join(ros_ws_dir, "checkpoints"),
         filename=f'auto_encoder_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
         monitor="val_loss",
         verbose=True,
@@ -257,7 +260,7 @@ def main():
     print("Saving model...")
 
     # Save the model
-    save_dir = os.path.join(ros_ws_dir, "torch", "representations", "models")
+    save_dir = os.path.join(ros_ws_dir, "models")
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(
         save_dir,
