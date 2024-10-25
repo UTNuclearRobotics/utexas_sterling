@@ -44,6 +44,7 @@ setup(
             ###
             "train_autoencoder_representations = visual_representation_learning.train.representations.baseline.train_autoencoder_representations:main",
             "train_sterling_representations = visual_representation_learning.train.representations.train_sterling_representations:main",
+            "train_barlow_twins_representations = visual_representation_learning.train.representations.baseline.train_barlow_twins_representations:main",
             ###
             ### Utils
             ###
