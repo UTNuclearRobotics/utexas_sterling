@@ -39,6 +39,7 @@ setup(
             "train_autoencoder_representations = visual_representation_learning.train.representations.baseline.train_autoencoder_representations:main",
             "train_sterling_representations = visual_representation_learning.train.representations.train_sterling_representations:main",
             "convert_pt_jit = visual_representation_learning.train.representations.convert_pt_jit:main",
+            "visualize_models = visual_representation_learning.train.models:visualize_models",
         ],
     },
 )
