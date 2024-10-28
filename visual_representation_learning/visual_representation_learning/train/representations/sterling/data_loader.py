@@ -84,7 +84,15 @@ class TerrainDataset(Dataset):
         patch1 = np.asarray(patch1, dtype=np.float32) / 255.0
         patch2 = np.asarray(patch2, dtype=np.float32) / 255.0
 
-        # Transpose patches to match expected format
+        """
+        Transpose the image patches from (H, W, C) to have channels first (C, H, W).
+        This is often required by deep learning frameworks like PyTorch, 
+        which expect image tensors to have the channels as the first dimension.
+        
+        C: Channels - This represents the number of color channels in the image (RGB)
+        H: Height - Height of the image in pixels.
+        W: Width - Width of the image in pixels.
+        """
         patch1 = np.transpose(patch1, (2, 0, 1))
         patch2 = np.transpose(patch2, (2, 0, 1))
 
@@ -94,6 +102,7 @@ class TerrainDataset(Dataset):
 def get_transforms():
     return A.Compose(
         [
+            A.Resize(224, 224, always_apply=True),
             A.Flip(always_apply=False, p=0.5),
             # A.CoarseDropout(always_apply=False, p=1.0, max_holes=5, max_height=16, max_width=16, min_holes=1, min_height=2, min_width=2, fill_value=(0, 0, 0), mask_fill_value=None),
             # A.AdvancedBlur(always_apply=False, p=0.1, blur_limit=(3, 7), sigmaX_limit=(0.2, 1.0), sigmaY_limit=(0.2, 1.0), rotate_limit=(-90, 90), beta_limit=(0.5, 8.0), noise_limit=(0.9, 1.1)),
@@ -154,6 +163,17 @@ class SterlingDataModule(pl.LightningDataModule):
 
         cprint(f"data_statistics_pkl_path: {self.data_statistics_pkl_path}", "green")
 
+    @staticmethod
+    def get_data_files(dirList):
+        pickle_files = []
+
+        for dir in dirList:
+            # Get all pickle files in the current folder
+            files = glob.glob(os.path.join(dir + "/*.pkl"))
+            pickle_files.extend(files)
+
+        return pickle_files
+
     def setup(self, stage=None):
         # Check if the data_statistics.pkl file exists
         if os.path.exists(self.data_statistics_pkl_path):
@@ -204,6 +224,13 @@ class SterlingDataModule(pl.LightningDataModule):
                 for pickle_files_root in self.data_config["val"]
             ]
         )
+        
+        # train_data_paths = SterlingDataModule.get_data_files(self.data_config["train"])
+        # val_data_paths = SterlingDataModule.get_data_files(self.data_config["val"])
+
+        # self.train_dataset = ConcatDataset([TerrainDataset(file) for file in train_data_paths])
+        # self.val_dataset = ConcatDataset([TerrainDataset(file) for file in val_data_paths])
+        
         # Log the length of the train and validation datasets
         cprint(f"Length of train dataset: {len(self.train_dataset)}", "green")
         cprint(f"Length of validation dataset: {len(self.val_dataset)}", "green")

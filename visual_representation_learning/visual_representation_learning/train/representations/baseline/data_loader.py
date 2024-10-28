@@ -118,6 +118,7 @@ class MyDataModule(pl.LightningDataModule):
         super(MyDataModule, self).__init__()
         self.data_config_path = data_config_path
         self.batch_size = batch_size
+        self.initialize_inertial_stat()
 
     @staticmethod
     def get_data_files(dirList):
@@ -130,36 +131,27 @@ class MyDataModule(pl.LightningDataModule):
 
         return pickle_files
 
-    def setup(self, stage=None):
+    def initialize_inertial_stat(self):
         """
-        Sets up the datasets and computes or loads inertial data statistics.
+        Initializes the inertial statistics by computing or loading them.
         """
-        print("Setup method called with stage:", stage)
         with open(self.data_config_path) as file:
             data_config = yaml.safe_load(file)
-        
-        train_data_paths = MyDataModule.get_data_files(data_config["train"])
-        val_data_paths = MyDataModule.get_data_files(data_config["val"])
 
+        train_data_paths = MyDataModule.get_data_files(data_config["train"])
         self.train_dataset = ConcatDataset([MyDataset(file, train=True) for file in train_data_paths])
-        self.val_dataset = ConcatDataset([MyDataset(file, train=False) for file in val_data_paths])
 
         inertial_statistics_file_path = ".".join(self.data_config_path.split(".")[:-1]) + "_istat.yaml"
         if not os.path.exists(inertial_statistics_file_path):
             print(inertial_statistics_file_path, "path does not exist.")
-
             tmp = DataLoader(self.train_dataset, batch_size=1, shuffle=False)
             inertial_list = []
-
             for _, _, i, _ in tqdm(tmp, desc="Computing inertial statistics"):
                 inertial_list.append(i)
-
             inertial_list = torch.cat(inertial_list, dim=0).reshape((-1, 1200)).numpy()
             max_inertial, min_inertial = inertial_list.max(axis=0), inertial_list.min(axis=0)
             self.inertial_stat = {"max": max_inertial.tolist(), "min": min_inertial.tolist()}
-
             print("Inertial data statistics have been created.")
-
             with open(inertial_statistics_file_path, "w") as file:
                 yaml.dump(self.inertial_stat, file)
         else:
@@ -169,8 +161,22 @@ class MyDataModule(pl.LightningDataModule):
                 max_inertial = np.array(tmp["max"], dtype=np.float32)
                 min_inertial = np.array(tmp["min"], dtype=np.float32)
                 self.inertial_stat = {"max": max_inertial, "min": min_inertial}
-
             print("Inertial data statistics have been loaded.")
+
+    def setup(self, stage=None):
+        """
+        Sets up the datasets.
+        """
+        print("Setup method called with stage:", stage)
+        
+        with open(self.data_config_path) as file:
+            data_config = yaml.safe_load(file)
+
+        train_data_paths = MyDataModule.get_data_files(data_config["train"])
+        val_data_paths = MyDataModule.get_data_files(data_config["val"])
+
+        self.train_dataset = ConcatDataset([MyDataset(file, train=True) for file in train_data_paths])
+        self.val_dataset = ConcatDataset([MyDataset(file, train=False) for file in val_data_paths])
 
         print("Length of training dataset:", len(self.train_dataset))
         print("Length of validation dataset:", len(self.val_dataset))

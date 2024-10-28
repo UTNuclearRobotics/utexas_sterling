@@ -45,7 +45,7 @@ class AutoEncoderModel(pl.LightningModule):
         self.batch_size = batch_size
         self.weight_decay = weight_decay
 
-        # Encoder takes 128x128x3 image and outputs 512 dimensional vector
+        # Visual encoder takes 128x128x3 image and outputs 512 dimensional vector
         self.vencoder = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=3, stride=2, bias=False),
             nn.BatchNorm2d(32),
@@ -64,7 +64,7 @@ class AutoEncoderModel(pl.LightningModule):
             nn.Flatten(),
         )
         
-        # Decoder takes 512 dimensional vector and outputs 128x128x3 image
+        # Visual decoder takes 512 dimensional vector and outputs 128x128x3 image
         self.vdecoder = nn.Sequential(
             nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1, bias=False),
             nn.BatchNorm2d(256),
@@ -84,6 +84,7 @@ class AutoEncoderModel(pl.LightningModule):
             nn.Sigmoid(),
         )
 
+        # Inertial encoder takes 1200 dimensional vector and outputs 2x2x512 dimensional vector
         self.iencoder = nn.Sequential(
             nn.Linear(1200, 1024, bias=False),
             nn.BatchNorm1d(1024),

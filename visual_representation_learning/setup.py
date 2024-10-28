@@ -17,6 +17,8 @@ setup(
         ("share/" + package_name, ["package.xml"]),
     ],
     install_requires=[
+        "efficientnet_pytorch",
+        "kneed",
         "setuptools",
         "albumentations",
         "opencv-python",
@@ -43,7 +45,7 @@ setup(
             ### Train
             ###
             "train_autoencoder_representations = visual_representation_learning.train.representations.baseline.train_autoencoder_representations:main",
-            "train_sterling_representations = visual_representation_learning.train.representations.train_sterling_representations:main",
+            "train_sterling_representations = visual_representation_learning.train.representations.sterling.train_sterling_representations:main",
             "train_barlow_twins_representations = visual_representation_learning.train.representations.baseline.train_barlow_twins_representations:main",
             ###
             ### Utils
@@ -54,7 +56,7 @@ setup(
             ### Visualize
             ###
             # Visualize PyTorch model convolution layers
-            "visualize_models = visual_representation_learning.train.models:visualize_models",
+            "visualize_models = visual_representation_learning.train.representations.sterling.models:visualize_models",
         ],
     },
 )
