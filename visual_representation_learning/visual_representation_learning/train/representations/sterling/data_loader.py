@@ -25,13 +25,14 @@ IMU_TOPIC_RATE = 200.0
 
 
 class TerrainDataset(Dataset):
-    def __init__(self, pickle_files_root, data_stats=None, img_augment=False):
-        self.pickle_files_paths = glob.glob(pickle_files_root + "/*.pkl")
-        cprint(f"Number of pickle files: {len(self.pickle_files_paths)}", "green")
-        self.label = pickle_files_root.split("/")[-2]
+    def __init__(self, pickle_file_path, data_stats=None, img_augment=False):
+        cprint("Loading data from {}".format(pickle_file_path))
+        self.pickle_files_path = pickle_file_path
+        self.data = pickle.load(open(pickle_file_path, "rb"))
+        self.label = pickle_file_path.split("/")[-2]
         self.data_stats = data_stats
 
-        if self.data_stats is not None:
+        if data_stats is not None:
             self.min, self.max = data_stats["min"], data_stats["max"]
             self.mean, self.std = data_stats["mean"], data_stats["std"]
 
@@ -42,14 +43,11 @@ class TerrainDataset(Dataset):
             self.transforms = None
 
     def __len__(self):
-        return len(self.pickle_files_paths)
+        return len(self.data["patches"])
 
     def __getitem__(self, idx):
-        with open(self.pickle_files_paths[idx], "rb") as f:
-            data = pickle.load(f)
-
-        imu = data["imu"]
-        patches = data["patches"]
+        imu = self.data["imu"][idx]
+        PATCHES = self.data["patches"][idx]
 
         # Process IMU data
         # TODO: Reasoning behind this?
@@ -57,15 +55,17 @@ class TerrainDataset(Dataset):
         # imu = imu[:, [0, 1, 5]]  # Select angular_x, angular_y, linear_z
         # imu = periodogram(imu, fs=IMU_TOPIC_RATE, axis=0)[1]
         # imu = imu[-201:, :]  # Use the last 201 frequency components
-        imu = imu[idx]
 
         # Normalize IMU data if statistics are available
         if self.data_stats is not None:
             imu = (imu - self.min["imu"]) / (self.max["imu"] - self.min["imu"] + 1e-7)
 
         # Sample two random patches
-        patch_1_idx, patch_2_idx = np.random.choice(len(patches), 2, replace=False)
-        patch1, patch2 = patches[patch_1_idx], patches[patch_2_idx]
+        if len(PATCHES) > 1:
+            patch_1_idx, patch_2_idx = np.random.choice(len(PATCHES), 2, replace=False)
+        else:
+            patch_1_idx = patch_2_idx = 0
+        patch1, patch2 = PATCHES[patch_1_idx], PATCHES[patch_2_idx]
 
         # Convert BGR to RGB
         if not isinstance(patch1, np.ndarray):
@@ -102,7 +102,6 @@ class TerrainDataset(Dataset):
 def get_transforms():
     return A.Compose(
         [
-            A.Resize(224, 224, always_apply=True),
             A.Flip(always_apply=False, p=0.5),
             # A.CoarseDropout(always_apply=False, p=1.0, max_holes=5, max_height=16, max_width=16, min_holes=1, min_height=2, min_width=2, fill_value=(0, 0, 0), mask_fill_value=None),
             # A.AdvancedBlur(always_apply=False, p=0.1, blur_limit=(3, 7), sigmaX_limit=(0.2, 1.0), sigmaY_limit=(0.2, 1.0), rotate_limit=(-90, 90), beta_limit=(0.5, 8.0), noise_limit=(0.9, 1.1)),
@@ -212,24 +211,24 @@ class SterlingDataModule(pl.LightningDataModule):
             pickle.dump(data_statistics, open(self.data_statistics_pkl_path, "wb"))
 
         # Load the train and validation datasets
-        self.train_dataset = ConcatDataset(
-            [
-                TerrainDataset(pickle_files_root, data_stats=data_statistics, img_augment=True)
-                for pickle_files_root in self.data_config["train"]
-            ]
-        )
-        self.val_dataset = ConcatDataset(
-            [
-                TerrainDataset(pickle_files_root, data_stats=data_statistics)
-                for pickle_files_root in self.data_config["val"]
-            ]
-        )
+        # self.train_dataset = ConcatDataset(
+        #     [
+        #         TerrainDataset(pickle_files_root, data_stats=data_statistics, img_augment=True)
+        #         for pickle_files_root in self.data_config["train"]
+        #     ]
+        # )
+        # self.val_dataset = ConcatDataset(
+        #     [
+        #         TerrainDataset(pickle_files_root, data_stats=data_statistics)
+        #         for pickle_files_root in self.data_config["val"]
+        #     ]
+        # )
         
-        # train_data_paths = SterlingDataModule.get_data_files(self.data_config["train"])
-        # val_data_paths = SterlingDataModule.get_data_files(self.data_config["val"])
+        train_data_paths = SterlingDataModule.get_data_files(self.data_config["train"])
+        val_data_paths = SterlingDataModule.get_data_files(self.data_config["val"])
 
-        # self.train_dataset = ConcatDataset([TerrainDataset(file) for file in train_data_paths])
-        # self.val_dataset = ConcatDataset([TerrainDataset(file) for file in val_data_paths])
+        self.train_dataset = ConcatDataset([TerrainDataset(file, data_stats=data_statistics, img_augment=True) for file in train_data_paths])
+        self.val_dataset = ConcatDataset([TerrainDataset(file, data_stats=data_statistics) for file in val_data_paths])
         
         # Log the length of the train and validation datasets
         cprint(f"Length of train dataset: {len(self.train_dataset)}", "green")

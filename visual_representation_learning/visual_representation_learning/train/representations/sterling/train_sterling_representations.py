@@ -37,7 +37,7 @@ from visual_representation_learning.train.representations.sterling.models import
     ProprioceptionModel,
     VisualEncoderModel,
     InertialEncoderModel,
-    VisualEncoderEfficientModel
+    VisualEncoderEfficientModel,
 )
 from visual_representation_learning.train.representations.sterling.data_loader import SterlingDataModule
 
@@ -140,36 +140,19 @@ class SterlingRepresentationModel(pl.LightningModule):
         """
 
         # Representation loss
-        print(z1.shape, z2.shape)
         repr_loss = F.mse_loss(z1, z2)
 
         # Standard deviation loss
         std_z1 = torch.sqrt(torch.var(z1, dim=0) + 1e-4)
         std_z2 = torch.sqrt(torch.var(z2, dim=0) + 1e-4)
         std_loss = torch.mean(F.relu(1 - std_z1)) + torch.mean(F.relu(1 - std_z2))
-        # std_z1 = torch.sqrt(z1.var(dim=0) + 0.0001)
-        # std_z2 = torch.sqrt(z2.var(dim=0) + 0.0001)
-        # std_loss = torch.mean(F.relu(1 - std_z1)) + torch.mean(F.relu(1 - std_z2))
 
         # Covariance loss
         z1 = z1 - z1.mean(dim=0)
         z2 = z2 - z2.mean(dim=0)
-        # cov_x = (z1.T @ z1) / (z1.shape[0] - 1)
-        # cov_y = (z2.T @ z2) / (z2.shape[0] - 1)
-        # cov_loss = self.off_diagonal(cov_x).pow_(2).sum().div_(z1.shape[1]) + self.off_diagonal(cov_y).pow_(
-        #     2
-        # ).sum().div_(z2.shape[1])
         cov_z1 = (z1.T @ z1) / (z1.shape[0] - 1)
         cov_z2 = (z2.T @ z2) / (z2.shape[0] - 1)
         cov_loss = (self.off_diagonal(cov_z1).pow(2).sum() + self.off_diagonal(cov_z2).pow(2).sum()) / z1.shape[1]
-
-        # Check for NaN or Inf in loss components
-        if torch.isnan(repr_loss).any() or torch.isinf(repr_loss).any():
-            print("NaN or Inf detected in repr_loss")
-        if torch.isnan(std_loss).any() or torch.isinf(std_loss).any():
-            print("NaN or Inf detected in std_loss")
-        if torch.isnan(cov_loss).any() or torch.isinf(cov_loss).any():
-            print("NaN or Inf detected in cov_loss")
 
         # Total loss
         loss = self.sim_coeff * repr_loss + self.std_coeff * std_loss + self.cov_coeff * cov_loss
@@ -188,25 +171,8 @@ class SterlingRepresentationModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         patch1, patch2, inertial, label, _ = batch
 
-        # Check for NaN or Inf in input data
-        if torch.isnan(patch1).any() or torch.isinf(patch1).any():
-            print("NaN or Inf detected in patch1")
-        if torch.isnan(patch2).any() or torch.isinf(patch2).any():
-            print("NaN or Inf detected in patch2")
-        if torch.isnan(inertial).any() or torch.isinf(inertial).any():
-            print("NaN or Inf detected in inertial")
-
         # Forward pass
         zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
-
-            
-        # Check for NaN or Inf in forward pass outputs
-        if torch.isnan(zv1).any() or torch.isinf(zv1).any():
-            print("NaN or Inf detected in zv1")
-        if torch.isnan(zv2).any() or torch.isinf(zv2).any():
-            print("NaN or Inf detected in zv2")
-        if torch.isnan(zi).any() or torch.isinf(zi).any():
-            print("NaN or Inf detected in zi")
 
         # Compute viewpoint invariance VICReg loss
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)
@@ -214,18 +180,8 @@ class SterlingRepresentationModel(pl.LightningModule):
         # Compute visual-inertial VICReg loss
         loss_vi = 0.5 * self.vicreg_loss(zv1, zi) + 0.5 * self.vicreg_loss(zv2, zi)
 
-        # Check for NaN or Inf in loss components
-        if torch.isnan(loss_vpt_inv).any() or torch.isinf(loss_vpt_inv).any():
-            print("NaN or Inf detected in loss_vpt_inv")
-        if torch.isnan(loss_vi).any() or torch.isinf(loss_vi).any():
-            print("NaN or Inf detected in loss_vi")
-
         # Total loss
         loss = self.l1_coeff * loss_vpt_inv + (1.0 - self.l1_coeff) * loss_vi
-
-        # Check for NaN or Inf in total loss
-        if torch.isnan(loss).any() or torch.isinf(loss).any():
-            print("NaN or Inf detected in total loss")
 
         # Log losses
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
@@ -239,24 +195,8 @@ class SterlingRepresentationModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         patch1, patch2, inertial, label, _ = batch
 
-        # Check for NaN or Inf in input data
-        if torch.isnan(patch1).any() or torch.isinf(patch1).any():
-            print("NaN or Inf detected in patch1")
-        if torch.isnan(patch2).any() or torch.isinf(patch2).any():
-            print("NaN or Inf detected in patch2")
-        if torch.isnan(inertial).any() or torch.isinf(inertial).any():
-            print("NaN or Inf detected in inertial")
-
         # Forward pass
         zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
-
-        # Check for NaN or Inf in forward pass outputs
-        if torch.isnan(zv1).any() or torch.isinf(zv1).any():
-            print("NaN or Inf detected in zv1")
-        if torch.isnan(zv2).any() or torch.isinf(zv2).any():
-            print("NaN or Inf detected in zv2")
-        if torch.isnan(zi).any() or torch.isinf(zi).any():
-            print("NaN or Inf detected in zi")
 
         # Compute viewpoint invariance VICReg loss
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)
@@ -264,18 +204,8 @@ class SterlingRepresentationModel(pl.LightningModule):
         # Compute visual-inertial VICReg loss
         loss_vi = 0.5 * self.vicreg_loss(zv1, zi) + 0.5 * self.vicreg_loss(zv2, zi)
 
-        # Check for NaN or Inf in loss components
-        if torch.isnan(loss_vpt_inv).any() or torch.isinf(loss_vpt_inv).any():
-            print("NaN or Inf detected in loss_vpt_inv")
-        if torch.isnan(loss_vi).any() or torch.isinf(loss_vi).any():
-            print("NaN or Inf detected in loss_vi")
-
         # Total loss
         loss = self.l1_coeff * loss_vpt_inv + (1.0 - self.l1_coeff) * loss_vi
-
-        # Check for NaN or Inf in total loss
-        if torch.isnan(loss).any() or torch.isinf(loss).any():
-            print("NaN or Inf detected in total loss")
 
         # Log losses
         self.log("val_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
@@ -289,7 +219,7 @@ class SterlingRepresentationModel(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay, amsgrad=True)
 
-    def on_validation_batch_start(self, batch, batch_idx, dataloader_idx):
+    def on_validation_batch_start(self, batch, batch_idx):
         # save the batch data only every other epoch or during the last epoch
         if self.current_epoch % 10 == 0 or self.current_epoch == self.trainer.max_epochs - 1:
             patch1, patch2, inertial, leg, feet, label, sampleidx = batch
@@ -548,7 +478,7 @@ class SterlingRepresentationModel(pl.LightningModule):
 
 def parse_args():
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Train representations using the NATURL framework")
+    parser = argparse.ArgumentParser(description="Train representations using the Sterling framework")
     parser.add_argument(
         "--batch_size",
         "-b",
@@ -644,7 +574,7 @@ def main():
     dm = SterlingDataModule(data_config_path=args.data_config_path, batch_size=args.batch_size)
 
     # Set up TensorBoard logger
-    tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join(ros_ws_dir, "sterling_representation_logs"))
+    tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join(ros_ws_dir, "log", "sterling_representation_logs"))
 
     # Initialize the PyTorch Lightning trainer
     cprint("Training the representation learning model...", "cyan", attrs=["bold"])
