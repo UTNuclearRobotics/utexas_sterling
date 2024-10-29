@@ -222,12 +222,10 @@ class SterlingRepresentationModel(pl.LightningModule):
     def on_validation_batch_start(self, batch, batch_idx):
         # save the batch data only every other epoch or during the last epoch
         if self.current_epoch % 10 == 0 or self.current_epoch == self.trainer.max_epochs - 1:
-            patch1, patch2, inertial, leg, feet, label, sampleidx = batch
-            # combine inertial and leg data
-            # inertial = torch.cat((inertial, leg, feet), dim=-1)
+            patch1, patch2, inertial, label, sampleidx = batch
 
             with torch.no_grad():
-                _, _, _, zv1, zv2, zi = self.forward(patch1, patch2, inertial, leg, feet)
+                _, _, _, zv1, zv2, zi = self.forward(patch1, patch2, inertial)
             zv1, zi = zv1.cpu(), zi.cpu()
             patch1 = patch1.cpu()
             label = np.asarray(label)
@@ -307,21 +305,17 @@ class SterlingRepresentationModel(pl.LightningModule):
         # create dataloader for validation
         dataset = DataLoader(dataset, batch_size=512, shuffle=False, num_workers=4)
 
-        for patch1, patch2, inertial, leg, feet, label, sampleidx in tqdm(dataset):
-            # convert to torch tensors
-            # patch1, patch2, inertial, leg, feet = torch.from_numpy(patch1), torch.from_numpy(patch2), torch.from_numpy(inertial), torch.from_numpy(leg), torch.from_numpy(feet)
+        for patch1, patch2, inertial, label, sampleidx in tqdm(dataset):
             # move to device
-            patch1, patch2, inertial, leg, feet = (
+            patch1, patch2, inertial = (
                 patch1.to(self.device),
                 patch2.to(self.device),
                 inertial.to(self.device),
-                leg.to(self.device),
-                feet.to(self.device),
             )
 
             with torch.no_grad():
                 # _, _, _, zv1, zv2, zi = self.forward(patch1.unsqueeze(0), patch2.unsqueeze(0), inertial.unsqueeze(0), leg.unsqueeze(0), feet.unsqueeze(0))
-                _, _, _, zv1, zv2, zi = self.forward(patch1, patch2, inertial, leg, feet)
+                _, _, _, zv1, zv2, zi = self.forward(patch1, patch2, inertial)
                 zv1, zi = zv1.cpu(), zi.cpu()
                 patch1 = patch1.cpu()
 
@@ -464,14 +458,14 @@ class SterlingRepresentationModel(pl.LightningModule):
             self.visual_encoder.state_dict(),
             os.path.join(path_root, "visual_encoder.pt"),
         )
-        cprint("visual encoder saved", "green")
+        cprint("Visual encoder saved", "green")
 
-        # Save the state dictionary of the proprioceptive encoder
+        # Save the state dictionary of the inertial encoder
         torch.save(
-            self.proprioceptive_encoder.state_dict(),
-            os.path.join(path_root, "proprioceptive_encoder.pt"),
+            self.inertial_encoder.state_dict(),
+            os.path.join(path_root, "inertial_encoder.pt"),
         )
-        cprint("proprioceptive encoder saved", "green")
+        cprint("Inertial encoder saved", "green")
 
         cprint("All models successfully saved", "green", attrs=["bold"])
 
