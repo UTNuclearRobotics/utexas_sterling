@@ -37,7 +37,7 @@ class TerrainDataset(Dataset):
             self.mean, self.std = data_stats["mean"], data_stats["std"]
 
         if img_augment:
-            cprint("Using image augmentations", "green", attrs=["bold", "underline"])
+            cprint("Using image augmentations", "cyan")
             self.transforms = get_transforms()
         else:
             self.transforms = None
@@ -142,9 +142,10 @@ class SterlingDataModule(pl.LightningDataModule):
         super().__init__()
 
         # Read the YAML configuration file
-        cprint(f"Reading the YAML file at: {data_config_path}", "green")
+        cprint("Reading the configuration YAML file...", "yellow")
         self.data_config = yaml.load(open(data_config_path, "r"), Loader=yaml.FullLoader)
         self.data_config_path = os.path.dirname(data_config_path)
+        data_config_name = os.path.basename(data_config_path).split("/")[-1].split(".")[0]
 
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -155,15 +156,23 @@ class SterlingDataModule(pl.LightningDataModule):
         self.max = {}
 
         # Determine the path for data statistics pickle file
-        self.data_statistics_pkl_path = os.path.join(self.data_config_path, "data_statistics.pkl")
-        if "all" in data_config_path:
-            cprint("This is the pretraining step...", "green")
-            self.data_statistics_pkl_path = os.path.join(self.data_config_path, "data_statistics_all.pkl")
+        self.data_statistics_pkl_path = os.path.join(self.data_config_path, f"{data_config_name}_statistics.pkl")
+        if "all" in data_config_name:
+            self.data_statistics_pkl_path = os.path.join(self.data_config_path, f"{data_config_name}_statistics_all.pkl")
 
-        cprint(f"data_statistics_pkl_path: {self.data_statistics_pkl_path}", "green")
+        cprint(f"data_statistics_pkl_path: {self.data_statistics_pkl_path}", "cyan")
 
     @staticmethod
     def get_data_files(dirList):
+        """
+        Retrieve all pickle files from a list of directories.
+
+        Args:
+            dirList (list): A list of directory paths to search for pickle files.
+
+        Returns:
+            list: A list of paths to the found pickle files.
+        """
         pickle_files = []
 
         for dir in dirList:
@@ -174,21 +183,25 @@ class SterlingDataModule(pl.LightningDataModule):
         return pickle_files
 
     def setup(self, stage=None):
+        train_data_paths = SterlingDataModule.get_data_files(self.data_config["train"])
+        val_data_paths = SterlingDataModule.get_data_files(self.data_config["val"])
+        
         # Check if the data_statistics.pkl file exists
         if os.path.exists(self.data_statistics_pkl_path):
-            cprint("Loading the mean and std from the data_statistics pickle file", "green")
+            cprint("Loading the mean and std from the data_statistics pickle file...", "yellow")
             data_statistics = pickle.load(open(self.data_statistics_pkl_path, "rb"))
         else:
             # Find the mean and std of the train dataset
             cprint("data_statistics pickle file not found!", "yellow")
-            cprint("Finding the mean and std of the train dataset", "green")
+            cprint("Finding the mean and std of the train dataset...", "yellow")
 
             # Create a temporary dataset and dataloader for calculating statistics
-            self.tmp_dataset = ConcatDataset(
-                [TerrainDataset(pickle_files_root) for pickle_files_root in self.data_config["train"]]
+            # QUESTION: What is the point of this temporary dataset and dataloader? I see it gets fed into the TerrainDataset.
+            tmp_dataset = ConcatDataset(
+                [TerrainDataset(file) for file in train_data_paths]
             )
-            self.tmp_dataloader = DataLoader(self.tmp_dataset, batch_size=128, num_workers=10, shuffle=True)
-            cprint(f"The length of the tmp_dataloader is: {len(self.tmp_dataloader)}", "green")
+            self.tmp_dataloader = DataLoader(tmp_dataset, batch_size=128, num_workers=10, shuffle=True)
+            cprint(f"The length of the tmp_dataloader is: {len(self.tmp_dataloader)}", "cyan")
 
             # Collect IMU data from the temporary dataloader
             imu_data = []
@@ -200,36 +213,21 @@ class SterlingDataModule(pl.LightningDataModule):
             self.mean["imu"], self.std["imu"] = np.mean(imu_data, axis=0), np.std(imu_data, axis=0)
             self.min["imu"], self.max["imu"] = np.min(imu_data, axis=0), np.max(imu_data, axis=0)
 
-            cprint(f"Mean: {self.mean}", "green")
-            cprint(f"Std: {self.std}", "green")
-            cprint(f"Min: {self.min}", "green")
-            cprint(f"Max: {self.max}", "green")
+            # cprint(f"Mean: {self.mean}", "green")
+            # cprint(f"Std: {self.std}", "green")
+            # cprint(f"Min: {self.min}", "green")
+            # cprint(f"Max: {self.max}", "green")
 
             # Save the calculated statistics to a pickle file
             cprint("Saving the mean, std, min, max to the data_statistics pickle file", "green")
             data_statistics = {"mean": self.mean, "std": self.std, "min": self.min, "max": self.max}
             pickle.dump(data_statistics, open(self.data_statistics_pkl_path, "wb"))
 
-        # Load the train and validation datasets
-        # self.train_dataset = ConcatDataset(
-        #     [
-        #         TerrainDataset(pickle_files_root, data_stats=data_statistics, img_augment=True)
-        #         for pickle_files_root in self.data_config["train"]
-        #     ]
-        # )
-        # self.val_dataset = ConcatDataset(
-        #     [
-        #         TerrainDataset(pickle_files_root, data_stats=data_statistics)
-        #         for pickle_files_root in self.data_config["val"]
-        #     ]
-        # )
-        
-        train_data_paths = SterlingDataModule.get_data_files(self.data_config["train"])
-        val_data_paths = SterlingDataModule.get_data_files(self.data_config["val"])
-
-        self.train_dataset = ConcatDataset([TerrainDataset(file, data_stats=data_statistics, img_augment=True) for file in train_data_paths])
+        self.train_dataset = ConcatDataset(
+            [TerrainDataset(file, data_stats=data_statistics, img_augment=True) for file in train_data_paths]
+        )
         self.val_dataset = ConcatDataset([TerrainDataset(file, data_stats=data_statistics) for file in val_data_paths])
-        
+
         # Log the length of the train and validation datasets
         cprint(f"Length of train dataset: {len(self.train_dataset)}", "green")
         cprint(f"Length of validation dataset: {len(self.val_dataset)}", "green")

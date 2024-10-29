@@ -331,10 +331,10 @@ class SterlingRepresentationModel(pl.LightningModule):
         self.sampleidx = torch.cat(self.sampleidx, dim=0)
         self.label = np.concatenate(self.label)
 
-        cprint("Visual Encoding Shape: {}".format(self.visual_encoding.shape), "cyan")
-        cprint("Inertial Encoding Shape: {}".format(self.inertial_encoding.shape), "cyan")
-        cprint("Visual Patch Shape: {}".format(self.visual_patch.shape), "cyan")
-        cprint("Sample Index Shape: {}".format(self.sampleidx.shape), "cyan")
+        # cprint("Visual Encoding Shape: {}".format(self.visual_encoding.shape), "cyan")
+        # cprint("Inertial Encoding Shape: {}".format(self.inertial_encoding.shape), "cyan")
+        # cprint("Visual Patch Shape: {}".format(self.visual_patch.shape), "cyan")
+        # cprint("Sample Index Shape: {}".format(self.sampleidx.shape), "cyan")
 
     def on_validation_end(self):
         """
@@ -366,7 +366,7 @@ class SterlingRepresentationModel(pl.LightningModule):
             data = torch.cat((ve, vi), dim=-1)
 
             # calculate and print accuracy
-            cprint("finding accuracy...", "yellow")
+            cprint("Finding accuracy...", "yellow")
             accuracy, kmeanslabels, kmeanselbow, kmeansmodel = accuracy_naive(
                 data, ll, label_types=list(terrain_label.keys())
             )
@@ -381,7 +381,7 @@ class SterlingRepresentationModel(pl.LightningModule):
                 )
                 self.vispatchsaved = torch.clone(vis_patch)
                 self.sampleidxsaved = torch.clone(self.sampleidx)
-                cprint("best model saved", "green")
+                cprint("Best model saved", "green")
 
             # log k-means accurcay and projection for tensorboard visualization
             self.logger.experiment.add_scalar("K-means accuracy", accuracy, self.current_epoch)
@@ -393,12 +393,7 @@ class SterlingRepresentationModel(pl.LightningModule):
             # Save the cluster image grids on the final epoch only
             if self.current_epoch == self.trainer.max_epochs - 1:
                 path_root = (
-                    "./models/acc_"
-                    + str(round(self.max_acc, 5))
-                    + "_"
-                    + str(datetime.now().strftime("%d-%m-%Y-%H-%M-%S"))
-                    + "_"
-                    + "/"
+                    "./models/acc_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S"))
                 )
                 self.save_models(path_root)
 
@@ -431,14 +426,14 @@ class SterlingRepresentationModel(pl.LightningModule):
             4. Saves the k-means clustering labels and sample indices.
             5. Saves the state dictionaries of the visual and proprioceptive encoders.
         """
-        cprint("saving models...", "yellow", attrs=["bold"])
+        cprint("Saving models...", "yellow", attrs=["bold"])
 
         # Create the directory if it does not exist
         if not os.path.exists(path_root):
-            cprint("creating directory: " + path_root, "yellow")
+            cprint("Creating directory: " + path_root, "yellow")
             os.makedirs(path_root)
         else:
-            cprint("directory already exists: " + path_root, "red")
+            cprint("Directory already exists: " + path_root, "red")
 
         # Sample clusters of visual patches and save them as image grids
         dic = self.sample_clusters(self.kmeanslabels, self.kmeanselbow, self.vispatchsaved)
@@ -447,7 +442,7 @@ class SterlingRepresentationModel(pl.LightningModule):
         # Save the k-means clustering model
         with open(os.path.join(path_root, "kmeansmodel.pkl"), "wb") as f:
             pickle.dump(self.kmeansmodel, f)
-            cprint("kmeans model saved", "green")
+            cprint("K-means model saved", "green")
 
         # Save the k-means clustering labels and sample indices
         torch.save(self.kmeanslabels, os.path.join(path_root, "kmeanslabels.pt"))
@@ -551,7 +546,6 @@ def parse_args():
         f"imu_in_rep: {args.imu_in_rep}",
         f"data_config_path: {args.data_config_path}",
     ]
-    cprint("Arguments:", "cyan")
     for arg in args_list:
         cprint(arg, "cyan")
 
@@ -571,7 +565,7 @@ def main():
     tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join(ros_ws_dir, "log", "sterling_representation_logs"))
 
     # Initialize the PyTorch Lightning trainer
-    cprint("Training the representation learning model...", "cyan", attrs=["bold"])
+    cprint("Training the representation learning model...", "yellow", attrs=["bold"])
 
     trainer = pl.Trainer(
         devices=args.num_gpus,

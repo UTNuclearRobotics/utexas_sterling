@@ -146,7 +146,13 @@ class ProcessRosbag(Node):
 
                 pbar.update(1)
 
-    def imu_callback(self, msg):
+    def imu_callback(self, msg) -> None:
+        """
+        Callback function to process IMU messages.
+
+        Args:
+            msg (Imu): The IMU message.
+        """
         self.imu_buffer = np.roll(self.imu_buffer, -1, axis=0)
         self.imu_buffer[-1] = np.array(
             [
@@ -163,20 +169,27 @@ class ProcessRosbag(Node):
         self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, 1])
         # self.imu_orientation = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
 
-    def image_odom_callback(self, image, odom):
+    def image_odom_callback(self, image_msg, odom_msg) -> None:
+        """
+        Callback function to process synchronized image and odometry messages.
+
+        Args:
+            image_msg (CompressedImage): The synchronized image message.
+            odom_msg (Odometry): The synchronized odometry message.
+        """
         # Extract the yaw angle (rotation around the Z-axis) from the odometry message
         orientation = R.from_quat(
             [
-                odom.pose.pose.orientation.x,
-                odom.pose.pose.orientation.y,
-                odom.pose.pose.orientation.z,
-                odom.pose.pose.orientation.w,
+                odom_msg.pose.pose.orientation.x,
+                odom_msg.pose.pose.orientation.y,
+                odom_msg.pose.pose.orientation.z,
+                odom_msg.pose.pose.orientation.w,
             ]
         ).as_euler("XYZ")[-1]
 
-        odom_val = np.asarray([odom.pose.pose.position.x, odom.pose.pose.position.y, orientation])
+        odom_val = np.asarray([odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, orientation])
 
-        self.msg_data["image_msg"].append(image)
+        self.msg_data["image_msg"].append(image_msg)
         self.msg_data["imu_history"].append(self.imu_buffer.flatten())
         self.msg_data["imu_orientation"].append(self.imu_orientation)
         self.msg_data["odom"].append(odom_val.copy())
@@ -343,7 +356,7 @@ class ProcessRosbag(Node):
         Extracts a specific patch (sub-image) from a previous image
         based on the current and previous positions and orientations.
 
-        Patch: 3D array with shape (64, 64, 3), representing 64x64 pixel image 
+        Patch: 3D array with shape (64, 64, 3), representing 64x64 pixel image
         with 3 color channels (RGB).
         """
 

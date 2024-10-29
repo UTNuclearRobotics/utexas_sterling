@@ -9,6 +9,7 @@ from sklearn.cluster import KMeans
 import random
 import numpy as np
 from sklearn import metrics
+from termcolor import cprint
 
 
 # finds a k-means clustering chosen at the knee
@@ -38,7 +39,7 @@ def cluster_model(data):
             best_elbow = k
 
     # print("best calinski harabasz score: ", best_calinski_harabasz_score)
-    print("best silhouette score: ", best_silhouette_score)
+    cprint(f"Best silhouette score: {best_silhouette_score}", "cyan")
 
     return best_labels, best_elbow, best_model
 
@@ -94,9 +95,8 @@ def accuracy_naive_model(
     # calculate overall best accuracy with the best labels
     best_acc = (np.array(new_labels) == np.array(labels)).sum() / label_len
 
-    print("accuracy:")
-    print(best_acc)
-    print(best_dict)
+    cprint(f"Best accuracy: {best_acc}", "cyan")
+    cprint(f"Best label assignments: {best_dict}", "cyan")
     return model
 
 
@@ -169,9 +169,8 @@ def accuracy_naive(data, labels, label_types=["rock", "mulch", "pebble", "speedw
         new_labels[i] = best_dict[clusters[i]]
     best_acc = (np.array(new_labels) == np.array(labels)).sum() / label_len
 
-    print("accuracy:")
-    print(best_acc)
-    print(best_dict)
+    cprint(f"Best accuracy: {best_acc}", "cyan")
+    cprint(f"Best label assignments: {best_dict}", "cyan")
     return best_acc, clusters, elbow, model
 
 
