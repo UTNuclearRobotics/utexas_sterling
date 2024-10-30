@@ -22,16 +22,16 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from ament_index_python.packages import get_package_share_directory
 
-from visual_representation_learning.train.representations.sterling.cluster import (
+from visual_representation_learning.train.representations.cluster import (
     accuracy_naive,
     compute_fms_ari,
 )
-from visual_representation_learning.train.representations.sterling.models import (
+from visual_representation_learning.train.representations.models import (
     VisualEncoderModel,
     InertialEncoderModel,
     VisualEncoderEfficientModel,
 )
-from visual_representation_learning.train.representations.sterling.data_loader import SterlingDataModule
+from visual_representation_learning.train.representations.data_loader import SterlingDataModule
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
 ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
@@ -328,8 +328,6 @@ class SterlingRepresentationModel(pl.LightningModule):
         """
         Validates the model using the validation dataset.
         """
-        cprint("Running validation...", "yellow")
-
         # Initialize empty lists to store visual encodings, inertial encodings, labels, visual patches, and sample indices
         dataset = self.trainer.datamodule.val_dataset
         (
@@ -343,7 +341,7 @@ class SterlingRepresentationModel(pl.LightningModule):
         # Create dataloader for validation
         dataset = DataLoader(dataset, batch_size=512, shuffle=False, num_workers=4)
 
-        for patch1, patch2, inertial, label, sampleidx in tqdm(dataset):
+        for patch1, patch2, inertial, label, sampleidx in tqdm(dataset, desc="Validating"):
             # move to device
             patch1, patch2, inertial = (
                 patch1.to(self.device),
@@ -407,7 +405,7 @@ class SterlingRepresentationModel(pl.LightningModule):
             data = torch.cat((ve, vi), dim=-1)
 
             # Calculate and print accuracy
-            cprint("Finding accuracy...", "yellow")
+            tqdm.write("Finding accuracy...")
             
             accuracy, kmeanslabels, kmeanselbow, kmeansmodel = accuracy_naive(
                 data, ll, label_types=list(terrain_label.keys())
@@ -476,13 +474,13 @@ class SterlingRepresentationModel(pl.LightningModule):
         self.img_clusters(dic, self.kmeanselbow, path_root=path_root)
 
         # Save the k-means clustering model
-        with open(os.path.join(path_root, "kmeansmodel.pkl"), "wb") as f:
+        with open(os.path.join(path_root, "kmeans_model.pkl"), "wb") as f:
             pickle.dump(self.kmeansmodel, f)
             cprint("K-means model saved", "green")
 
         # Save the k-means clustering labels and sample indices
-        torch.save(self.kmeanslabels, os.path.join(path_root, "kmeanslabels.pt"))
-        torch.save(self.sampleidxsaved, os.path.join(path_root, "sampleidx.pt"))
+        torch.save(self.kmeanslabels, os.path.join(path_root, "kmeans_labels.pt"))
+        torch.save(self.sampleidxsaved, os.path.join(path_root, "sample_idx.pt"))
 
         # Save the state dictionary of the visual encoder
         torch.save(

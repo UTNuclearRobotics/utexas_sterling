@@ -93,7 +93,7 @@ ros2 run visual_representation_learning train_sterling_representations --help
 
 ### Files
 - visual_representation_learning/config/`dataset.yaml`
-- visual_representation_learning/visual_representation_learning/train/representations/sterling/`cluster.py`
-- visual_representation_learning/visual_representation_learning/train/representations/sterling/`data_loader.py`
-- visual_representation_learning/visual_representation_learning/train/representations/sterling/`models.py`
-- visual_representation_learning/visual_representation_learning/train/representations/sterling/`train_sterling_representations.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`cluster.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`data_loader.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`models.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`train_sterling_representations.py`
