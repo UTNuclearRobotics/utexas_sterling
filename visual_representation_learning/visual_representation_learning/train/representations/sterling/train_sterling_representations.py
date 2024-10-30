@@ -4,28 +4,21 @@
 import torch
 
 import argparse
-import glob
 import os
 import pickle
 from datetime import datetime
 
-import albumentations as A
-import cv2
 import numpy as np
 import pytorch_lightning as pl
 import tensorboard as tb
 import torch.nn as nn
 import torch.nn.functional as F
-import yaml
 from PIL import Image
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
-from scipy.signal import periodogram
-from sklearn import metrics
 from termcolor import cprint
-from torch.utils.data import ConcatDataset, DataLoader, Dataset
-from torchvision import transforms
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from ament_index_python.packages import get_package_share_directory
 
@@ -34,7 +27,6 @@ from visual_representation_learning.train.representations.sterling.cluster impor
     compute_fms_ari,
 )
 from visual_representation_learning.train.representations.sterling.models import (
-    ProprioceptionModel,
     VisualEncoderModel,
     InertialEncoderModel,
     VisualEncoderEfficientModel,
@@ -87,7 +79,6 @@ class SterlingRepresentationModel(pl.LightningModule):
         self.visual_encoder = VisualEncoderEfficientModel(latent_size=rep_size)
         # self.visual_encoder = VisualEncoderModel(latent_size=rep_size)
         self.inertial_encoder = InertialEncoderModel(latent_size=rep_size)
-
         self.projector = nn.Sequential(
             nn.Linear(rep_size, latent_size), nn.PReLU(), nn.Linear(latent_size, latent_size)
         )
@@ -119,26 +110,12 @@ class SterlingRepresentationModel(pl.LightningModule):
     def vicreg_loss(self, z1, z2):
         """
         Compute the VICReg (Variance-Invariance-Covariance Regularization) loss between two representations.
-
-        The VICReg loss is composed of three terms:
-        1. Representation loss: Mean Squared Error (MSE) between the two representations.
-        2. Standard deviation loss: Encourages the standard deviation of the representations to be close to 1.
-        3. Covariance loss: Encourages the off-diagonal elements of the covariance matrix to be close to 0.
-
         Args:
             z1 (torch.Tensor): The first representation tensor of shape (batch_size, feature_dim).
             z2 (torch.Tensor): The second representation tensor of shape (batch_size, feature_dim).
-
         Returns:
             torch.Tensor: The computed VICReg loss.
-
-        Notes:
-        - The representation loss is computed using the mean squared error (MSE) between z1 and z2.
-        - The standard deviation loss is computed by taking the ReLU of (1 - standard deviation) for both z1 and z2.
-        - The covariance loss is computed by summing the squared off-diagonal elements of the covariance matrices of z1 and z2.
-        - The final loss is a weighted sum of the three components, with weights defined by self.sim_coeff, self.std_coeff, and self.cov_coeff.
         """
-
         # Representation loss
         repr_loss = F.mse_loss(z1, z2)
 
@@ -159,17 +136,38 @@ class SterlingRepresentationModel(pl.LightningModule):
         return loss
 
     def off_diagonal(self, x):
-        # Return a flattened view of the off-diagonal elements of a square matrix
+        """
+        Return a flattened view of the off-diagonal elements of a square matrix.
+        Args:
+            x (torch.Tensor): A square matrix of shape (n, n).
+        Returns:
+            torch.Tensor: A 1D tensor containing the off-diagonal elements of the input matrix.
+        """
         n, m = x.shape
         assert n == m
         return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
     def all_reduce(self, c):
+        """
+        Reduces the input tensor across all processes.
+        Args:
+            c (torch.Tensor): A tensor to be reduced across all processes.
+        Returns:
+            torch.Tensor: The reduced tensor.
+        """
         if torch.distributed.is_initialized():
             torch.distributed.all_reduce(c)
 
     def training_step(self, batch, batch_idx):
-        patch1, patch2, inertial, label, _ = batch
+        """
+        Perform a single training step on the batch of data.
+        Args:
+            batch (tuple): A tuple containing the input data.
+            batch_idx (int): The index of the current batch.
+        Returns:
+            torch.Tensor: The computed loss value.
+        """
+        patch1, patch2, inertial, _, _ = batch
 
         # Forward pass
         zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
@@ -193,7 +191,15 @@ class SterlingRepresentationModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        patch1, patch2, inertial, label, _ = batch
+        """
+        Perform a validation step during the training process.
+        Args:
+            batch (tuple): A tuple containing the input data.
+            batch_idx (int): The index of the current batch.
+        Returns:
+            torch.Tensor: The computed loss value.
+        """
+        patch1, patch2, inertial, _, _ = batch
 
         # Forward pass
         zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
@@ -217,10 +223,22 @@ class SterlingRepresentationModel(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+        """
+        Configures the optimizer for training.
+        Returns:
+            torch.optim.AdamW: The configured AdamW optimizer.
+        """
         return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay, amsgrad=True)
 
     def on_validation_batch_start(self, batch, batch_idx):
-        # save the batch data only every other epoch or during the last epoch
+        """
+        Save the batch data for visualization during validation.
+        Args:
+            batch (tuple): A tuple containing the input data, inertial data, and labels.
+            batch_idx (int): The index of the current batch.
+        """
+        
+        # Save the batch data only every other epoch or during the last epoch
         if self.current_epoch % 10 == 0 or self.current_epoch == self.trainer.max_epochs - 1:
             patch1, patch2, inertial, label, sampleidx = batch
 
@@ -244,8 +262,16 @@ class SterlingRepresentationModel(pl.LightningModule):
                 self.visual_patch.append(patch1)
                 self.sampleidx.append(sampleidx)
 
-    # Find random groups of 25 images from each cluster
     def sample_clusters(self, clusters, elbow, vis_patch):
+        """
+        Sample 25 images from each cluster for visualization.
+        Args:
+            clusters (np.ndarray): The cluster labels for each image.
+            elbow (int): The number of clusters.
+            vis_patch (torch.Tensor): The visual patches for each image.
+        Returns:
+            dict: A dictionary containing the sampled images for each cluster.
+        """
         # Initialize dictionary to store image info for each cluster
         dic = {}
         for a in range(elbow):
@@ -270,8 +296,14 @@ class SterlingRepresentationModel(pl.LightningModule):
 
         return dic
 
-    # Create and save 25 image grids for each cluster from dictionary image info
-    def img_clusters(self, dic, elbow, path_root="./models/"):
+    def img_clusters(self, dic, elbow, path_root):
+        """
+        Create and save 25 image grids for each cluster from dictionary image info.
+        Args:
+            dic (dict): A dictionary containing the sampled images for each cluster.
+            elbow (int): The number of clusters.
+            path_root (str): The root directory where the models and results will be saved.
+        """
         for i in range(elbow):
             # Initialize grid
             new_im = Image.new("RGB", (64 * 5, 64 * 5))
@@ -290,10 +322,15 @@ class SterlingRepresentationModel(pl.LightningModule):
                 new_im.paste(im, (h * 64, w * 64))
 
             # save grid image
-            new_im.save(path_root + "group" + str(i) + ".png")
+            new_im.save(os.path.join(path_root, "group" + str(i) + ".png"))
 
     def validate(self):
-        print("Running validation...")
+        """
+        Validates the model using the validation dataset.
+        """
+        cprint("Running validation...", "yellow")
+
+        # Initialize empty lists to store visual encodings, inertial encodings, labels, visual patches, and sample indices
         dataset = self.trainer.datamodule.val_dataset
         (
             self.visual_encoding,
@@ -302,7 +339,8 @@ class SterlingRepresentationModel(pl.LightningModule):
             self.visual_patch,
             self.sampleidx,
         ) = [], [], [], [], []
-        # create dataloader for validation
+
+        # Create dataloader for validation
         dataset = DataLoader(dataset, batch_size=512, shuffle=False, num_workers=4)
 
         for patch1, patch2, inertial, label, sampleidx in tqdm(dataset):
@@ -313,18 +351,21 @@ class SterlingRepresentationModel(pl.LightningModule):
                 inertial.to(self.device),
             )
 
+            # Performs a forward pass through the model without gradient computation
             with torch.no_grad():
                 # _, _, _, zv1, zv2, zi = self.forward(patch1.unsqueeze(0), patch2.unsqueeze(0), inertial.unsqueeze(0), leg.unsqueeze(0), feet.unsqueeze(0))
                 _, _, _, zv1, zv2, zi = self.forward(patch1, patch2, inertial)
                 zv1, zi = zv1.cpu(), zi.cpu()
                 patch1 = patch1.cpu()
 
+            # Stores the outputs
             self.visual_patch.append(patch1)
             self.visual_encoding.append(zv1)
             self.inertial_encoding.append(zi)
             self.label.append(np.asarray(label))
             self.sampleidx.append(sampleidx)
 
+        # Concatenates the collected outputs into tensors or arrays
         self.visual_patch = torch.cat(self.visual_patch, dim=0)
         self.visual_encoding = torch.cat(self.visual_encoding, dim=0)
         self.inertial_encoding = torch.cat(self.inertial_encoding, dim=0)
@@ -338,9 +379,9 @@ class SterlingRepresentationModel(pl.LightningModule):
 
     def on_validation_end(self):
         """
-        Every 10 epochs or at the very end of training,
-        save the model if it has the best validation loss.
+        Save the model if it has the best validation loss.
         """
+        # Every 10 epochs or at the very end of training
         if (
             self.current_epoch % 10 == 0 or self.current_epoch == self.trainer.max_epochs - 1
         ) and torch.cuda.current_device() == 0:
@@ -353,7 +394,7 @@ class SterlingRepresentationModel(pl.LightningModule):
 
             # cprint('Visual Encoding Shape: {}'.format(self.visual_encoding.shape), 'white', attrs=['bold'])
 
-            # randomize index selections
+            # Randomize index selections
             idx = np.arange(self.visual_encoding.shape[0])
             np.random.shuffle(idx)
 
@@ -365,8 +406,9 @@ class SterlingRepresentationModel(pl.LightningModule):
 
             data = torch.cat((ve, vi), dim=-1)
 
-            # calculate and print accuracy
+            # Calculate and print accuracy
             cprint("Finding accuracy...", "yellow")
+            
             accuracy, kmeanslabels, kmeanselbow, kmeansmodel = accuracy_naive(
                 data, ll, label_types=list(terrain_label.keys())
             )
@@ -383,7 +425,7 @@ class SterlingRepresentationModel(pl.LightningModule):
                 self.sampleidxsaved = torch.clone(self.sampleidx)
                 cprint("Best model saved", "green")
 
-            # log k-means accurcay and projection for tensorboard visualization
+            # Log k-means accurcay and projection for tensorboard visualization
             self.logger.experiment.add_scalar("K-means accuracy", accuracy, self.current_epoch)
             self.logger.experiment.add_scalar("Fowlkes-Mallows score", fms, self.current_epoch)
             self.logger.experiment.add_scalar("Adjusted Rand Index", ari, self.current_epoch)
@@ -392,8 +434,10 @@ class SterlingRepresentationModel(pl.LightningModule):
 
             # Save the cluster image grids on the final epoch only
             if self.current_epoch == self.trainer.max_epochs - 1:
-                path_root = (
-                    "./models/acc_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S"))
+                path_root = os.path.join(
+                    ros_ws_dir,
+                    "models",
+                    "acc_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S")),
                 )
                 self.save_models(path_root)
 
@@ -412,19 +456,11 @@ class SterlingRepresentationModel(pl.LightningModule):
                 self.label,
             )
 
-    def save_models(self, path_root=os.path.join(ros_ws_dir, "models")):
+    def save_models(self, path_root):
         """
         Save the k-means clustering results and visual patches.
-
         Args:
             path_root (str): The root directory where the models and results will be saved.
-
-        This function performs the following steps:
-            1. Creates the directory specified by path_root if it does not exist.
-            2. Samples clusters of visual patches and saves them as image grids.
-            3. Saves the k-means clustering model.
-            4. Saves the k-means clustering labels and sample indices.
-            5. Saves the state dictionaries of the visual and proprioceptive encoders.
         """
         cprint("Saving models...", "yellow", attrs=["bold"])
 

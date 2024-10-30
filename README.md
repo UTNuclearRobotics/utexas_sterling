@@ -77,21 +77,23 @@ ros2 launch visual_representation_learning process_rosbag.launch.py
 - visual_representation_learning/visual_representation_learning/`process_rosbag.py`
 
 ## Train Terrain Representations
-Convert pickle files into tensors and train the terrain representations using a PyTorch script. To start the training process, use the command:
-
+Define what pickle files to use as the datasets for training and validating in a `dataset.yaml`. To start the PyTorch training process, use the command:
 ```sh
-ros2 run visual_representation_learning train_autoencoder_representations
+ros2 run visual_representation_learning train_sterling_representations
 ```
 
 ### Parameters
-- `--config`: Name of the `yaml` file that defines training and validation pickle file datasets.
+To view the script's arguments, use the command:
+```sh
+ros2 run visual_representation_learning train_sterling_representations --help
+```
 
 ### Output
-- Checkpoint (`.ckpt`) file is saved in `torch/terrain_representations/checkpoints`.
-- Model (`.pt`) file is saved in `torch/terrain_representations/models`.
-- a `istat.yaml`
+- Folder of encoder weights (`.pt` files), group images (`.png`), etc. located in `/models` at the workspace directory.
 
 ### Files
 - visual_representation_learning/config/`dataset.yaml`
-- visual_representation_learning/visual_representation_learning/train/terrain_representations/baseline/`data_loader.py`
-- visual_representation_learning/visual_representation_learning/train/terrain_representations/baseline/`train_auto_encoder.py`
+- visual_representation_learning/visual_representation_learning/train/representations/sterling/`cluster.py`
+- visual_representation_learning/visual_representation_learning/train/representations/sterling/`data_loader.py`
+- visual_representation_learning/visual_representation_learning/train/representations/sterling/`models.py`
+- visual_representation_learning/visual_representation_learning/train/representations/sterling/`train_sterling_representations.py`
