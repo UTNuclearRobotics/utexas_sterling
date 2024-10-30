@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-""" """
+""" 
+train_sterling_costs.py
+
+TODO: Add a description of the script here.
+"""
 
 import argparse
 import os
@@ -9,31 +13,16 @@ from datetime import datetime
 import numpy as np
 import pytorch_lightning as pl
 import tensorboard
+import torch
+import torch.nn as nn
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
-from visual_representation_learning.train.representations.train_sterling_representations import SterlingDataModule
-from visual_representation_learning.train.representations.models import VisualEncoderModel
-
 from termcolor import cprint
 
-import torch
-import torch.nn as nn
-
-
-class CostNet(nn.Module):
-    def __init__(self, latent_size=64):
-        super(CostNet, self).__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(latent_size, latent_size // 2),
-            nn.BatchNorm1d(latent_size // 2),
-            nn.ReLU(),
-            nn.Linear(latent_size // 2, 1),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        return self.fc(x)
+from visual_representation_learning.train.costs.models import CostNet
+from visual_representation_learning.train.representations.data_loader import SterlingDataModule
+from visual_representation_learning.train.representations.models import InertialEncoderModel, VisualEncoderModel
 
 
 class CostModel(pl.LightningModule):
@@ -42,7 +31,7 @@ class CostModel(pl.LightningModule):
         assert visual_encoder_weights is not None, "visual_encoder_weights cannot be None"
 
         self.visual_encoder = VisualEncoderModel(latent_size=latent_size)
-        self.proprioceptive_encoder = ProprioceptionModel(latent_size=latent_size)
+        self.inertial_encoder = InertialEncoderModel(latent_size=latent_size)
 
         # load the weights from the visual encoder
         cprint("Loading the weights from the visual encoder", "green")
@@ -50,10 +39,10 @@ class CostModel(pl.LightningModule):
         self.visual_encoder.eval()
         cprint("Loaded the weights from the visual encoder", "green")
         cprint("Loading the weights from the proprioceptive encoder", "green")
-        self.proprioceptive_encoder.load_state_dict(
-            torch.load(visual_encoder_weights.replace("visual_encoder", "proprioceptive_encoder"))
+        self.inertial_encoder.load_state_dict(
+            torch.load(visual_encoder_weights.replace("visual_encoder", "inertial_encoder"))
         )
-        self.proprioceptive_encoder.eval()
+        self.inertial_encoder.eval()
         cprint("Loaded the weights from the proprioceptive encoder", "green")
 
         cprint("Loading the k-means model from the pickle file", "green")
@@ -88,21 +77,7 @@ class CostModel(pl.LightningModule):
             "green",
         )
 
-        # hardcode the preferences here for now
-        # self.preferences = [[2, 3, 5],[0,1], 6, 8, 4, 7]
-
-        # self.preferences = {
-        #     0: 5, # bush
-        #     1: 0, # yellow_bricks
-        #     2: 0, # pebble_sidewalk
-        #     3: 3, # grass
-        #     4: 1, # asphalt
-        #     5: 4, # marble_rocks
-        #     6: 0, # cement_sidewalk
-        #     7: 2, # mulch
-        #     8: 0  # red_bricks
-        # }
-
+        # TODO: Extrapolate to config
         self.preferences = {
             0: 0,  # yellow_bricks
             1: 4,  # marble_rocks
@@ -125,7 +100,7 @@ class CostModel(pl.LightningModule):
     def forward(self, visual, inertial, leg, feet):
         with torch.no_grad():
             visual_encoding = self.visual_encoder(visual.float())
-            proprioceptive_encoding = self.proprioceptive_encoder(inertial.float(), leg.float(), feet.float())
+            proprioceptive_encoding = self.inertial_encoder(inertial.float(), leg.float(), feet.float())
 
         return self.cost_net(visual_encoding), torch.cat((visual_encoding, proprioceptive_encoding), dim=-1)
 
@@ -296,7 +271,7 @@ class CostModel(pl.LightningModule):
         return torch.optim.AdamW(self.cost_net.parameters(), lr=3e-4, weight_decay=1e-5, amsgrad=True)
 
 
-if __name__ == "__main__":
+def parse_args():
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
 
@@ -363,6 +338,25 @@ if __name__ == "__main__":
 
     # Parse the arguments
     args = parser.parse_args()
+    
+    # Print all arguments in a list
+    args_list = [
+        f"batch_size: {args.batch_size}",
+        f"epochs: {args.epochs}",
+        f"num_gpus: {args.num_gpus}",
+        f"latent_size: {args.latent_size}",
+        f"save: {args.save}",
+        f"expt_save_path: {args.expt_save_path}",
+        f"data_config_path: {args.data_config_path}",
+        f"temp: {args.temp}",
+    ]
+    for arg in args_list:
+        cprint(arg, "cyan")
+    
+    return args
+
+def main():
+    args = parse_args()
 
     # Initialize the CostModel with the parsed arguments
     model = CostModel(
@@ -372,7 +366,7 @@ if __name__ == "__main__":
     )
 
     # Initialize the data module with the parsed arguments
-    dm = NATURLDataModule(data_config_path=args.data_config_path, batch_size=args.batch_size)
+    dm = SterlingDataModule(data_config_path=args.data_config_path, batch_size=args.batch_size)
 
     # Initialize the TensorBoard logger
     tb_logger = pl_loggers.TensorBoardLogger(save_dir="cost_training_logs/")

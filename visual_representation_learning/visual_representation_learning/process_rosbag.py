@@ -76,14 +76,7 @@ class ProcessRosbag(Node):
     def read_rosbag(self):
         """
         Reads and processes messages from a ROS2 bag file.
-
-        The main functionalities include:
-        1. Sets up storage and converter options for reading the rosbag.
-        2. Opens the rosbag using a SequentialReader.
-        3. Iterates through the messages in the rosbag and processes them based on their topic types.
-        4. Synchronizes image and odometry messages based on their timestamps.
         """
-
         # Check if the bag file exists
         if not os.path.exists(self.bag_path):
             raise FileNotFoundError(f"Path does not exist: bag_path:={self.bag_path}")
@@ -149,7 +142,6 @@ class ProcessRosbag(Node):
     def imu_callback(self, msg) -> None:
         """
         Callback function to process IMU messages.
-
         Args:
             msg (Imu): The IMU message.
         """
@@ -172,7 +164,6 @@ class ProcessRosbag(Node):
     def image_odom_callback(self, image_msg, odom_msg) -> None:
         """
         Callback function to process synchronized image and odometry messages.
-
         Args:
             image_msg (CompressedImage): The synchronized image message.
             odom_msg (Odometry): The synchronized odometry message.
@@ -196,14 +187,8 @@ class ProcessRosbag(Node):
 
     def save_data(self):
         """
-        Processes the data stored in 'msg_data' and saves it into a pickle file:
-
-        Images: Processed images or bird's-eye view (BEV) images.
-        IMU Data: Flattened IMU data from both Kinect and sensors.
-        Odometry Data: Position and orientation data from odometry.
-        Orientation Data: Orientation data from the robot.
+        Processes the data stored in 'self.msg_data' and saves it into a pickle file:
         """
-
         # Dictionary to hold all the processed data
         data = {"patches": [], "imu": []}
 
@@ -272,15 +257,18 @@ class ProcessRosbag(Node):
     def get_camera_intrinsics(self):
         """
         Get camera intrinsics and its inverse.
-        Take from topic if available, else use config values.
+        Returns:
+            C_i: Camera intrinsic matrix.
+            C_i_inv: Inverse of the camera intrinsic matrix.
         """
-
         if self.camera_info is not None:
+            # Extract from topic if available
             fx = self.camera_info.K[0]
             fy = self.camera_info.K[4]
             cx = self.camera_info.K[2]
             cy = self.camera_info.K[5]
         else:
+            # Default use config values
             self.get_logger().warn("\033[0;33mCamera intrinsics not received. Using default values from config.\033[0m")
             fx = CAMERA_INTRINSICS["fx"]
             fy = CAMERA_INTRINSICS["fy"]
@@ -293,10 +281,16 @@ class ProcessRosbag(Node):
 
     def camera_imu_homography(self, orientation_quat, image, C_i, C_i_inv):
         """
-        Compute a homography matrix based on camera displacement
-        and orientation changes.
+        Compute a homography matrix based on camera displacement and orientation changes.
+        Args:
+            orientation_quat: Orientation quaternion of the IMU.
+            image: Compressed image message.
+            C_i: Camera intrinsic matrix.
+            C_i_inv: Inverse of the camera intrinsic matrix.
+        Returns:
+            output: Bird's-eye view (BEV) image.
+            img: Original image.
         """
-
         # Extract parameters from the configuration file
         R_cam_imu_angles = CAMERA_IMU_TRANSFORM["R_cam_imu"]
         R_pitch_angles = CAMERA_IMU_TRANSFORM["R_pitch"]
@@ -342,6 +336,17 @@ class ProcessRosbag(Node):
 
     @staticmethod
     def homography_camera_displacement(R1, R2, t1, t2, n1):
+        """
+        Compute the homography matrix based on camera displacement.
+        Args:
+            R1: Rotation matrix from IMU to camera frame.
+            R2: Rotation matrix from camera frame to BEV camera frame.
+            t1: Translation vector from IMU to camera frame.
+            t2: Translation vector from camera frame to BEV camera frame.
+            n1: Normal vector of camera.
+        Returns:
+            H12: Homography matrix.
+        """
         R12 = R2 @ R1.T
         t12 = R2 @ (-R1.T @ t1) + t2
 
@@ -355,11 +360,14 @@ class ProcessRosbag(Node):
         """
         Extracts a specific patch (sub-image) from a previous image
         based on the current and previous positions and orientations.
-
-        Patch: 3D array with shape (64, 64, 3), representing 64x64 pixel image
-        with 3 color channels (RGB).
+        Args:
+            curr_pos: Current position (x, y, theta) in the world frame.
+            prev_pos: Previous position (x, y, theta) in the world frame.
+            prev_image: Previous image from which the patch is to be extracted.
+        Returns:
+            patch: 3D array with shape (64, 64, 3), representing 64x64 pixel image with 3 color channels (RGB).
+            patch_img: Image with the patch corners drawn on it.
         """
-
         # Convert current position to homogeneous coordinates
         curr_pos_np = np.array([curr_pos[0], curr_pos[1], 1])
 

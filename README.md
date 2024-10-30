@@ -89,7 +89,9 @@ ros2 run visual_representation_learning train_sterling_representations --help
 ```
 
 ### Output
-- Folder of encoder weights (`.pt` files), group images (`.png`), etc. located in `/models` at the workspace directory.
+- Saved files will be in a `/models` folder at the root workspace directory in the format `rep_(accuracy)_(date)_(time)`. Files include:
+  - Encoder weights (`.pt`)
+  - Cluster images (`.png`)
 
 ### Files
 - visual_representation_learning/config/`dataset.yaml`

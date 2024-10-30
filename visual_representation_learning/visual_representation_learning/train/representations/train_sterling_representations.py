@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-""" """
+"""
+train_sterling_representations.py
 
-import torch
+This script is used to train representations using visual and inertial data. 
+"""
 
 import argparse
 import os
@@ -11,8 +13,10 @@ from datetime import datetime
 import numpy as np
 import pytorch_lightning as pl
 import tensorboard as tb
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from ament_index_python.packages import get_package_share_directory
 from PIL import Image
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -20,24 +24,24 @@ from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from termcolor import cprint
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from ament_index_python.packages import get_package_share_directory
 
 from visual_representation_learning.train.representations.cluster import (
     accuracy_naive,
     compute_fms_ari,
 )
+from visual_representation_learning.train.representations.data_loader import SterlingDataModule
 from visual_representation_learning.train.representations.models import (
-    VisualEncoderModel,
     InertialEncoderModel,
     VisualEncoderEfficientModel,
+    VisualEncoderModel,
 )
-from visual_representation_learning.train.representations.data_loader import SterlingDataModule
 
 package_share_directory = get_package_share_directory("visual_representation_learning")
 ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
 
 torch.multiprocessing.set_sharing_strategy("file_system")  # https://github.com/pytorch/pytorch/issues/11201
 
+# TODO: Extrapolate to config
 terrain_label = {
     "asphalt": 0,
     "bush": 1,
@@ -435,7 +439,7 @@ class SterlingRepresentationModel(pl.LightningModule):
                 path_root = os.path.join(
                     ros_ws_dir,
                     "models",
-                    "acc_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S")),
+                    "rep_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S")),
                 )
                 self.save_models(path_root)
 
