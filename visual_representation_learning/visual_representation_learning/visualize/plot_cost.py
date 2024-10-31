@@ -1,6 +1,8 @@
-""" """
+"""
+plot_cost.py
 
-# TODO: Untested
+Takes the validation dataset and plots the cost associated with a terrain patch.
+"""
 import matplotlib.pyplot as plt
 import argparse
 import os
@@ -12,7 +14,6 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from visual_representation_learning.train.costs.models import CostNet
-from visual_representation_learning.train.costs.train_costs import CostModel
 from visual_representation_learning.train.representations.models import VisualEncoderEfficientModel, VisualEncoderModel
 from visual_representation_learning.train.representations.data_loader import SterlingDataModule
 
@@ -92,7 +93,3 @@ def main():
     # Save the plot
     plt.savefig(os.path.join(MODEL_PATH, "costs_boxplot.png"))
     cprint("Saved costs_boxplot.png", "green")
-
-
-if __name__ == "__main__":
-    main()

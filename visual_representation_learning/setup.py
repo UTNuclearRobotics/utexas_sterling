@@ -45,6 +45,7 @@ setup(
             # Visualize
             "visualize_models_representations = visual_representation_learning.train.representations.models:visualize_models",
             "plot_costs = visual_representation_learning.visualize.plot_cost:main",
+            "pkl_metadata = visual_representation_learning.visualize.pkl_metadata:main",
             # Utils
             "convert_pt_jit = visual_representation_learning.train.convert_pt_jit:main",
         ],
