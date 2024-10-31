@@ -104,7 +104,7 @@ class CostModel(pl.LightningModule):
         }
 
         self.best_val_loss = 1000000.0
-        self.cost_model_save_path = os.path.join(model_path, "cost_model_grass_eq.pt")
+        self.cost_model_save_path = os.path.join(model_path, "cost_model.pt")
 
         assert len(self.preferences) == len(
             np.unique(self.kmeans_labels)

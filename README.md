@@ -101,3 +101,26 @@ ros2 run visual_representation_learning train_representations --help
 - visual_representation_learning/visual_representation_learning/train/representations/`data_loader.py`
 - visual_representation_learning/visual_representation_learning/train/representations/`models.py`
 - visual_representation_learning/visual_representation_learning/train/representations/`train_representations.py`
+
+## Train Costs
+Define what pickle files to use as the datasets for training and validating in a `dataset.yaml`. To start the PyTorch training process, use the command:
+```sh
+ros2 run visual_representation_learning train_costs
+```
+
+### Parameters
+To view the script's arguments, use the command:
+```sh
+ros2 run visual_representation_learning train_costs --help
+```
+
+### Output
+- Saved files will be in a `/models` folder at the root workspace directory in the format `rep_(accuracy)_(date)_(time)`. Files include:
+  - Encoder weights (`.pt`)
+  - Cluster images (`.png`)
+
+### Files
+- visual_representation_learning/config/`dataset.yaml`
+- visual_representation_learning/visual_representation_learning/train/representations/`data_loader.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`models.py`
+- visual_representation_learning/visual_representation_learning/train/costs/`train_costs.py`

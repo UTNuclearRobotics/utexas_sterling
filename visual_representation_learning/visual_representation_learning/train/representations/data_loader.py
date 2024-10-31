@@ -29,7 +29,7 @@ class TerrainDataset(Dataset):
         cprint("Loading data from {}".format(pickle_file_path))
         self.pickle_files_path = pickle_file_path
         self.data = pickle.load(open(pickle_file_path, "rb"))
-        self.label = pickle_file_path.split("/")[-2]
+        self.label = pickle_file_path.split("/")[-2] # Question: Why is there a label for SSL? It's extracted from the path.
         self.data_stats = data_stats
 
         if data_stats is not None:

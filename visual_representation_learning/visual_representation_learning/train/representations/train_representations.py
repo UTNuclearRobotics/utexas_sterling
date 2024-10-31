@@ -244,27 +244,27 @@ class SterlingRepresentationModel(pl.LightningModule):
 
         # Save the batch data only every other epoch or during the last epoch
         if self.current_epoch % 10 == 0 or self.current_epoch == self.trainer.max_epochs - 1:
-            patch1, patch2, inertial, label, sampleidx = batch
+            patch1, patch2, inertial, label, sample_idx = batch
 
             with torch.no_grad():
                 _, _, _, zv1, zv2, zi = self.forward(patch1, patch2, inertial)
             zv1, zi = zv1.cpu(), zi.cpu()
             patch1 = patch1.cpu()
             label = np.asarray(label)
-            sampleidx = sampleidx.cpu()
+            sample_idx = sample_idx.cpu()
 
             if batch_idx == 0:
                 self.visual_encoding = [zv1]
                 self.inertial_encoding = [zi]
                 self.label = label
                 self.visual_patch = [patch1]
-                self.sampleidx = [sampleidx]
+                self.sample_idx = [sample_idx]
             else:
                 self.visual_encoding.append(zv1)
                 self.inertial_encoding.append(zi)
                 self.label = np.concatenate((self.label, label))
                 self.visual_patch.append(patch1)
-                self.sampleidx.append(sampleidx)
+                self.sample_idx.append(sample_idx)
 
     def sample_clusters(self, clusters, elbow, vis_patch):
         """
@@ -325,7 +325,8 @@ class SterlingRepresentationModel(pl.LightningModule):
                 im.thumbnail((64, 64))
                 new_im.paste(im, (h * 64, w * 64))
 
-            # save grid image
+            # Save grid image
+            # TODO: Group name not showing up? Just ''
             new_im.save(os.path.join(path_root, "group" + str(i) + ".png"))
 
     def validate(self):
@@ -339,13 +340,13 @@ class SterlingRepresentationModel(pl.LightningModule):
             self.inertial_encoding,
             self.label,
             self.visual_patch,
-            self.sampleidx,
+            self.sample_idx,
         ) = [], [], [], [], []
 
         # Create dataloader for validation
         dataset = DataLoader(dataset, batch_size=512, shuffle=False, num_workers=4)
 
-        for patch1, patch2, inertial, label, sampleidx in tqdm(dataset, desc="Validating"):
+        for patch1, patch2, inertial, label, sample_idx in tqdm(dataset, desc="Validating"):
             # move to device
             patch1, patch2, inertial = (
                 patch1.to(self.device),
@@ -365,19 +366,19 @@ class SterlingRepresentationModel(pl.LightningModule):
             self.visual_encoding.append(zv1)
             self.inertial_encoding.append(zi)
             self.label.append(np.asarray(label))
-            self.sampleidx.append(sampleidx)
+            self.sample_idx.append(sample_idx)
 
         # Concatenates the collected outputs into tensors or arrays
         self.visual_patch = torch.cat(self.visual_patch, dim=0)
         self.visual_encoding = torch.cat(self.visual_encoding, dim=0)
         self.inertial_encoding = torch.cat(self.inertial_encoding, dim=0)
-        self.sampleidx = torch.cat(self.sampleidx, dim=0)
+        self.sample_idx = torch.cat(self.sample_idx, dim=0)
         self.label = np.concatenate(self.label)
 
         # cprint("Visual Encoding Shape: {}".format(self.visual_encoding.shape), "cyan")
         # cprint("Inertial Encoding Shape: {}".format(self.inertial_encoding.shape), "cyan")
         # cprint("Visual Patch Shape: {}".format(self.visual_patch.shape), "cyan")
-        # cprint("Sample Index Shape: {}".format(self.sampleidx.shape), "cyan")
+        # cprint("Sample Index Shape: {}".format(self.sample_idx.shape), "cyan")
 
     def on_validation_end(self):
         """
@@ -392,7 +393,7 @@ class SterlingRepresentationModel(pl.LightningModule):
             # self.visual_patch = torch.cat(self.visual_patch, dim=0)
             # self.visual_encoding = torch.cat(self.visual_encoding, dim=0)
             # self.inertial_encoding = torch.cat(self.inertial_encoding, dim=0)
-            # self.sampleidx = torch.cat(self.sampleidx, dim=0)
+            # self.sample_idx = torch.cat(self.sample_idx, dim=0)
 
             # cprint('Visual Encoding Shape: {}'.format(self.visual_encoding.shape), 'white', attrs=['bold'])
 
@@ -411,20 +412,20 @@ class SterlingRepresentationModel(pl.LightningModule):
             # Calculate and print accuracy
             tqdm.write("Finding accuracy...")
 
-            accuracy, kmeanslabels, kmeanselbow, kmeansmodel = accuracy_naive(
+            accuracy, kmeans_labels, kmeanselbow, kmeans_model = accuracy_naive(
                 data, ll, label_types=list(terrain_label.keys())
             )
-            fms, ari, chs = compute_fms_ari(data, ll, clusters=kmeanslabels, elbow=kmeanselbow, model=kmeansmodel)
+            fms, ari, chs = compute_fms_ari(data, ll, clusters=kmeans_labels, elbow=kmeanselbow, model=kmeans_model)
 
             if not self.max_acc or accuracy > self.max_acc:
                 self.max_acc = accuracy
-                self.kmeanslabels, self.kmeanselbow, self.kmeansmodel = (
-                    kmeanslabels,
+                self.kmeans_labels, self.kmeans_elbow, self.kmeans_model = (
+                    kmeans_labels,
                     kmeanselbow,
-                    kmeansmodel,
+                    kmeans_model,
                 )
-                self.vispatchsaved = torch.clone(vis_patch)
-                self.sampleidxsaved = torch.clone(self.sampleidx)
+                self.vis_patch_saved = torch.clone(vis_patch)
+                self.sample_idx_saved = torch.clone(self.sample_idx)
                 cprint("Best model saved", "green")
 
             # Log k-means accurcay and projection for tensorboard visualization
@@ -432,7 +433,7 @@ class SterlingRepresentationModel(pl.LightningModule):
             self.logger.experiment.add_scalar("Fowlkes-Mallows score", fms, self.current_epoch)
             self.logger.experiment.add_scalar("Adjusted Rand Index", ari, self.current_epoch)
             self.logger.experiment.add_scalar("Calinski-Harabasz Score", chs, self.current_epoch)
-            self.logger.experiment.add_scalar("K-means elbow", self.kmeanselbow, self.current_epoch)
+            self.logger.experiment.add_scalar("K-means elbow", self.kmeans_elbow, self.current_epoch)
 
             # Save the cluster image grids on the final epoch only
             if self.current_epoch == self.trainer.max_epochs - 1:
@@ -474,17 +475,17 @@ class SterlingRepresentationModel(pl.LightningModule):
             cprint("Directory already exists: " + path_root, "red")
 
         # Sample clusters of visual patches and save them as image grids
-        dic = self.sample_clusters(self.kmeanslabels, self.kmeanselbow, self.vispatchsaved)
-        self.img_clusters(dic, self.kmeanselbow, path_root=path_root)
+        dic = self.sample_clusters(self.kmeans_labels, self.kmeans_elbow, self.vis_patch_saved)
+        self.img_clusters(dic, self.kmeans_elbow, path_root=path_root)
 
         # Save the k-means clustering model
         with open(os.path.join(path_root, "kmeans_model.pkl"), "wb") as f:
-            pickle.dump(self.kmeansmodel, f)
+            pickle.dump(self.kmeans_model, f)
             cprint("K-means model saved", "green")
 
         # Save the k-means clustering labels and sample indices
-        torch.save(self.kmeanslabels, os.path.join(path_root, "kmeans_labels.pt"))
-        torch.save(self.sampleidxsaved, os.path.join(path_root, "sample_idx.pt"))
+        torch.save(self.kmeans_labels, os.path.join(path_root, "kmeans_labels.pt"))
+        torch.save(self.sample_idx_saved, os.path.join(path_root, "sample_idx.pt"))
 
         # Save the state dictionary of the visual encoder
         torch.save(
@@ -512,21 +513,21 @@ def parse_args():
         type=int,
         default=512,
         metavar="N",
-        help="input batch size for training (default: 512)",
+        help="Input batch size for training (default: 512)",
     )
     parser.add_argument(
         "--epochs",
         type=int,
         default=200,
         metavar="N",
-        help="number of epochs to train (default: 200)",
+        help="Number of epochs to train (default: 200)",
     )
     parser.add_argument(
         "--lr",
         type=float,
         default=3e-4,
         metavar="LR",
-        help="learning rate (default: 3e-4)",
+        help="Learning rate (default: 3e-4)",
     )
     parser.add_argument(
         "--l1_coeff",
@@ -541,7 +542,7 @@ def parse_args():
         type=int,
         default=1,
         metavar="N",
-        help="number of GPUs to use (default: 1)",
+        help="Number of GPUs to use (default: 1)",
     )
     parser.add_argument(
         "--latent_size",

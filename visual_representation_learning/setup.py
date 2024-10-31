@@ -44,6 +44,7 @@ setup(
             "train_costs = visual_representation_learning.train.costs.train_costs:main",
             # Visualize
             "visualize_models_representations = visual_representation_learning.train.representations.models:visualize_models",
+            "plot_costs = visual_representation_learning.visualize.plot_cost:main",
             # Utils
             "convert_pt_jit = visual_representation_learning.train.convert_pt_jit:main",
         ],
