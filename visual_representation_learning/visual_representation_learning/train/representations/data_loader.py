@@ -50,7 +50,7 @@ class TerrainDataset(Dataset):
         PATCHES = self.data["patches"][idx]
 
         # Process IMU data
-        # TODO: Reasoning behind this?
+        # Question: Reasoning behind this?
         # imu = imu[:, :-4]  # Exclude orientation data
         # imu = imu[:, [0, 1, 5]]  # Select angular_x, angular_y, linear_z
         # imu = periodogram(imu, fs=IMU_TOPIC_RATE, axis=0)[1]

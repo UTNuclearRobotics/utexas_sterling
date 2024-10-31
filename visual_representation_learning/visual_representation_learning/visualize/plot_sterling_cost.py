@@ -1,6 +1,6 @@
 """
 """
-# TODO: Test code
+# TODO: Untested
 
 import torch
 import torch.nn as nn

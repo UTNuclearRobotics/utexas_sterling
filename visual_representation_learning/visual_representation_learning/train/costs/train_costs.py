@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-""" 
-train_sterling_costs.py
+"""
+train_costs.py
 
 TODO: Add a description of the script here.
 """
@@ -20,100 +20,141 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from termcolor import cprint
 
+from ament_index_python import get_package_share_directory
 from visual_representation_learning.train.costs.models import CostNet
 from visual_representation_learning.train.representations.data_loader import SterlingDataModule
-from visual_representation_learning.train.representations.models import InertialEncoderModel, VisualEncoderModel
+from visual_representation_learning.train.representations.models import (
+    InertialEncoderModel,
+    VisualEncoderModel,
+    VisualEncoderEfficientModel,
+)
+
+package_share_directory = get_package_share_directory("visual_representation_learning")
+ros_ws_dir = os.path.abspath(os.path.join(package_share_directory, "..", "..", "..", ".."))
 
 
 class CostModel(pl.LightningModule):
-    def __init__(self, latent_size=128, visual_encoder_weights=None, temp=1.0):
+    def __init__(self, latent_size=128, model_path=None, temp=1.0):
         super(CostModel, self).__init__()
-        assert visual_encoder_weights is not None, "visual_encoder_weights cannot be None"
 
-        self.visual_encoder = VisualEncoderModel(latent_size=latent_size)
+        # Verify that the model_path exists
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"The specified model_path {model_path} does not exist")
+
+        # Verify that the required files exist in the model_path directory
+        required_files = [
+            "inertial_encoder.pt",
+            "visual_encoder.pt",
+            "sample_idx.pt",
+            "kmeans_labels.pt",
+            "kmeans_model.pkl",
+        ]
+        for file in required_files:
+            file_path = os.path.join(model_path, file)
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Required file {file} not found in {model_path}")
+
+        self.visual_encoder = VisualEncoderEfficientModel(latent_size=latent_size)
+        # self.visual_encoder = VisualEncoderModel(latent_size=latent_size)
         self.inertial_encoder = InertialEncoderModel(latent_size=latent_size)
 
-        # load the weights from the visual encoder
+        # Load the weights from the visual encoder
         cprint("Loading the weights from the visual encoder", "green")
-        self.visual_encoder.load_state_dict(torch.load(visual_encoder_weights))
+        self.visual_encoder.load_state_dict(torch.load(os.path.join(model_path, "visual_encoder.pt")))
         self.visual_encoder.eval()
-        cprint("Loaded the weights from the visual encoder", "green")
-        cprint("Loading the weights from the proprioceptive encoder", "green")
-        self.inertial_encoder.load_state_dict(
-            torch.load(visual_encoder_weights.replace("visual_encoder", "inertial_encoder"))
-        )
-        self.inertial_encoder.eval()
-        cprint("Loaded the weights from the proprioceptive encoder", "green")
 
+        # Load the weights from the inertial encoder
+        cprint("Loading the weights from the inertial encoder", "green")
+        self.inertial_encoder.load_state_dict(torch.load(os.path.join(model_path, "inertial_encoder.pt")))
+        self.inertial_encoder.eval()
+
+        # Load the k-means model from the pickle file
         cprint("Loading the k-means model from the pickle file", "green")
-        self.kmeansmodel = pickle.load(
-            open(
-                visual_encoder_weights.replace("visual_encoder.pt", "kmeansmodel.pkl"),
-                "rb",
-            )
-        )
-        cprint("Loaded the k-means model from the pickle file", "green")
+        with open(os.path.join(model_path, "kmeans_model.pkl"), "rb") as f:
+            self.kmeans_model = pickle.load(f)
 
         self.cost_net = CostNet(latent_size=latent_size)
         self.temp = temp
 
-        # load the kmeanslabels
-        self.kmeanslabels = torch.load(visual_encoder_weights.replace("visual_encoder", "kmeanslabels"))
-        self.sampleidx = torch.load(visual_encoder_weights.replace("visual_encoder", "sampleidx"))
-        # sort the sampleidx and get the idx
-        _, idx = torch.sort(self.sampleidx)
-        self.kmeanslabels = self.kmeanslabels[idx]
-        cprint("The kmeanslabels are : {}".format(np.unique(self.kmeanslabels)), "green")
-        cprint("Number of kmeanslabels : {}".format(self.kmeanslabels.shape[0]), "green")
-        # now the kmeanslabels are sorted according to the sampleidx
+        # Load the kmeans_labels and sample_idx
+        self.kmeans_labels = torch.load(os.path.join(model_path, "kmeans_labels.pt"))
+        self.sample_idx = torch.load(os.path.join(model_path, "sample_idx.pt"))
 
-        cprint("The kmeanslabels are : {}".format(np.unique(self.kmeanslabels)), "green")
-        cprint(
-            "Number of vals in self.sampleidx : {}".format(self.sampleidx.shape[0]),
-            "green",
-        )
-        cprint(
-            "Number of vals in self.kmeanslabels : {}".format(self.kmeanslabels.shape[0]),
-            "green",
-        )
+        # Sort the sample_idx and get the idx
+        _, idx = torch.sort(self.sample_idx)
+        self.kmeans_labels = self.kmeans_labels[idx]
 
+        cprint("The kmeans_labels are : {}".format(np.unique(self.kmeans_labels)), "green")
+        cprint("Number of kmeans_labels : {}".format(self.kmeans_labels.shape[0]), "green")
+        cprint("Number of vals in self.sample_idx : {}".format(self.sample_idx.shape[0]), "green")
+        cprint("Number of vals in self.kmeans_labels : {}".format(self.kmeans_labels.shape[0]), "green")
+
+        # Define preferences for each cluster
         # TODO: Extrapolate to config
         self.preferences = {
             0: 0,  # yellow_bricks
             1: 4,  # marble_rocks
-            2: 0,  # red_bricks
-            3: 3,  # grass
-            4: 0,  # cement_sidewalk
-            5: 5,  # bush
-            6: 0,  # asphalt
-            7: 0,  # pebble_sidewalk
-            8: 0,  # mulch
+            # 2: 0,  # red_bricks
+            # 3: 3,  # grass
+            # 4: 0,  # cement_sidewalk
+            # 5: 5,  # bush
+            # 6: 0,  # asphalt
+            # 7: 0,  # pebble_sidewalk
+            # 8: 0,  # mulch
         }
 
         self.best_val_loss = 1000000.0
-        self.cost_model_save_path = visual_encoder_weights.replace("visual_encoder", "cost_model_grass_eq")
+        self.cost_model_save_path = os.path.join(model_path, "cost_model_grass_eq.pt")
 
         assert len(self.preferences) == len(
-            np.unique(self.kmeanslabels)
+            np.unique(self.kmeans_labels)
         ), "The number of preferences must be equal to the number of clusters"
 
-    def forward(self, visual, inertial, leg, feet):
+    def forward(self, visual, inertial):
+        """
+        Forward pass for the cost network.
+        Args:
+            visual (torch.Tensor): The visual input tensor.
+            inertial (torch.Tensor): The inertial input tensor.
+        Returns:
+            torch.Tensor: The cost encoding tensor.
+            torch.Tensor: The combined features tensor.
+        """
         with torch.no_grad():
             visual_encoding = self.visual_encoder(visual.float())
-            proprioceptive_encoding = self.inertial_encoder(inertial.float(), leg.float(), feet.float())
-
-        return self.cost_net(visual_encoding), torch.cat((visual_encoding, proprioceptive_encoding), dim=-1)
+            inertial_encoding = self.inertial_encoder(inertial.float())
+        cost_encoding = self.cost_net(visual_encoding)
+        combined_features = torch.cat((visual_encoding, inertial_encoding), dim=1)
+        return cost_encoding, combined_features
 
     def softmax_with_temp(self, x, y, temp=1.0):
+        """
+        Compute the softmax of the two costs with a temperature scaling factor.
+        Args:
+            x (torch.Tensor): The first cost tensor.
+            y (torch.Tensor): The second cost tensor.
+            temp (float): The temperature scaling factor.
+        Returns:
+            torch.Tensor: The softmax of the two costs.
+        """
         x = torch.exp(x / temp)
         y = torch.exp(y / temp)
         return x / (x + y)
 
     def compute_preference_loss(self, cost, preference_labels, temp=1.0):
-        # shuffle the batch and compute the cost per sample
+        """
+        Compute the preference loss for a batch of costs.
+        Args:
+            cost (torch.Tensor): The cost tensor.
+            preference_labels (List[int]): The list of preference labels.
+            temp (float): The temperature scaling factor.
+        Returns:
+            torch.Tensor: The preference loss.
+        """
+        # Shuffle the batch and compute the cost per sample
         loss = 0.0
         for i in range(cost.shape[0]):
-            # randomly select a sample from the batch
+            # Randomly select a sample from the batch
             j = torch.randint(0, cost.shape[0], (1,))[0]
             if preference_labels[i] < preference_labels[j]:
                 loss += self.softmax_with_temp(cost[i], cost[j], temp=temp)
@@ -130,14 +171,14 @@ class CostModel(pl.LightningModule):
         # loss = torch.nn.MSELoss()(cost, torch.tensor(preference_labels).float().to(cost.device))
 
     def training_step(self, batch, batch_idx):
-        patch1, patch2, inertial, leg, feet, _, _ = batch
-        # sampleidx = sampleidx.cpu()
+        patch1, patch2, inertial, _, _ = batch
+        # sample_idx = sample_idx.cpu()
 
-        # kmeanslabels = self.kmeanslabels[sampleidx]
-        # preference_labels = [self.preferences[i] for i in kmeanslabels]
+        # kmeans_labels = self.kmeans_labels[sample_idx]
+        # preference_labels = [self.preferences[i] for i in kmeans_labels]
 
-        cost1, rep1 = self.forward(patch1, inertial, leg, feet)
-        cost2, rep2 = self.forward(patch2, inertial, leg, feet)
+        cost1, rep1 = self.forward(patch1, inertial)
+        cost2, rep2 = self.forward(patch2, inertial)
 
         rep1, rep2 = (
             rep1.detach().cpu().detach().numpy(),
@@ -145,8 +186,8 @@ class CostModel(pl.LightningModule):
         )
 
         labels1, labels2 = (
-            self.kmeansmodel.predict(rep1),
-            self.kmeansmodel.predict(rep2),
+            self.kmeans_model.predict(rep1),
+            self.kmeans_model.predict(rep2),
         )
         preference_labels1 = [self.preferences[i] for i in labels1]
         preference_labels2 = [self.preferences[i] for i in labels2]
@@ -172,14 +213,14 @@ class CostModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        patch1, patch2, inertial, leg, feet, _, _ = batch
-        # sampleidx = sampleidx.cpu()
+        patch1, patch2, inertial, _, _ = batch
+        # sample_idx = sample_idx.cpu()
 
-        # kmeanslabels = self.kmeanslabels[sampleidx]
-        # preference_labels = [self.preferences[i] for i in kmeanslabels]
+        # kmeans_labels = self.kmeans_labels[sample_idx]
+        # preference_labels = [self.preferences[i] for i in kmeans_labels]
 
-        cost1, rep1 = self.forward(patch1, inertial, leg, feet)
-        cost2, rep2 = self.forward(patch2, inertial, leg, feet)
+        cost1, rep1 = self.forward(patch1, inertial)
+        cost2, rep2 = self.forward(patch2, inertial)
 
         rep1, rep2 = (
             rep1.detach().cpu().detach().numpy(),
@@ -187,8 +228,8 @@ class CostModel(pl.LightningModule):
         )
 
         labels1, labels2 = (
-            self.kmeansmodel.predict(rep1),
-            self.kmeansmodel.predict(rep2),
+            self.kmeans_model.predict(rep1),
+            self.kmeans_model.predict(rep2),
         )
         preference_labels1 = [self.preferences[i] for i in labels1]
         preference_labels2 = [self.preferences[i] for i in labels2]
@@ -215,17 +256,10 @@ class CostModel(pl.LightningModule):
 
     def on_validation_end(self):
         """
-        This method is called at the end of the validation phase.
-        It checks if the current validation loss is the best so far and saves the model if it is.
-
-        - Retrieves the validation loss from the trainer's callback metrics.
-        - If running in a distributed setting, aggregates the validation loss across all GPUs.
-        - Checks if the current validation loss is the best so far and if we are on GPU 0.
-        - If the current validation loss is the best, updates the best validation loss and saves the model.
-
-        Note:
-        The PyTorch neural network model being saved is a combination of the visual encoder and the cost network.
-        This combined model is saved as a state dictionary, which includes the parameters (weights and biases) of the neural network.
+        Save the batch data for visualization during validation.
+        Args:
+            batch (tuple): A tuple containing the input data, inertial data, and labels.
+            batch_idx (int): The index of the current batch.
         """
 
         # Get the validation loss from the trainer's callback metrics
@@ -274,94 +308,79 @@ class CostModel(pl.LightningModule):
 def parse_args():
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
-
-    # Argument for batch size
     parser.add_argument(
         "--batch_size",
         "-b",
         type=int,
         default=128,
         metavar="N",
-        help="input batch size for training (default: 512)",
+        help="Input batch size for training (default: 128)",
     )
-
-    # Argument for number of epochs
     parser.add_argument(
         "--epochs",
         type=int,
         default=100,
         metavar="N",
-        help="number of epochs to train (default: 1000)",
+        help="Number of epochs to train (default: 100)",
     )
-
-    # Argument for number of GPUs to use
     parser.add_argument(
         "--num_gpus",
         "-g",
         type=int,
-        default=8,
+        default=1,
         metavar="N",
-        help="number of GPUs to use (default: 8)",
+        help="Number of GPUs to use (default: 1)",
     )
-
-    # Argument for latent size
     parser.add_argument(
         "--latent_size",
         type=int,
-        default=512,
+        default=64,
         metavar="N",
-        help="Size of the common latent space (default: 128)",
+        help="Size of the common latent space (default: 64)",
     )
-
-    # Argument for whether to save the k-means model and encoders at the end of the run
+    # parser.add_argument(
+    #     "--save",
+    #     type=int,
+    #     default=0,
+    #     metavar="N",
+    #     help="Whether to save the k means model and encoders at the end of the run",
+    # )
     parser.add_argument(
-        "--save",
-        type=int,
-        default=0,
-        metavar="N",
-        help="Whether to save the k means model and encoders at the end of the run",
+        "--model_path", "-p", type=str, default="", help="Path to the saved representations models (required)"
     )
-
-    # Argument for experiment save path
     parser.add_argument(
-        "--expt_save_path",
-        "-e",
+        "--data_config_path",
         type=str,
-        default="/robodata/haresh92/spot-vrl/models/acc_0.98154_22-01-2023-05-13-46_",
+        default=os.path.join(package_share_directory, "config", "dataset.yaml"),
+        help="Path to the data configuration file (required)",
     )
-
-    # Argument for data configuration path
-    parser.add_argument("--data_config_path", type=str, default="spot_data/data_config.yaml")
-
-    # Argument for temperature scaling
-    parser.add_argument("--temp", type=float, default=1.0)
-
-    # Parse the arguments
+    parser.add_argument("--temp", type=float, default=1.0, help="Temperature scaling factor (default: 1.0)")
     args = parser.parse_args()
-    
+
     # Print all arguments in a list
     args_list = [
         f"batch_size: {args.batch_size}",
         f"epochs: {args.epochs}",
         f"num_gpus: {args.num_gpus}",
         f"latent_size: {args.latent_size}",
-        f"save: {args.save}",
-        f"expt_save_path: {args.expt_save_path}",
+        # f"save: {args.save}",
+        f"model_path: {args.model_path}",
         f"data_config_path: {args.data_config_path}",
         f"temp: {args.temp}",
     ]
     for arg in args_list:
         cprint(arg, "cyan")
-    
+
     return args
+
 
 def main():
     args = parse_args()
 
     # Initialize the CostModel with the parsed arguments
     model = CostModel(
-        latent_size=128,
-        visual_encoder_weights=os.path.join(args.expt_save_path, "visual_encoder.pt"),
+        latent_size=args.latent_size,
+        model_path=args.model_path,
         temp=args.temp,
     )
 
@@ -369,16 +388,17 @@ def main():
     dm = SterlingDataModule(data_config_path=args.data_config_path, batch_size=args.batch_size)
 
     # Initialize the TensorBoard logger
-    tb_logger = pl_loggers.TensorBoardLogger(save_dir="cost_training_logs/")
+    tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join(ros_ws_dir, "sterling_costs_logs"))
 
-    print("Training the cost function model...")
+    cprint("Training the cost function model...", "green", attrs=["bold"])
 
     # Initialize the PyTorch Lightning trainer
     trainer = pl.Trainer(
-        gpus=list(np.arange(args.num_gpus)),  # List of GPUs to use
+        devices=args.num_gpus,
         max_epochs=args.epochs,  # Maximum number of epochs
         log_every_n_steps=10,  # Log every n steps
-        strategy="ddp",  # Distributed data parallel strategy
+        strategy="ddp_find_unused_parameters_true",
+        # strategy="ddp",  # Distributed data parallel strategy
         num_sanity_val_steps=0,  # Number of sanity validation steps
         sync_batchnorm=True,  # Synchronize batch normalization
         logger=tb_logger,  # Logger for TensorBoard

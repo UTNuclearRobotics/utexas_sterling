@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-train_sterling_representations.py
+train_representations.py
 
-This script is used to train representations using visual and inertial data. 
+This script is used to train representations using visual and inertial data.
 """
 
 import argparse
@@ -73,8 +73,8 @@ class SterlingRepresentationModel(pl.LightningModule):
 
         self.lr = lr
         self.latent_size = latent_size
-        self.scale_loss = scale_loss
-        self.lambd = lambd
+        self.scale_loss = scale_loss # Question: Is this being used by LightningModule?
+        self.lambd = lambd # Question: Is this being used by LightningModule?
         self.weight_decay = weight_decay
         self.l1_coeff = l1_coeff
         self.rep_size = rep_size
@@ -241,7 +241,7 @@ class SterlingRepresentationModel(pl.LightningModule):
             batch (tuple): A tuple containing the input data, inertial data, and labels.
             batch_idx (int): The index of the current batch.
         """
-        
+
         # Save the batch data only every other epoch or during the last epoch
         if self.current_epoch % 10 == 0 or self.current_epoch == self.trainer.max_epochs - 1:
             patch1, patch2, inertial, label, sampleidx = batch
@@ -410,7 +410,7 @@ class SterlingRepresentationModel(pl.LightningModule):
 
             # Calculate and print accuracy
             tqdm.write("Finding accuracy...")
-            
+
             accuracy, kmeanslabels, kmeanselbow, kmeansmodel = accuracy_naive(
                 data, ll, label_types=list(terrain_label.keys())
             )
@@ -550,13 +550,13 @@ def parse_args():
         metavar="N",
         help="Size of the common latent space (default: 128)",
     )
-    parser.add_argument(
-        "--save",
-        type=int,
-        default=0,
-        metavar="N",
-        help="Whether to save the k-means model and encoders at the end of the run (default: 0)",
-    )
+    # parser.add_argument(
+    #     "--save",
+    #     type=int,
+    #     default=0,
+    #     metavar="N",
+    #     help="Whether to save the k-means model and encoders at the end of the run (default: 0)",
+    # )
     parser.add_argument(
         "--imu_in_rep",
         type=int,
@@ -580,7 +580,7 @@ def parse_args():
         f"l1_coeff: {args.l1_coeff}",
         f"num_gpus: {args.num_gpus}",
         f"latent_size: {args.latent_size}",
-        f"save: {args.save}",
+        # f"save: {args.save}",
         f"imu_in_rep: {args.imu_in_rep}",
         f"data_config_path: {args.data_config_path}",
     ]
@@ -600,7 +600,7 @@ def main():
     dm = SterlingDataModule(data_config_path=args.data_config_path, batch_size=args.batch_size)
 
     # Set up TensorBoard logger
-    tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join(ros_ws_dir, "log", "sterling_representation_logs"))
+    tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join(ros_ws_dir, "sterling_representation_logs"))
 
     # Initialize the PyTorch Lightning trainer
     cprint("Training the representation learning model...", "yellow", attrs=["bold"])

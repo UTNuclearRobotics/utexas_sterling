@@ -37,24 +37,15 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            ###
-            ### Preprocessing
-            ###
+            # Preprocessing
             "process_rosbag = visual_representation_learning.process_rosbag:main",
-            ###
-            ### Train
-            ###
-            "train_sterling_representations = visual_representation_learning.train.representations.train_sterling_representations:main",
-            ###
-            ### Utils
-            ###
-            # Convert PyTorch model to TorchScript JIT
+            # Train
+            "train_representations = visual_representation_learning.train.representations.train_representations:main",
+            "train_costs = visual_representation_learning.train.costs.train_costs:main",
+            # Visualize
+            "visualize_models_representations = visual_representation_learning.train.representations.models:visualize_models",
+            # Utils
             "convert_pt_jit = visual_representation_learning.train.convert_pt_jit:main",
-            ###
-            ### Visualize
-            ###
-            # Visualize PyTorch model convolution layers
-            "visualize_models = visual_representation_learning.train.representations.models:visualize_models",
         ],
     },
 )

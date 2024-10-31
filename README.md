@@ -1,4 +1,6 @@
 # STERLING
+Self-Supervised Terrain Representation Learning from Unconstrained Robot Experience
+
 
 ## Prerequisites
 Before you begin, ensure you have the following:
@@ -79,13 +81,13 @@ ros2 launch visual_representation_learning process_rosbag.launch.py
 ## Train Terrain Representations
 Define what pickle files to use as the datasets for training and validating in a `dataset.yaml`. To start the PyTorch training process, use the command:
 ```sh
-ros2 run visual_representation_learning train_sterling_representations
+ros2 run visual_representation_learning train_representations
 ```
 
 ### Parameters
 To view the script's arguments, use the command:
 ```sh
-ros2 run visual_representation_learning train_sterling_representations --help
+ros2 run visual_representation_learning train_representations --help
 ```
 
 ### Output
@@ -98,4 +100,4 @@ ros2 run visual_representation_learning train_sterling_representations --help
 - visual_representation_learning/visual_representation_learning/train/representations/`cluster.py`
 - visual_representation_learning/visual_representation_learning/train/representations/`data_loader.py`
 - visual_representation_learning/visual_representation_learning/train/representations/`models.py`
-- visual_representation_learning/visual_representation_learning/train/representations/`train_sterling_representations.py`
+- visual_representation_learning/visual_representation_learning/train/representations/`train_representations.py`
