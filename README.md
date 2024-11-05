@@ -1,27 +1,31 @@
 # Project Setup
 
-## Setting up the Virtual Environment
+## Prerequisites
 
-To set up the virtual environment for this project, follow these steps:
+- **ROS 2 Humble**: Ensure you have ROS 2 Humble installed on your system. Follow the official [ROS 2 installation guide](https://docs.ros.org/en/humble/Installation.html) for your operating system.
+- **Python 3.8+**: Ensure you have Python 3.8 or higher installed.
 
-1. In the cloned repo, create a virtual environment named `venv`:
-  ```sh
-  python3 -m venv venv
-  ```
-  
-2. Activate the virtual environment:
-  ```sh
-  source venv/bin/activate
-  ```
+## ROS 2
 
-3. Install the required dependencies:
-  ```sh
-  pip install -r requirements.txt
-  ```
+Install the following ROS2 packages:
 
-4. To deactivate the virtual environment, simply run:
-  ```sh
-  deactivate
-  ```
+```sh
+sudo apt install ros-humble-rosbag2-py
+```
 
-Now your virtual environment is set up and ready to run the scripts in this repo!
+## Python Virtual Environment
+
+Run the scripts from inside a virtual environment.
+
+1. Create the virtual environment and install dependencies:
+
+```sh
+chmod +x setup.sh
+./venv.sh setup
+```
+
+2. To enter the virtual environment with ROS sourced:
+
+```sh
+./venv.sh enter
+```

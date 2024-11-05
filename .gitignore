@@ -1,0 +1,45 @@
+bags/*
+!bags/README.md
+
+datasets/*
+!datasets/README.md
+
+# Ignore the virtual environment
+venv/
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Ignore test cache files
+tests/__pycache__/
+
+# Ignore Jupyter Notebook checkpoints, if any
+.ipynb_checkpoints
+
+# Ignore environment variables, logs, and other generated files
+.env
+*.log
+*.sqlite3
+
+# Ignore compiled code
+*.so
+
+# Ignore macOS system files
+.DS_Store
+
+# Ignore IDE/editor settings
+# VS Code
+.vscode/
+# PyCharm
+.idea/
+# Spyder
+.spyderproject
+# Jupyter Notebook metadata
+.ipynb_checkpoints/
+
+# Ignore temporary files and backup files
+*.swp
+*.swo
+*~

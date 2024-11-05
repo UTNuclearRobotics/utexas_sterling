@@ -1,0 +1,43 @@
+# Topics recorded by the rosbag.
+recorded_topics:
+  imu: /philbart/realsense_front/imu
+  camera: /philbart/realsense_front/color/image_raw/compressed
+  camera_info: /philbart/realsense_front/color/camera_info
+  odom: /philbart/odom
+
+# Camera intrinsic matrix for the specific camera setup used in the system.
+# These parameters are used to transform 3D points in the camera frame to 2D points in the image frame.
+# The matrix includes focal lengths and the optical center coordinates.
+#     [fx,  0, cx]
+#     [ 0, fy, cy]
+#     [ 0,  0,  1]
+# fx, fy: Focal lengths in pixels along the x and y axes.
+# cx, cy: Optical center coordinates in pixels (usually the center of the image).
+camera_intrinsics:
+  # RealSense on Philbart
+  fx: 611.1929931640625
+  fy: 609.9984130859375
+  cx: 317.29180908203125
+  cy: 251.459716796875
+
+  # Kinect on AMRL Spot
+  #   fx: 983.322571
+  #   fy: 983.123108
+  #   cx: 1024
+  #   cy: 768
+
+# Rotation and translation parameters for the camera-IMU setup.
+camera_imu_transform:
+  # Rotation from camera frame to IMU frame (in degrees)
+  R_cam_imu: [-90, 90, 0]
+  # Pitch rotation from camera frame to IMU frame (in degrees)
+  R_pitch: [0, 0, 0]
+  # Translation vector from camera frame to IMU frame (in meters)
+  t1: [0.0, 0.0, 0.75]
+  # Rotation from camera frame to BEV frame (in degrees)
+  R2: [-180, 0, 90]
+  # Translation vector from camera frame to BEV frame (in meters)
+  t2: [4.20, 0.0, 6.0]
+
+patch_parameters:
+  patch_size: 64
