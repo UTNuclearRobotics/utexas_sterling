@@ -11,10 +11,10 @@ python3 process_rosbag.py
 ```
 
 ### Parameters
-- `bag_path`: Path to the ROS2 bag file.
+- `bag_path`: Path to the rosbag folder. Should contain a `metadata.yaml` and `.db3` file.
 - `config_path`: Path to the config file. Default is `config/rosbag.yaml`.
 - `save_path`: Path to save the processed data. Default is `../../datasets`.
-- `visual`: Enable visualization. Default is `false`.
+- `visual`: Save video of processed rosbag. Default is `false`.
 
 ### Output
 

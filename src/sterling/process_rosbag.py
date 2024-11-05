@@ -494,7 +494,7 @@ if __name__ == "__main__":
         default=os.path.join(os.path.dirname(__file__), "..", "..", "datasets"),
         help="Path to save the processed data.",
     )
-    parser.add_argument("--visual", "-v", action="store_true", default=False, help="Enable visualization.")
+    parser.add_argument("--visual", "-v", action="store_true", default=False, help="Save video of processed rosbag.")
     args = parser.parse_args()
 
     cprint(
