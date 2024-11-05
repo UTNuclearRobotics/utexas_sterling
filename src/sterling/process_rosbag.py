@@ -469,9 +469,19 @@ if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Process a ROS2 bag to a pickle file.")
     parser.add_argument("--bag_path", "-b", type=str, required=True, help="Path to the ROS2 bag file.")
-    parser.add_argument("--config_path", "-c", type=str, default="config/rosbag.yaml", help="Path to the config file.")
     parser.add_argument(
-        "--save_path", "-s", type=str, default="../../datasets", help="Path to save the processed data."
+        "--config_path",
+        "-c",
+        type=str,
+        default=os.path.join(os.path.dirname(__file__), "config", "rosbag.yaml"),
+        help="Path to the config file.",
+    )
+    parser.add_argument(
+        "--save_path",
+        "-s",
+        type=str,
+        default=os.path.join(os.path.dirname(__file__), "..", "..", "datasets"),
+        help="Path to save the processed data.",
     )
     parser.add_argument("--visual", "-v", action="store_true", default=False, help="Enable visualization.")
     args = parser.parse_args()
