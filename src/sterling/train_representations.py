@@ -9,6 +9,7 @@ from datetime import datetime
 
 import numpy as np
 import pytorch_lightning as pl
+
 # import tensorboard as tb
 import torch
 import torch.nn as nn
@@ -66,8 +67,8 @@ class SterlingRepresentationModel(pl.LightningModule):
 
         self.lr = lr
         self.latent_size = latent_size
-        self.scale_loss = scale_loss # Question: Is this being used by LightningModule?
-        self.lambd = lambd # Question: Is this being used by LightningModule?
+        self.scale_loss = scale_loss  # Question: Is this being used by LightningModule?
+        self.lambd = lambd  # Question: Is this being used by LightningModule?
         self.weight_decay = weight_decay
         self.l1_coeff = l1_coeff
         self.rep_size = rep_size
@@ -430,10 +431,14 @@ class SterlingRepresentationModel(pl.LightningModule):
 
             # Save the cluster image grids on the final epoch only
             if self.current_epoch == self.trainer.max_epochs - 1:
-                path_root = os.path.join(
-                    "../../",
-                    "models",
-                    "rep_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S")),
+                path_root = os.path.normpath(
+                    os.path.join(
+                        os.path.dirname(__file__),
+                        "..",
+                        "..",
+                        "models",
+                        "rep_" + str(round(self.max_acc, 5)) + "_" + str(datetime.now().strftime("%Y%m%d_%H%M%S")),
+                    )
                 )
                 self.save_models(path_root)
 
@@ -595,7 +600,9 @@ if __name__ == "__main__":
     dm = SterlingDataModule(data_config_path=args.data_config_path, batch_size=args.batch_size)
 
     # Set up TensorBoard logger
-    tb_logger = pl_loggers.TensorBoardLogger(save_dir=os.path.join("../../", "sterling_representations_logs"))
+    tb_logger = pl_loggers.TensorBoardLogger(
+        save_dir=os.path.join(os.path.dirname(__file__), "..", "..", "logs", "sterling_representations_logs")
+    )
 
     # Initialize the PyTorch Lightning trainer
     cprint("Training the representation learning model...", "yellow", attrs=["bold"])

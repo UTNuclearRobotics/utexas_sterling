@@ -4,6 +4,13 @@ bags/*
 datasets/*
 !datasets/README.md
 
+models/*
+!models/README.md
+
+*_statistics.pkl
+
+logs
+
 # Ignore the virtual environment
 venv/
 
