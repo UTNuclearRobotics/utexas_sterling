@@ -57,6 +57,8 @@ class ProcessRosbag:
 
         self.camera_info = None
 
+        self.video_writer = None
+
     def read_rosbag(self):
         """
         Reads and processes messages from a ROS2 bag file.
@@ -169,6 +171,11 @@ class ProcessRosbag:
         self.msg_data["imu_orientation"].append(self.imu_orientation)
         self.msg_data["odom"].append(odom_val.copy())
 
+    def initialize_video_writer(self, frame_size, fps=20):
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self.video_save_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".mp4")
+        self.video_writer = cv2.VideoWriter(self.video_save_path, fourcc, fps, frame_size)
+
     def save_data(self):
         """
         Processes the data stored in 'self.msg_data' and saves it into a pickle file:
@@ -180,6 +187,9 @@ class ProcessRosbag:
         buffer = {"bev_img": [], "odom": []}
 
         C_i, C_i_inv = self.get_camera_intrinsics()
+
+        if self.VISUAL:
+            self.initialize_video_writer((1280, 480))
 
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
             bev_img, _ = self.camera_imu_homography(
@@ -201,18 +211,20 @@ class ProcessRosbag:
                 if patch is not None:
                     patch_list.append(patch)
 
-                    if self.VISUAL:
-                        # bev_img = cv2.resize(bev_img, (bev_img.shape[1] // 3, bev_img.shape[0] // 3))
-                        # patch_img = cv2.resize(patch_img, (patch_img.shape[1] // 3, patch_img.shape[0] // 3))
-                        cv2.imshow(
-                            "Current Image <-> Patch Image",
-                            np.hstack((bev_img, patch_img)),
-                        )
-                        cv2.waitKey(5)
-
                 # Collect max of 10 patches
                 if len(patch_list) >= 10:
                     break
+            
+            if self.VISUAL:
+                combined_img = np.hstack((bev_img, patch_img))
+                self.video_writer.write(combined_img)
+                # bev_img = cv2.resize(bev_img, (bev_img.shape[1] // 3, bev_img.shape[0] // 3))
+                # patch_img = cv2.resize(patch_img, (patch_img.shape[1] // 3, patch_img.shape[0] // 3))
+                # cv2.imshow(
+                #     "Current Image <-> Patch Image",
+                #     np.hstack((bev_img, patch_img)),
+                # )
+                # cv2.waitKey(5)
 
             # Remove the oldest image and odometry data from the buffer
             while len(buffer["bev_img"]) > 20:
@@ -226,18 +238,22 @@ class ProcessRosbag:
 
         # Ensure the output directory exists
         os.makedirs(self.SAVE_PATH, exist_ok=True)
+        
+        if self.VISUAL:
+            # Release the video writer
+            self.video_writer.release()
+            cprint(f"Video saved successfully: {self.video_save_path}", "green")
 
         # Construct the full file path
-        print(self.BAG_PATH)
         file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".pkl")
 
         try:
             # Open the file in write-binary mode and dump the data
             with open(file_path, "wb") as file:
                 pickle.dump(data, file)
-            cprint(f"Data saved successfully to {file_path}", "green")
+            cprint(f"Data saved successfully: {file_path}", "green")
         except Exception as e:
-            cprint(f"Failed to save data to {file_path}: {e}", "red")
+            cprint(f"Failed to save data: {file_path}: {e}", "red")
 
     def get_camera_intrinsics(self):
         """
@@ -395,9 +411,6 @@ class ProcessRosbag:
             (patch_corners_prev_frame[3] * SCALING_FACTOR).astype(np.int32),
         ]
 
-        # Define center point for the image frame
-        # CENTER = np.array((1024 - 20, (768 - 55) * 2))
-
         # Transform patch corners to the image frame
         CENTER = np.array((image_width // 2, image_height // 2))
         patch_corners_image_frame = [
@@ -464,8 +477,6 @@ class ProcessRosbag:
 
 
 if __name__ == "__main__":
-    cprint("Processing ROS2 bag file...", "green")
-
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Process a ROS2 bag to a pickle file.")
     parser.add_argument("--bag_path", "-b", type=str, required=True, help="Path to the ROS2 bag file.")
