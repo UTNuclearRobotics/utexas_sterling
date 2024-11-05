@@ -1,7 +1,5 @@
 """
-process_rosbag.py
-
-Processes a rosbag converting camera, IMU, and odometry data into a
+This file processes a rosbag converting camera, IMU, and odometry data into a
 Python dictionary and saves it as a pickle file.
 
 The main functionalities include:
