@@ -173,7 +173,7 @@ class ProcessRosbag:
 
     def initialize_video_writer(self, frame_size, fps=20):
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self.video_save_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".mp4")
+        self.video_save_path = os.path.join(self.BAG_PATH, self.BAG_PATH.split("/")[-1] + ".mp4")
         self.video_writer = cv2.VideoWriter(self.video_save_path, fourcc, fps, frame_size)
 
     def save_data(self):
