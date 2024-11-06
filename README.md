@@ -20,12 +20,13 @@ Run the scripts from inside a virtual environment.
 1. Create the virtual environment and install dependencies:
 
 ```sh
-chmod +x setup.sh
-./venv.sh setup
+chmod +x setup_venv.sh
+./setup_venv.sh
 ```
 
 2. To enter the virtual environment with ROS sourced:
 
 ```sh
-./venv.sh enter
+source /opt/ros/humble/setup.bash
+source venv/bin/activate
 ```
