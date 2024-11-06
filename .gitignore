@@ -1,18 +1,26 @@
+# Ignore all files in the bags directory except README.md
 bags/*
 !bags/README.md
 
+# Ignore all files in the datasets directory except README.md
 datasets/*
 !datasets/README.md
 
+# Ignore all files in the models directory except README.md
 models/*
 !models/README.md
 
+# Ignore all files ending with _statistics.pkl
 *_statistics.pkl
 
+# Ignore logs directory
 logs
 
 # Ignore the virtual environment
 venv/
+
+# Ignore egg-info directories
+*.egg-info/
 
 # Ignore Python cache files
 __pycache__/

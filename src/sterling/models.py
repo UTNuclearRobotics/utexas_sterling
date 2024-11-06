@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from efficientnet_pytorch import EfficientNet
 import timm
-from torchinfo import summary
 
 
 class IPTEncoderModel(nn.Module):
@@ -319,31 +318,16 @@ class VisualEncoderTinyModel(nn.Module):
         return x
 
 
-def visualize_models():
-    # IPT Encoder
-    ipt_encoder = IPTEncoderModel()
-    inertial, leg, feet = torch.randn(1, 1, 603), torch.randn(1, 1, 900), torch.randn(1, 1, 500)
-    out = ipt_encoder(inertial, leg, feet)
-    print(out.shape)
-    summary(ipt_encoder, [(1, 1, 603), (1, 1, 900), (1, 1, 500)])
+class CostNet(nn.Module):
+    def __init__(self, latent_size=64):
+        super(CostNet, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(latent_size, latent_size // 2),
+            nn.BatchNorm1d(latent_size // 2),
+            nn.ReLU(),
+            nn.Linear(latent_size // 2, 1),
+            nn.Sigmoid(),  # nn.ReLU(), #nn.Softplus(),
+        )
 
-    # Inertial Encoder
-    inertial_encoder = InertialEncoderModel()
-    inertial = torch.randn(1, 1, 603)
-    out = inertial_encoder(inertial)
-    print(out.shape)
-    summary(inertial_encoder, (1, 1, 603))
-
-    # Visual Encoder
-    vision_encoder = VisualEncoderModel()
-    x = torch.randn(1, 3, 64, 64)
-    out = vision_encoder(x)
-    print(out.shape)
-    summary(vision_encoder, (1, 3, 64, 64))
-
-    # Visual Encoder Tiny
-    vision_encoder_tiny = VisualEncoderTinyModel()
-    x = torch.randn(1, 3, 64, 64)
-    out = vision_encoder_tiny(x)
-    print(out.shape)
-    summary(vision_encoder_tiny, (1, 3, 64, 64))
+    def forward(self, x):
+        return self.fc(x)

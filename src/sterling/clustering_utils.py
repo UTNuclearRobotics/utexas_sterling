@@ -6,11 +6,12 @@ __author__ = "Daniel Farkash"
 __email__ = "dmf248@cornell.edu"
 __date__ = "August 10, 2022"
 
-from kneed import KneeLocator
-from sklearn.cluster import KMeans
 import random
+
 import numpy as np
+from kneed import KneeLocator
 from sklearn import metrics
+from sklearn.cluster import KMeans
 from termcolor import cprint
 
 

@@ -9,6 +9,7 @@ The main functionalities include:
 4. Saving the processed data into a pickle file.
 """
 
+import argparse
 import os
 import pickle
 
@@ -20,9 +21,8 @@ from nav_msgs.msg import Odometry
 from rclpy.serialization import deserialize_message
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
-from tqdm import tqdm
-import argparse
 from termcolor import cprint
+from tqdm import tqdm
 
 
 class ProcessRosbag:

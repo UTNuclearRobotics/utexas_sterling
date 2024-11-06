@@ -16,21 +16,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+# from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+# from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from termcolor import cprint
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from clustering_utils import (
+from sterling.clustering_utils import (
     accuracy_naive,
     compute_fms_ari,
 )
-from data_loader import SterlingDataModule
-from models import (
+from sterling.data_loader import SterlingDataModule
+from sterling.models import (
     InertialEncoderModel,
     VisualEncoderEfficientModel,
-    VisualEncoderModel,
+    # VisualEncoderModel,
 )
 
 torch.multiprocessing.set_sharing_strategy("file_system")  # https://github.com/pytorch/pytorch/issues/11201

@@ -11,14 +11,12 @@ import albumentations as A
 import cv2
 import numpy as np
 import pytorch_lightning as pl
+import torch
 import yaml
 from scipy.signal import periodogram
 from termcolor import cprint
-from tqdm import tqdm
-
-import torch
-
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
+from tqdm import tqdm
 
 torch.multiprocessing.set_sharing_strategy("file_system")  # https://github.com/pytorch/pytorch/issues/11201
 
