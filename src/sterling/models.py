@@ -1,5 +1,7 @@
-#!/usr/bin/env python3
-
+"""
+This file contains the implementation of various 
+neural network models using PyTorch.
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

@@ -1,5 +1,6 @@
 """
-Takes the validation dataset and plots the cost associated with a terrain patch.
+Takes the validation dataset and plots the cost associated 
+with a terrain patch and saves them as image files.
 """
 
 import matplotlib.pyplot as plt

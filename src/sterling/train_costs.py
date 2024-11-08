@@ -14,8 +14,8 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+# from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+# from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from termcolor import cprint
 
 # Sterling imports
