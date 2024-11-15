@@ -192,8 +192,12 @@ class ProcessRosbag:
             self.initialize_video_writer((1280, 480))
 
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
+            # Convert the compressed image message to an OpenCV image
+            raw_img = np.frombuffer(self.msg_data["image_msg"][i].data, np.uint8)
+            raw_img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+        
             bev_img, _ = self.camera_imu_homography(
-                self.msg_data["imu_orientation"][i], self.msg_data["image_msg"][i], C_i, C_i_inv
+                self.msg_data["imu_orientation"][i], raw_img, C_i, C_i_inv
             )
             buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
@@ -215,16 +219,10 @@ class ProcessRosbag:
                 if len(patch_list) >= 10:
                     break
             
+            # Write the combined image to the video
             if self.VISUAL:
-                combined_img = np.hstack((bev_img, patch_img))
+                combined_img = np.hstack((raw_img, patch_img))
                 self.video_writer.write(combined_img)
-                # bev_img = cv2.resize(bev_img, (bev_img.shape[1] // 3, bev_img.shape[0] // 3))
-                # patch_img = cv2.resize(patch_img, (patch_img.shape[1] // 3, patch_img.shape[0] // 3))
-                # cv2.imshow(
-                #     "Current Image <-> Patch Image",
-                #     np.hstack((bev_img, patch_img)),
-                # )
-                # cv2.waitKey(5)
 
             # Remove the oldest image and odometry data from the buffer
             while len(buffer["bev_img"]) > 20:
@@ -325,15 +323,11 @@ class ProcessRosbag:
         homography_matrix = C_i @ H12 @ C_i_inv
         homography_matrix /= homography_matrix[2, 2]
 
-        # Convert the compressed image message to an OpenCV image
-        img = np.frombuffer(image.data, np.uint8)
-        img = cv2.imdecode(img, cv2.IMREAD_COLOR)
-
         # Homography transformation to create BEV image
-        output = cv2.warpPerspective(img, homography_matrix, (img.shape[1], img.shape[0]))
+        output = cv2.warpPerspective(image, homography_matrix, (image.shape[1], image.shape[0]))
         output = cv2.flip(output, 1)
 
-        return output, img.copy()
+        return output, image.copy()
 
     @staticmethod
     def homography_camera_displacement(R1, R2, t1, t2, n1):
