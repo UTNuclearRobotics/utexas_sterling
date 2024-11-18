@@ -1,7 +1,7 @@
 # Names of the training dataset directories
 train:
-  - /home/nchan/utexas_sterling_ws/datasets/train/
+  - /home/nchan/utexas_sterling/datasets/train/
 
 # Names of the validation datasets directories
 val:
-  - /home/nchan/utexas_sterling_ws/datasets/train/
+  - /home/nchan/utexas_sterling/datasets/train/

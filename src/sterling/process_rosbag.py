@@ -181,7 +181,7 @@ class ProcessRosbag:
         Processes the data stored in 'self.msg_data' and saves it into a pickle file:
         """
         # Dictionary to hold all the processed data
-        data = {"patches": [], "imu": []}
+        data = {"patches": [], "imu": [], "bev_imgs": []}
 
         # Buffer to hold the recent 20 BEV images for patch extraction
         buffer = {"bev_img": [], "odom": []}
@@ -195,10 +195,9 @@ class ProcessRosbag:
             # Convert the compressed image message to an OpenCV image
             raw_img = np.frombuffer(self.msg_data["image_msg"][i].data, np.uint8)
             raw_img = cv2.imdecode(raw_img, cv2.IMREAD_COLOR)
-        
-            bev_img, _ = self.camera_imu_homography(
-                self.msg_data["imu_orientation"][i], raw_img, C_i, C_i_inv
-            )
+
+            bev_img, _ = self.camera_imu_homography(self.msg_data["imu_orientation"][i], raw_img, C_i, C_i_inv)
+            data["bev_imgs"].append(bev_img)
             buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
 
@@ -218,7 +217,7 @@ class ProcessRosbag:
                 # Collect max of 10 patches
                 if len(patch_list) >= 10:
                     break
-            
+
             # Write the combined image to the video
             if self.VISUAL:
                 combined_img = np.hstack((raw_img, patch_img))
@@ -236,22 +235,17 @@ class ProcessRosbag:
 
         # Ensure the output directory exists
         os.makedirs(self.SAVE_PATH, exist_ok=True)
-        
+
         if self.VISUAL:
             # Release the video writer
             self.video_writer.release()
             cprint(f"Video saved successfully: {self.video_save_path}", "green")
 
-        # Construct the full file path
+        # Open the file in write-binary mode and dump the data
         file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".pkl")
-
-        try:
-            # Open the file in write-binary mode and dump the data
-            with open(file_path, "wb") as file:
-                pickle.dump(data, file)
-            cprint(f"Data saved successfully: {file_path}", "green")
-        except Exception as e:
-            cprint(f"Failed to save data: {file_path}: {e}", "red")
+        with open(file_path, "wb") as file:
+            pickle.dump(data, file)
+        cprint(f"Data saved successfully: {file_path}", "green")
 
     def get_camera_intrinsics(self):
         """
