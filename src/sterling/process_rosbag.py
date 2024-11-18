@@ -194,7 +194,7 @@ class ProcessRosbag:
         for i in tqdm(range(len(self.msg_data["image_msg"])), desc="Extracting patches"):
             # Convert the compressed image message to an OpenCV image
             raw_img = np.frombuffer(self.msg_data["image_msg"][i].data, np.uint8)
-            raw_img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+            raw_img = cv2.imdecode(raw_img, cv2.IMREAD_COLOR)
         
             bev_img, _ = self.camera_imu_homography(
                 self.msg_data["imu_orientation"][i], raw_img, C_i, C_i_inv
