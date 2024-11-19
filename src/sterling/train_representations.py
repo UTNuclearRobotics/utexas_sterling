@@ -420,17 +420,8 @@ class SterlingRepresentationModel(pl.LightningModule):
                 )
                 self.vis_patch_saved = torch.clone(vis_patch)
                 self.sample_idx_saved = torch.clone(self.sample_idx)
-                cprint("Best model saved", "green")
-
-            # Log k-means accurcay and projection for tensorboard visualization
-            self.logger.experiment.add_scalar("K-means accuracy", accuracy, self.current_epoch)
-            self.logger.experiment.add_scalar("Fowlkes-Mallows score", fms, self.current_epoch)
-            self.logger.experiment.add_scalar("Adjusted Rand Index", ari, self.current_epoch)
-            self.logger.experiment.add_scalar("Calinski-Harabasz Score", chs, self.current_epoch)
-            self.logger.experiment.add_scalar("K-means elbow", self.kmeans_elbow, self.current_epoch)
-
-            # Save the cluster image grids on the final epoch only
-            if self.current_epoch == self.trainer.max_epochs - 1:
+                
+                # Save the best model
                 path_root = os.path.normpath(
                     os.path.join(
                         os.path.dirname(__file__),
@@ -441,6 +432,14 @@ class SterlingRepresentationModel(pl.LightningModule):
                     )
                 )
                 self.save_models(path_root)
+                cprint("Best model saved", "green")
+
+            # Log k-means accurcay and projection for tensorboard visualization
+            self.logger.experiment.add_scalar("K-means accuracy", accuracy, self.current_epoch)
+            self.logger.experiment.add_scalar("Fowlkes-Mallows score", fms, self.current_epoch)
+            self.logger.experiment.add_scalar("Adjusted Rand Index", ari, self.current_epoch)
+            self.logger.experiment.add_scalar("Calinski-Harabasz Score", chs, self.current_epoch)
+            self.logger.experiment.add_scalar("K-means elbow", self.kmeans_elbow, self.current_epoch)
 
             if self.current_epoch % 10 == 0:
                 self.logger.experiment.add_embedding(

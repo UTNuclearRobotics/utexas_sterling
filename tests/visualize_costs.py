@@ -64,16 +64,16 @@ class CostVisualizer:
 
 def test_cost_model(pkl_path, model_path, max_val=6.0, stride=64):
     cost_viz = CostVisualizer(model_path)
-    output_video_path = model_path
+    output_video_path = os.path.join(model_path, "video.mp4")
 
     # Load processed data from pickle
     with open(pkl_path, "rb") as f:
         data = pickle.load(f)
 
     # Verify key in data
-    bev_images = data["bev_img"]
+    bev_images = data["bev_imgs"]
     if bev_images is None:
-        cprint("The pickle file does not contain 'bev_img'.", "red")
+        cprint("The pickle file does not contain 'bev_imgs'.", "red")
         return
 
     # Get number of messages
@@ -84,7 +84,7 @@ def test_cost_model(pkl_path, model_path, max_val=6.0, stride=64):
     frame_height, frame_width = bev_images[0].shape[:2]
     video_width = frame_width * 2  # BEV image + Cost map side by side
     video_height = frame_height
-    out = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*"MP4V"), 10, (video_width, video_height))
+    video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*"MP4V"), 20, (video_width, video_height))
 
     for bev_image in tqdm(bev_images, desc="Processing BEV images"):
         # Preprocess image
@@ -103,15 +103,17 @@ def test_cost_model(pkl_path, model_path, max_val=6.0, stride=64):
         stacked_img = cv2.cvtColor(stacked_img, cv2.COLOR_RGB2BGR)
 
         # Write to video
-        out.write(stacked_img)
+        video_writer.write(stacked_img)
 
-    out.release()
+    video_writer.release()
     cprint(f"Video saved to: {output_video_path}", "green")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize BEV image costs from a ROS2 bag.")
-    parser.add_argument("--pkl_path", "-p", type=str, required=True, help="Path to the processed ROS bag pickle file.")
+    parser.add_argument(
+        "--pkl_path", "-p", type=str, required=True, help="Path to the pickle file (processed ROS bag)."
+    )
     parser.add_argument(
         "--model_path", "-m", type=str, required=True, help="Path to the folder containing the model weights."
     )

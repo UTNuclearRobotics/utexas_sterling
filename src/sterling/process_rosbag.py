@@ -241,7 +241,7 @@ class ProcessRosbag:
             self.video_writer.release()
             cprint(f"Video saved successfully: {self.video_save_path}", "green")
 
-        # Open the file in write-binary mode and dump the data
+        # Save the data as a pickle file
         file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".pkl")
         with open(file_path, "wb") as file:
             pickle.dump(data, file)
