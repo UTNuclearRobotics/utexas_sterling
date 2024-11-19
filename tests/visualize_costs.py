@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import cv2
 from tqdm import tqdm
+import sys
 
 from sterling.models import VisualEncoderEfficientModel, CostNet
 
@@ -64,7 +65,7 @@ class CostVisualizer:
 
 def test_cost_model(pkl_path, model_path, max_val=6.0, stride=64):
     cost_viz = CostVisualizer(model_path)
-    output_video_path = os.path.join(model_path, "video.mp4")
+    output_video_path = os.path.join(model_path, pkl_path.split("/")[-1].split(".pkl")[0] + ".mp4")
 
     # Load processed data from pickle
     with open(pkl_path, "rb") as f:
@@ -86,27 +87,33 @@ def test_cost_model(pkl_path, model_path, max_val=6.0, stride=64):
     video_height = frame_height
     video_writer = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*"MP4V"), 20, (video_width, video_height))
 
-    for bev_image in tqdm(bev_images, desc="Processing BEV images"):
-        # Preprocess image
-        bev_tensor = torch.from_numpy(bev_image.transpose(2, 0, 1).astype(np.float32) / 255.0)  # [C, H, W]
+    try:
+        for bev_image in tqdm(bev_images, desc="Processing BEV images"):
+            # Preprocess image
+            bev_tensor = torch.from_numpy(bev_image.transpose(2, 0, 1).astype(np.float32) / 255.0)  # [C, H, W]
 
-        # Compute cost
-        cost = cost_viz.forward(bev_tensor, stride=stride)  # [H, W]
+            # Compute cost
+            cost = cost_viz.forward(bev_tensor, stride=stride)  # [H, W]
 
-        # Post-process cost map
-        cost_map = np.clip((cost * 255.0 / max_val), 0, 255).astype(np.uint8)  # Normalize to [0, 255]
-        cost_map_color = cv2.cvtColor(cost_map, cv2.COLOR_GRAY2RGB)
-        cost_map_color = cv2.resize(cost_map_color, (frame_width, frame_height))
+            # Post-process cost map
+            cost_map = np.clip((cost * 255.0 / max_val), 0, 255).astype(np.uint8)  # Normalize to [0, 255]
+            cost_map_color = cv2.cvtColor(cost_map, cv2.COLOR_GRAY2RGB)
+            cost_map_color = cv2.resize(cost_map_color, (frame_width, frame_height))
 
-        # Stack BEV image and cost map
-        stacked_img = np.hstack((bev_image, cost_map_color))  # [H, W*2, C]
-        stacked_img = cv2.cvtColor(stacked_img, cv2.COLOR_RGB2BGR)
+            # Stack BEV image and cost map
+            stacked_img = np.hstack((bev_image, cost_map_color))  # [H, W*2, C]
+            stacked_img = cv2.cvtColor(stacked_img, cv2.COLOR_RGB2BGR)
 
-        # Write to video
-        video_writer.write(stacked_img)
+            # Write to video
+            video_writer.write(stacked_img)
 
-    video_writer.release()
-    cprint(f"Video saved to: {output_video_path}", "green")
+        video_writer.release()
+        cprint(f"Video saved to: {output_video_path}", "green")
+    except KeyboardInterrupt:
+        cprint("Video generation interrupted. Saving video...", "yellow")
+        video_writer.release()
+        cprint(f"Video saved to: {output_video_path}", "green")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
