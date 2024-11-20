@@ -202,6 +202,7 @@ class ProcessRosbag:
             buffer["odom"].append(self.msg_data["odom"][i])
 
             curr_odom = self.msg_data["odom"][i]
+            patch_image_list = []
             patch_list = []
 
             for j in range(0, len(buffer["bev_img"])):
@@ -212,6 +213,7 @@ class ProcessRosbag:
                 # print(f"Patch {patch} extracted from image {j}")
 
                 if patch is not None:
+                    patch_image_list.append(patch_img)
                     patch_list.append(patch)
 
                 # Collect max of 10 patches
@@ -230,6 +232,7 @@ class ProcessRosbag:
 
             if len(patch_list) > 0:
                 # print(f"Num patches : {len(patch_list)}")
+                data["patch_images"].append(patch_image_list)
                 data["patches"].append(patch_list)
                 data["imu"].append(self.msg_data["imu_history"][i])
 
