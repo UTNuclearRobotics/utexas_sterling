@@ -189,11 +189,14 @@ if __name__ == "__main__":
     # train_model()
 
     dataloader = DataLoader(dataset, batch_size=8192, shuffle=False)
-    patch1 = torch.cat([data[0] for data in dataloader])
+    batch = next(iter(dataloader))
+    patch1, _ = batch
+
+    # patch1 = torch.cat([data[0] for data in dataloader])
     # patch2 = torch.cat([data[1] for data in dataloader])
     print("long_tensor.shape:  ", patch1.shape)
-    patch1.to(device)
-    model.visual_encoder.to(device)
+    # patch1 = patch1[0]
+    patch1 = patch1.to(device)
     representation_vectors = model.visual_encoder(patch1)
 
 """
