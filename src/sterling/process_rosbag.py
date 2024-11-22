@@ -181,7 +181,7 @@ class ProcessRosbag:
         Processes the data stored in 'self.msg_data' and saves it into a pickle file:
         """
         # Dictionary to hold all the processed data
-        data = {"patches": [], "imu": [], "bev_imgs": []}
+        data = {"patches": [], "imu": [], "bev_imgs": [], "patch_imgs": []}
 
         # Buffer to hold the recent 20 BEV images for patch extraction
         buffer = {"bev_img": [], "odom": []}
@@ -197,7 +197,6 @@ class ProcessRosbag:
             raw_img = cv2.imdecode(raw_img, cv2.IMREAD_COLOR)
 
             bev_img, _ = self.camera_imu_homography(self.msg_data["imu_orientation"][i], raw_img, C_i, C_i_inv)
-            data["bev_imgs"].append(bev_img)
             buffer["bev_img"].append(bev_img)
             buffer["odom"].append(self.msg_data["odom"][i])
 
@@ -230,11 +229,12 @@ class ProcessRosbag:
                 buffer["bev_img"].pop(0)
                 buffer["odom"].pop(0)
 
-            if len(patch_list) > 0:
-                # print(f"Num patches : {len(patch_list)}")
-                data["patch_images"].append(patch_image_list)
+            if len(patch_list) == 10:
                 data["patches"].append(patch_list)
                 data["imu"].append(self.msg_data["imu_history"][i])
+                data["patch_imgs"].append(patch_image_list)
+                
+            data["bev_imgs"].append(bev_img)
 
         # Ensure the output directory exists
         os.makedirs(self.SAVE_PATH, exist_ok=True)
