@@ -5,11 +5,13 @@ opencv-python
 pillow
 pytorch-lightning
 PyYAML
+# rosbag2
 scikit-learn
 scipy
 tensorboard
 termcolor
 timm
 torch
+torch_cluster
 torchinfo
 tqdm

@@ -45,7 +45,7 @@ class TerrainDataset(Dataset):
 
 
 class VisualEncoderModel(nn.Module):
-    def __init__(self, latent_size=64):
+    def __init__(self, device, latent_size=64):
         super(VisualEncoderModel, self).__init__()
         self.rep_size = 64
         self.latent_size = latent_size
@@ -69,15 +69,18 @@ class VisualEncoderModel(nn.Module):
             nn.ReLU(),
         )
 
+        # self.model.to(device)
+        # self.to(device)
+
     def forward(self, x):
         return self.model(x)
 
 
 class SterlingRepresentation(nn.Module):
-    def __init__(self):
+    def __init__(self, device):
         super(SterlingRepresentation, self).__init__()  # Call the parent class's __init__ method
         self.latent_size = 64
-        self.visual_encoder = VisualEncoderModel(self.latent_size)
+        self.visual_encoder = VisualEncoderModel(device, self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.visual_encoder.rep_size, self.latent_size),
             nn.PReLU(),
@@ -88,6 +91,11 @@ class SterlingRepresentation(nn.Module):
 
         self.l1_coeff = 0.5
 
+        # self.visual_encoder.to(device)
+        # self.projector.to(device)
+        # self.vicreg_loss.to(device)
+        # self.to(device)
+
     def forward(self, patch1, patch2):
         """
         Args:
@@ -97,8 +105,11 @@ class SterlingRepresentation(nn.Module):
         # Shape should be [batch size, 2, 3, 64, 64]
         # patch1 = x[:, 0:1, :, :, :]
         # patch2 = x[:, 1:2, :, :, :]
+        # print("In Shape:    ", patch1.shape)
 
         # Encode visual patches
+        patch1 = patch1.to(device)
+        patch2 = patch2.to(device)
         v_encoded_1 = self.visual_encoder(patch1)
         v_encoded_1 = F.normalize(v_encoded_1, dim=-1)
         v_encoded_2 = self.visual_encoder(patch2)
@@ -121,39 +132,11 @@ class SterlingRepresentation(nn.Module):
         """
         patch1, patch2 = batch
         zv1, zv2, _, _ = self.forward(patch1, patch2)
-        metrics = self.vicreg_loss(zv1, zv2)
-        return metrics["loss"]
+        return self.vicreg_loss(zv1, zv2)
 
-
-if __name__ == "__main__":
-    """
-    N_SAMPLES = Number of total patch samples taken
-    N_PATCHES = 10 consecutive patch frames
-    """
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    dataset_dir = os.path.join(script_dir, "../datasets/")
-    dataset_pkl = "nrg_ahg_courtyard.pkl"
-    dataset_file = dataset_dir + dataset_pkl
-
-    with open(dataset_file, "rb") as file:
-        data_pkl = pickle.load(file)
-
-    # Contains N_SAMPLES of N_PATCHES each
-    patches = data_pkl["patches"]
-    
-    # Create dataset and dataloader
-    dataset = TerrainDataset(patches)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-
-    # Initialize model
-    model = SterlingRepresentation()
-
-    # Define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
+def train_model():
     # Training loop
-    num_epochs = 10
+    num_epochs = 50
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
@@ -166,6 +149,52 @@ if __name__ == "__main__":
 
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+    torch.save(model.state_dict(), model_file)
+
+if __name__ == "__main__":
+    """
+    N_SAMPLES = Number of total patch samples taken
+    N_PATCHES = 10 consecutive patch frames
+    """
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dataset_dir = os.path.join(script_dir, "../datasets/")
+    model_dir = os.path.join(script_dir, "../models/")
+    dataset_pkl = "nrg_ahg_courtyard.pkl"
+    model_filename = "vis_rep.pt"
+    dataset_file = dataset_dir + dataset_pkl
+    model_file = model_dir + model_filename
+
+    with open(dataset_file, "rb") as file:
+        data_pkl = pickle.load(file)
+
+    # Contains N_SAMPLES of N_PATCHES each
+    patches = data_pkl["patches"]
+    
+    # Create dataset and dataloader
+    dataset = TerrainDataset(patches)
+    dataloader = DataLoader(dataset, batch_size=8192, shuffle=True)
+
+    # Initialize model
+    model = SterlingRepresentation(device).to(device)    
+
+    # Define optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    if os.path.exists(model_file):
+        model.load_state_dict(torch.load(model_file))
+
+    # train_model()
+
+    dataloader = DataLoader(dataset, batch_size=8192, shuffle=False)
+    patch1 = torch.cat([data[0] for data in dataloader])
+    # patch2 = torch.cat([data[1] for data in dataloader])
+    print("long_tensor.shape:  ", patch1.shape)
+    patch1.to(device)
+    model.visual_encoder.to(device)
+    representation_vectors = model.visual_encoder(patch1)
 
 """
 # for index, patch in enumerate(patches):
