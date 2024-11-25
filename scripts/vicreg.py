@@ -23,7 +23,6 @@ class VICRegLoss(nn.Module):
         self.cov_coeff = cov_coeff
         self.gamma = gamma
 
-
     def off_diagonal(self, x):
         """
         Return a flattened view of the off-diagonal elements of a square matrix.
@@ -56,7 +55,6 @@ class VICRegLoss(nn.Module):
         # metrics = dict()
         # metrics["loss"] = loss
         return loss
-
 
         # """Computes the VICReg loss.
 

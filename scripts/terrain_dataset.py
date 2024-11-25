@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-from torch.utils.data import ConcatDataset, DataLoader, Dataset
+from torch.utils.data import Dataset
+
 
 class TerrainDataset(Dataset):
     def __init__(self, patches, dtype=torch.float32):
@@ -23,9 +24,5 @@ class TerrainDataset(Dataset):
         patch2_idx = torch.randint(num_patches // 2, num_patches, (1,)).item()
         patch1 = sample[patch1_idx]  # torch.Size([3, 64, 64])
         patch2 = sample[patch2_idx]  # torch.Size([3, 64, 64])
-
-        # Combine the two patches
-        # combined_patches = torch.stack((patch1, patch2))  # torch.Size([2, 3, 64, 64])
-        # return combined_patches
 
         return patch1, patch2

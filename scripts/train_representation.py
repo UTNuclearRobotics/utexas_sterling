@@ -1,12 +1,16 @@
+import torch
 import torch.nn as nn
-from visual_encoder_model import VisualEncoderModel
-from vicreg import VICRegLoss
 import torch.nn.functional as F
+from terrain_dataset import TerrainDataset
+from torch.utils.data import DataLoader
+from utils import load_dataset, load_model
+from vicreg import VICRegLoss
+from visual_encoder_model import VisualEncoderModel
 
 
 class SterlingRepresentation(nn.Module):
     def __init__(self, device):
-        super(SterlingRepresentation, self).__init__()  # Call the parent class's __init__ method
+        super(SterlingRepresentation, self).__init__()
         self.device = device
         self.latent_size = 64
         self.visual_encoder = VisualEncoderModel(self.latent_size)
@@ -57,3 +61,38 @@ class SterlingRepresentation(nn.Module):
         patch1, patch2 = batch
         zv1, zv2, _, _ = self.forward(patch1, patch2)
         return self.vicreg_loss(zv1, zv2)
+
+if __name__ == "__main__":
+    """
+    Train the model using the given dataset.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Create dataset and dataloader
+    data_pkl = load_dataset()
+    dataset = TerrainDataset(patches=data_pkl["patches"])
+    dataloader = DataLoader(dataset, batch_size=8192, shuffle=True)
+
+    # Initialize model
+    model = SterlingRepresentation(device).to(device)
+    model_path = load_model(model)
+
+    # Define optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    # Training loop
+    num_epochs = 50
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0
+        for batch_idx, batch in enumerate(dataloader):
+            optimizer.zero_grad()
+            loss = model.training_step(batch, batch_idx)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(dataloader)
+        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+
+    torch.save(model.state_dict(), model_path)

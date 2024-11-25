@@ -1,5 +1,6 @@
 import torch.nn as nn
 
+
 class VisualEncoderModel(nn.Module):
     def __init__(self, latent_size=64):
         super(VisualEncoderModel, self).__init__()
