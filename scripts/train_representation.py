@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -66,12 +68,18 @@ if __name__ == "__main__":
     """
     Train the model using the given dataset.
     """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
+    parser.add_argument("--batch_size", "-b", type=int, default=8192, help="Batch size for training")
+    parser.add_argument("--epochs", "-e", type=int, default=50, help="Number of epochs for training")
+    args = parser.parse_args()
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create dataset and dataloader
     data_pkl = load_dataset()
     dataset = TerrainDataset(patches=data_pkl["patches"])
-    dataloader = DataLoader(dataset, batch_size=8192, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model
     model = SterlingRepresentation(device).to(device)
@@ -81,8 +89,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     # Training loop
-    num_epochs = 50
-    for epoch in range(num_epochs):
+    for epoch in range(args.epochs):
         model.train()
         total_loss = 0
         for batch_idx, batch in enumerate(dataloader):
@@ -93,6 +100,6 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(dataloader)
-        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        print(f"Epoch [{epoch+1}/{args.epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model.state_dict(), model_path)

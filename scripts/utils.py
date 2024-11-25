@@ -24,7 +24,7 @@ def load_model(model):
     model_path = model_dir + model_file
 
     if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path))
+        model.load_state_dict(torch.load(model_path, weights_only=True))
         cprint("Existing model weights loaded successfully", "green")
     else:
         cprint("Existing model weights not found", "yellow")
