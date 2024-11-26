@@ -1,0 +1,2 @@
+python3-tk
+ros-humble-rosbag2-py
