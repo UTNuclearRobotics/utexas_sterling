@@ -10,6 +10,8 @@ datasets/*
 models/*
 !models/README.md
 
+scripts/clusters*
+
 # Ignore all files ending with _statistics.pkl
 *_statistics.pkl
 
