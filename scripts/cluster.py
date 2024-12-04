@@ -1,10 +1,10 @@
 import os
+
 import torch
+from PIL import Image
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
-from PIL import Image
-
 from utils import load_dataset, load_model
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +22,7 @@ def render_patch(patch):
     patch = patch.transpose(1, 2, 0)
     patch = (patch * 255).astype("uint8")
     return patch
+
 
 def render_clusters(indicies, patches):
     """
@@ -41,6 +42,7 @@ def render_clusters(indicies, patches):
             rendered_patches.append(rendered_patch)
         rendered_clusters.append(rendered_patches)
     return rendered_clusters
+
 
 def image_grid(images, save_path):
     """
@@ -65,14 +67,9 @@ def image_grid(images, save_path):
             im = im.convert("RGB")
             im.thumbnail(image_size)
             new_im.paste(im, (col_idx * image_size[0], row_idx * image_size[1]))
-    
-    if save_path is None:
-        import matplotlib.pyplot as plt
-        plt.imshow(new_im)
-        plt.axis('off')
-        plt.show()
-    else :
-        new_im.save(save_path)
+
+    new_im.save(save_path)
+
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -133,15 +130,15 @@ if __name__ == "__main__":
         cluster = representation_vectors[min_indices == i]
         row_norms = torch.norm(cluster, dim=1, keepdim=True)
         normalized_tensor = cluster / row_norms
-        clusterT = cluster.transpose(0,1)
+        clusterT = cluster.transpose(0, 1)
         clusterSim = torch.matmul(cluster, clusterT)
 
         cluster_indices = []
         while len(cluster_indices) < 5:
             min_value = clusterSim.min()
             min_idx = (clusterSim == min_value).nonzero(as_tuple=False)
-            min_row = min_idx[0,0].item()
-            min_col = min_idx[0,1].item()
+            min_row = min_idx[0, 0].item()
+            min_col = min_idx[0, 1].item()
             cluster_indices.append(min_row)
             cluster_indices.append(min_col)
             clusterSim[min_row, min_col] = 1
@@ -161,36 +158,14 @@ if __name__ == "__main__":
             index = torch.nonzero(match, as_tuple=True)[0]
             cluster_image_indices.append(index.item())
         all_cluster_image_indices.append(cluster_image_indices)
-    
+
     for index, images in enumerate(all_cluster_image_indices):
         print("CLUSTER: ", index)
         print(images)
-    
+
     # Ensure save path exists
     save_dir = os.path.join(script_dir, "clusters")
     os.makedirs(save_dir, exist_ok=True)
-    
+
     rendered_clusters = render_clusters(all_cluster_image_indices, patch1)
     image_grid(rendered_clusters, os.path.join(save_dir, "rendered_clusters.png"))
-    
-    """
-    TO DO:
-    Find the 5 farthest apart vectors for each cluster
-    Index them from the bigger representation vectors
-    Get the indices where they occur in patch1
-    Render the patches from patch1 corresponding to each cluster to get a representative sample
-        of each cluster  
-
-    []
-
-    [ [] [] [] [] [] [] ]
-
-    [
-        [ [] [] [] [] ]
-
-        [ [] [] [] [] [] [] ]
-
-        [ [] [] [] [] [] [] ]
-    ]
-  
-    """
