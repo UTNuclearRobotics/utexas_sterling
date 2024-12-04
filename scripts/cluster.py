@@ -83,6 +83,11 @@ if __name__ == "__main__":
         min_values, min_indices = torch.min(distances, dim=1)
         new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
 
+        '''
+        Silhouette Score
+        Cohesion
+        '''
+        
         shadow = sum(min_values).item()
         # print("shadow:  ", shadow)
         # distances = torch.cdist(representation_vectors, centroids)
