@@ -88,11 +88,42 @@ if __name__ == "__main__":
         print(" [", i, "]: ", representation_vectors[clusters == i].shape)
 
     # Find the K farthest apart vectors for each cluster
+    cluster_rep_vectors = []
     for i in range(0, k):
         cluster = representation_vectors[clusters == i]
-        row_norms = torch.norm(representation_vectors, dim=1, keepdim=True)
-        normalized_tensor = representation_vectors / row_norms
-        # normalized_tensor = cluster / row_norms
+        row_norms = torch.norm(cluster, dim=1, keepdim=True)
+        normalized_tensor = cluster / row_norms
+        clusterT = cluster.transpose(0,1)
+        clusterSim = torch.matmul(cluster, clusterT)
+
+        cluster_indices = []
+        while len(cluster_indices) < 5:
+            min_value = clusterSim.min()
+            min_idx = (clusterSim == min_value).nonzero(as_tuple=False)
+            cluster_indices.append(min_idx[0,0].item())
+            cluster_indices.append(min_idx[0,1].item())
+            # clusterSim[min_row, min_col] = 1
+            # cluster_indices = list(set(cluster_indices))
+
+        print("cluster.shape:   ", cluster.shape)
+        print("cluster_indices:   ", cluster_indices)
+        cluster_subtensor = cluster[cluster_indices]
+        cluster_rep_vectors.append(cluster_subtensor)
+
+    all_cluster_image_indices = []
+    for index, cluster in enumerate(cluster_rep_vectors):
+        # print("CLUSTER: ", index)
+        cluster_image_indices = []
+        for row in cluster:
+            match = torch.all(representation_vectors == row, dim=1)
+            index = torch.nonzero(match, as_tuple=True)[0]
+            cluster_image_indices.append(index.item())
+        all_cluster_image_indices.append(cluster_image_indices)
+    
+    for index, images in enumerate(all_cluster_image_indices):
+        print("CLUSTER: ", index)
+        print(images)
+    
 
         # images = []
         # image_grid(images, os.path.join(script_dir, "clusters", f"cluster{i}.png"))
@@ -103,5 +134,18 @@ if __name__ == "__main__":
     Index them from the bigger representation vectors
     Get the indices where they occur in patch1
     Render the patches from patch1 corresponding to each cluster to get a representative sample
-        of each cluster    
+        of each cluster  
+
+    []
+
+    [ [] [] [] [] [] [] ]
+
+    [
+        [ [] [] [] [] ]
+
+        [ [] [] [] [] [] [] ]
+
+        [ [] [] [] [] [] [] ]
+    ]
+  
     """
