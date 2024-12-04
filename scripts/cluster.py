@@ -6,7 +6,6 @@ from train_representation import SterlingRepresentation
 from PIL import Image
 
 from utils import load_dataset, load_model
-import random
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -24,20 +23,20 @@ def render_patch(patch):
     patch = (patch * 255).astype("uint8")
     return patch
 
-def render_clusters(clusters, patch):
+def render_clusters(indicies, patches):
     """
     Render the patches for each cluster.
     Args:
-        clusters (list): A 2d list of indicies to vectors in patches.
-        patch (torch.Tensor): The tensor containing the patches.
+        indicies (list): A 2d list of indicies to vectors in patches.
+        patches (torch.Tensor): The tensor containing the patches.
     Returns:
         A 2D list where each row contains the rendered patches for a cluster.
     """
     rendered_clusters = []
-    for row in enumerate(clusters):
+    for cluster in indicies:
         rendered_patches = []
-        for col in row:
-            single_patch = patch[col]
+        for index in cluster:
+            single_patch = patches[index]
             rendered_patch = render_patch(single_patch)
             rendered_patches.append(rendered_patch)
         rendered_clusters.append(rendered_patches)
@@ -92,17 +91,6 @@ if __name__ == "__main__":
 
     batch = next(iter(dataloader))
     patch1, _ = batch
-    
-    # Pick 25 random indices in patch1
-    images = []
-    random_indices = random.sample(range(patch1.size(0)), 25)
-    for i in range(0, 25):
-        patch = patch1[random_indices[i]]
-        patch = render_patch(patch)
-        images.append(patch)
-    clusters = []
-    clusters.append(images)
-    image_grid(clusters, os.path.join(script_dir, "random_patches.png"))
 
     patch1 = patch1.to(device)
     representation_vectors = model.visual_encoder(patch1)
@@ -165,9 +153,12 @@ if __name__ == "__main__":
         print("CLUSTER: ", index)
         print(images)
     
-
-        # images = []
-        # image_grid(images, os.path.join(script_dir, "clusters", f"cluster{i}.png"))
+    # Ensure save path exists
+    save_dir = os.path.join(script_dir, "clusters")
+    os.makedirs(save_dir, exist_ok=True)
+    
+    rendered_clusters = render_clusters(all_cluster_image_indices, patch1)
+    image_grid(rendered_clusters, os.path.join(save_dir, "rendered_clusters.png"))
     
     """
     TO DO:
