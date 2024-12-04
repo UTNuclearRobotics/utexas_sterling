@@ -1,47 +1,73 @@
 import os
+
 import torch
+from PIL import Image
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
-from PIL import Image
-
 from utils import load_dataset, load_model
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
+def render_patch(patch):
+    """
+    Render a single patch image.
+    Args:
+        patch (torch.Tensor): A single patch image tensor.
+    Returns:
+        A numpy array representing the patch image.
+    """
+    patch = patch.cpu().numpy()
+    patch = patch.transpose(1, 2, 0)
+    patch = (patch * 255).astype("uint8")
+    return patch
+
+
+def render_clusters(indicies, patches):
+    """
+    Render the patches for each cluster.
+    Args:
+        indicies (list): A 2d list of indicies to vectors in patches.
+        patches (torch.Tensor): The tensor containing the patches.
+    Returns:
+        A 2D list where each row contains the rendered patches for a cluster.
+    """
+    rendered_clusters = []
+    for cluster in indicies:
+        rendered_patches = []
+        for index in cluster:
+            single_patch = patches[index]
+            rendered_patch = render_patch(single_patch)
+            rendered_patches.append(rendered_patch)
+        rendered_clusters.append(rendered_patches)
+    return rendered_clusters
+
+
 def image_grid(images, save_path):
     """
-    Create and save a 5x5 image grid.
+    Create and save an image grid row by row.
     Args:
-        images (list): A list of images to be arranged in a grid.
+        images (list of list): A 2D list of images to be arranged in a grid.
         save_path (str): The path where the grid image will be saved.
     """
     # Validation
-    if not save_path.lower().endswith('.png'):
-        raise ValueError("The save_path must end with '.png'")
-    if len(images) < 25:
-        raise ValueError("The images list must contain at least 25 images.")
-    
-    # Initialize grid
-    grid_size = 5
+    if not all(isinstance(row, list) for row in images):
+        raise ValueError("The images must be in a 2D list where each row is a cluster.")
+
+    max_row_len = max(len(row) for row in images)
+    grid_height = len(images)
     image_size = (64, 64)
-    new_im = Image.new("RGB", (image_size[0] * grid_size, image_size[1] * grid_size))
+    new_im = Image.new("RGB", (image_size[0] * max_row_len, image_size[1] * grid_height))
 
-    for idx in range(25):
-        vp = images[idx]
+    for row_idx, row in enumerate(images):
+        for col_idx, vp in enumerate(row):
+            # Format and paste individual patches to grid
+            im = Image.fromarray(vp)
+            im = im.convert("RGB")
+            im.thumbnail(image_size)
+            new_im.paste(im, (col_idx * image_size[0], row_idx * image_size[1]))
 
-        # Calculate grid position
-        row = idx // grid_size
-        col = idx % grid_size
-
-        # Format and paste individual patches to grid
-        im = Image.fromarray(vp)
-        im = im.convert("RGB")
-        im.thumbnail(image_size)
-        new_im.paste(im, (col * image_size[0], row * image_size[1]))
-
-    # Save grid image
     new_im.save(save_path)
 
 
@@ -109,15 +135,15 @@ if __name__ == "__main__":
         cluster = representation_vectors[min_indices == i]
         row_norms = torch.norm(cluster, dim=1, keepdim=True)
         normalized_tensor = cluster / row_norms
-        clusterT = cluster.transpose(0,1)
+        clusterT = cluster.transpose(0, 1)
         clusterSim = torch.matmul(cluster, clusterT)
 
         cluster_indices = []
         while len(cluster_indices) < 5:
             min_value = clusterSim.min()
             min_idx = (clusterSim == min_value).nonzero(as_tuple=False)
-            min_row = min_idx[0,0].item()
-            min_col = min_idx[0,1].item()
+            min_row = min_idx[0, 0].item()
+            min_col = min_idx[0, 1].item()
             cluster_indices.append(min_row)
             cluster_indices.append(min_col)
             clusterSim[min_row, min_col] = 1
@@ -137,33 +163,14 @@ if __name__ == "__main__":
             index = torch.nonzero(match, as_tuple=True)[0]
             cluster_image_indices.append(index.item())
         all_cluster_image_indices.append(cluster_image_indices)
-    
+
     for index, images in enumerate(all_cluster_image_indices):
         print("CLUSTER: ", index)
         print(images)
-    
 
-        # images = []
-        # image_grid(images, os.path.join(script_dir, "clusters", f"cluster{i}.png"))
-    
-    """
-    TO DO:
-    Find the 5 farthest apart vectors for each cluster
-    Index them from the bigger representation vectors
-    Get the indices where they occur in patch1
-    Render the patches from patch1 corresponding to each cluster to get a representative sample
-        of each cluster  
+    # Ensure save path exists
+    save_dir = os.path.join(script_dir, "clusters")
+    os.makedirs(save_dir, exist_ok=True)
 
-    []
-
-    [ [] [] [] [] [] [] ]
-
-    [
-        [ [] [] [] [] ]
-
-        [ [] [] [] [] [] [] ]
-
-        [ [] [] [] [] [] [] ]
-    ]
-  
-    """
+    rendered_clusters = render_clusters(all_cluster_image_indices, patch1)
+    image_grid(rendered_clusters, os.path.join(save_dir, "rendered_clusters.png"))
