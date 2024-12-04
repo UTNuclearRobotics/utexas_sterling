@@ -66,31 +66,42 @@ if __name__ == "__main__":
     patch1 = patch1.to(device)
     representation_vectors = model.visual_encoder(patch1)
 
-    print("long_tensor.shape:  ", patch1.shape)
-    print("representation_vectors.shape:  ", representation_vectors.shape)
+    # print("long_tensor.shape:  ", patch1.shape)
+    # print("representation_vectors.shape:  ", representation_vectors.shape)
 
     # K Means
     k = 5
-    iterations = 2
+    iterations = 100
+
+    row_sums = representation_vectors.sum(dim=1, keepdim=True)
+    representation_vectors = representation_vectors / row_sums
+
     centroids = representation_vectors[torch.randperm(representation_vectors.size(0))[:k]]
 
     for _ in range(iterations):
         distances = torch.cdist(representation_vectors, centroids)
-        clusters = torch.argmin(distances, dim=1)
-        new_centroids = torch.stack([representation_vectors[clusters == i].mean(dim=0) for i in range(k)])
+        min_values, min_indices = torch.min(distances, dim=1)
+        new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
+
+        shadow = sum(min_values).item()
+        # print("shadow:  ", shadow)
+        # distances = torch.cdist(representation_vectors, centroids)
+        # distances = torch.min(distances, dim=1)
+        # print("distances:   ", distances)
 
         if torch.allclose(centroids, new_centroids):
             break
+        centroids = new_centroids
 
     print("I made (K) clusters: ", k)
     print("Number of items in each cluster.")
     for i in range(0, k):
-        print(" [", i, "]: ", representation_vectors[clusters == i].shape)
+        print(" [", i, "]: ", representation_vectors[min_indices == i].shape[0])
 
     # Find the K farthest apart vectors for each cluster
     cluster_rep_vectors = []
     for i in range(0, k):
-        cluster = representation_vectors[clusters == i]
+        cluster = representation_vectors[min_indices == i]
         row_norms = torch.norm(cluster, dim=1, keepdim=True)
         normalized_tensor = cluster / row_norms
         clusterT = cluster.transpose(0,1)
@@ -100,13 +111,15 @@ if __name__ == "__main__":
         while len(cluster_indices) < 5:
             min_value = clusterSim.min()
             min_idx = (clusterSim == min_value).nonzero(as_tuple=False)
-            cluster_indices.append(min_idx[0,0].item())
-            cluster_indices.append(min_idx[0,1].item())
-            # clusterSim[min_row, min_col] = 1
-            # cluster_indices = list(set(cluster_indices))
+            min_row = min_idx[0,0].item()
+            min_col = min_idx[0,1].item()
+            cluster_indices.append(min_row)
+            cluster_indices.append(min_col)
+            clusterSim[min_row, min_col] = 1
+            cluster_indices = list(set(cluster_indices))
 
-        print("cluster.shape:   ", cluster.shape)
-        print("cluster_indices:   ", cluster_indices)
+        # print("cluster.shape:   ", cluster.shape)
+        # print("cluster_indices:   ", cluster_indices)
         cluster_subtensor = cluster[cluster_indices]
         cluster_rep_vectors.append(cluster_subtensor)
 
