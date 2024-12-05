@@ -1,15 +1,15 @@
 import sys
 
 import gi
+from gi.repository import GLib, Gtk
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk
 
 
 class MyApplication(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="com.example.MyGtkApplication")
-        GLib.set_application_name('My Gtk Application')
+        GLib.set_application_name("My Gtk Application")
 
     def do_activate(self):
         # Create a window
@@ -58,7 +58,7 @@ exit_status = app.run(sys.argv)
 sys.exit(exit_status)
 
 
-'''
+"""
 [
     []
     []
@@ -76,4 +76,4 @@ Let's suppose that each cluster has a row of data, picture each of these horizon
 [Picture 2]
 [Picture ...]
 [Text box - Preference Ranking]
-'''
+"""

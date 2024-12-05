@@ -109,7 +109,7 @@ class Cluster:
 
         # Load dataset
         if not os.path.exists(data_pkl_path):
-            raise FileNotFoundError(f"Dataset file not found at: {data_pkl_path}")
+            raise FileNotFoundError(f"Data pickle file not found at: {data_pkl_path}")
         with open(data_pkl_path, "rb") as file:
             data_pkl = pickle.load(file)
 

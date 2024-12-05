@@ -1,5 +1,4 @@
 albumentations
-# gi
 kneed
 matplotlib
 opencv-python
@@ -8,7 +7,6 @@ pycairo
 PyGObject
 pytorch-lightning
 PyYAML
-# rosbag2
 scikit-learn
 scipy
 tensorboard
