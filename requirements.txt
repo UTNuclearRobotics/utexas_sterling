@@ -1,8 +1,11 @@
 albumentations
+# gi
 kneed
 matplotlib
 opencv-python
 pillow
+pycairo
+PyGObject
 pytorch-lightning
 PyYAML
 # rosbag2

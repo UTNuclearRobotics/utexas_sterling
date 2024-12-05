@@ -1,2 +1,4 @@
 python3-tk
 ros-humble-rosbag2-py
+python3-gi python3-gi-cairo gir1.2-gtk-3.0
+libcairo2-dev libxt-dev libgirepository1.0-dev
