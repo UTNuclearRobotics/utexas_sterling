@@ -15,6 +15,13 @@ class ClusterUI(Gtk.Application):
     def do_activate(self):
         # Create a window
         window = Gtk.ApplicationWindow(application=self, title="Terrain Cluster")
+        window.set_resizable(True)
+        window.set_default_size(800, 600)
+
+        # Create a scrolled window
+        scrolled_window = Gtk.ScrolledWindow()
+        scrolled_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        window.set_child(scrolled_window)
 
         # Create a vertical box layout
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -22,7 +29,7 @@ class ClusterUI(Gtk.Application):
         vbox.set_margin_bottom(10)
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
-        window.set_child(vbox)
+        scrolled_window.set_child(vbox)
 
         spf = SelectPickleFile(window)
         vbox.append(spf.get_component())
@@ -161,6 +168,7 @@ class GenerateClusters:
 
         self.entry_clusters = Gtk.Entry()
         self.entry_clusters.set_placeholder_text("Enter number of clusters...")
+        self.entry_clusters.set_text("5")
         hbox.append(self.entry_clusters)
 
         self.vbox.append(hbox)
@@ -172,6 +180,7 @@ class GenerateClusters:
 
         self.entry_iterations = Gtk.Entry()
         self.entry_iterations.set_placeholder_text("Enter number of iterations...")
+        self.entry_iterations.set_text("100")
         hbox_iterations.append(self.entry_iterations)
 
         self.vbox.append(hbox_iterations)
@@ -224,12 +233,11 @@ class GenerateClusters:
 
         # Render clusters
         rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)
-        
-        
+
         images = []
         for i, cluster in enumerate(rendered_clusters):
             images.append(PatchRenderer.image_grid(cluster))
-            
+
         def pil_to_pixbuf(pil_image):
             data = pil_image.tobytes()
             width, height = pil_image.size
@@ -242,16 +250,32 @@ class GenerateClusters:
                 height,
                 pil_image.mode == "RGBA" and width * 4 or width * 3,
             )
-            
-            
+
         hbox_images = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            
-        for image in images:
+
+        for i, image in enumerate(images):
             pixbuf = pil_to_pixbuf(image)
             image_widget = Gtk.Image.new_from_pixbuf(pixbuf)
             image_widget.set_size_request(200, 200)  # Set the desired width and height
-            hbox_images.append(image_widget)
-            
+
+            text_field = Gtk.Entry()
+            text_field.set_placeholder_text(f"Label cluster{i + 1}...")
+            text_field.set_text(f"cluster{i + 1}")
+
+            ranking_field = Gtk.Entry()
+            ranking_field.set_placeholder_text(f"Rank cluster{i + 1}...")
+            ranking_field.set_text("0")
+
+            vbox_image = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            vbox_image.append(image_widget)
+            vbox_image.append(Gtk.Label(label=f"Label {i + 1}"))
+            vbox_image.append(text_field)
+            vbox_image.append(Gtk.Label(label="Preference"))
+            vbox_image.append(ranking_field)
+
+            hbox_images.append(vbox_image)
+
+        self.vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         self.vbox.append(hbox_images)
 
 
