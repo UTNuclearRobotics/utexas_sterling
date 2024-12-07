@@ -491,7 +491,7 @@ if __name__ == "__main__":
     cprint(
         f"Bag Path: {args.bag_path}\n"
         f"Config Path: {args.config_path}\n"
-        f"Save Path: {args.save_path}\n"
+        f"Save Path: {args.save_paXth}\n"
         f"Visualization: {args.visual}",
         "blue",
     )
