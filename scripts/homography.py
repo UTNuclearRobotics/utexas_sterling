@@ -150,10 +150,14 @@ class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
         super().__init__(torch.eye(3))
         chessboard_size = (cb_rows, cb_cols)
+        chessboard_size_flipped = (cb_cols, cb_rows)
 
+        # Get image chessboard corners, cartesian NX2
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        ret, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
+        ret, corners = cv2.findChessboardCorners(gray, chessboard_size_flipped, None)
+        corners = corners.reshape(-1, 2)
 
+        # Get model chessboard corners, cartesian NX2
         model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
 
         H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
@@ -162,9 +166,6 @@ class HomographyFromChessboardImage(Homography):
         cart_pts_out = hom_to_cart(points_out)
         wonky_pts_out = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
         
-        difference = corners - wonky_pts_out
-        print("Difference between corners and wonky_pts_out:", difference)
-
         self.draw_corner_image(image, chessboard_size, wonky_pts_out, ret)
         # self.draw_corner_image(image, chessboard_size, corners, ret)
 
