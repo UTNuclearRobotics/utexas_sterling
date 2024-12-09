@@ -152,7 +152,7 @@ class HomographyFromChessboardImage(Homography):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         chessboard_size = (cb_rows, cb_cols)
         ret, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
-        print("corners: ", corners)
+
         # self.draw_corner_image(image, ret, chessboard_size, corners)
 
         H, mask = cv2.findHomography(corners, model_chessboard, cv2.RANSAC)
@@ -161,8 +161,11 @@ class HomographyFromChessboardImage(Homography):
 
         cart_pts_out = hom_to_cart(points_out)
         wonky_pts_out = cart_pts_out.T.reshape(-1, 1, 2)
+        wonky_pts_out = np.array(wonky_pts_out, dtype=np.float32)
         print("wonky_pts_out: ", wonky_pts_out)
-        self.draw_corner_image(image, True, chessboard_size, wonky_pts_out)
+
+        #self.draw_corner_image(image, ret, chessboard_size, wonky_pts_out)
+        self.draw_corner_image(image, ret, chessboard_size, corners)
 
 
     def draw_corner_image(self, image, ret, chessboard_size, corners):
