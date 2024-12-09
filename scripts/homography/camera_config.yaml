@@ -17,3 +17,6 @@ camera_imu_transform:
   R2: [-180, 0, 90]
   # Translation vector from camera frame to BEV frame (in meters)
   t2: [4.20, 0.0, 6.0]
+
+  # IMU: 50 Hz
+  # Camera: 30 Hz
