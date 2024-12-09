@@ -14,20 +14,20 @@ class CameraIntrinsics:
             self.CAMERA_INTRINSICS = config["camera_intrinsics"]
             self.CAMERA_IMU_TRANSFORM = config["camera_imu_transform"]
 
-    def get_camera_intrinsics(self):
+    def get_camera_calibration_matrix(self):
         """
         Get camera intrinsics and its inverse as a tensors.
         Returns:
-            C_i: Camera intrinsic matrix.
-            C_i_inv: Inverse of the camera intrinsic matrix.
+            K: Camera intrinsic matrix.
+            K_inv: Inverse of the camera intrinsic matrix.
         """
         fx = self.CAMERA_INTRINSICS["fx"]
         fy = self.CAMERA_INTRINSICS["fy"]
         cx = self.CAMERA_INTRINSICS["cx"]
         cy = self.CAMERA_INTRINSICS["cy"]
 
-        C_i = torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=torch.float32)
-        C_i_inv = torch.inverse(C_i)
-        return C_i, C_i_inv
+        K = torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=torch.float32)
+        K_inv = torch.inverse(K)
+        return K, K_inv
     
     

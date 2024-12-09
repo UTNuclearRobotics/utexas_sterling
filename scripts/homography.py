@@ -1,4 +1,4 @@
-'''
+"""
 TR-98 Zhang "A flexible technique for.."
 H - Homography
 Hx = x'
@@ -18,7 +18,7 @@ H7 H8 H9
 X
 Y
 W
-] = 
+] =
 [
 H1 * X + H2 * X + H3 * X,
 ..Y
@@ -133,77 +133,80 @@ Use Rigid Transform to compute relative homographies onto a larger plane.
 
 Costmap is just that computation after applying the scoring function neural net
 
-'''
+"""
 
 import cv2
 import numpy as np
 import os
 import torch
 
+
 class Homography:
     def __init__(self, homography_tensor):
         self.homography_tensor = homography_tensor
 
+
 class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
         super().__init__(torch.eye(3))
-        model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
+        chessboard_size = (cb_rows, cb_cols)
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        chessboard_size = (cb_rows, cb_cols)
         ret, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
 
-        # self.draw_corner_image(image, ret, chessboard_size, corners)
+        model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
 
-        H, mask = cv2.findHomography(corners, model_chessboard, cv2.RANSAC)
-
-        points_out = np.linalg.inv(H) @ cart_to_hom(model_chessboard.T)
-
+        H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
+        
+        points_out = H @ cart_to_hom(model_chessboard.T)
         cart_pts_out = hom_to_cart(points_out)
-        wonky_pts_out = cart_pts_out.T.reshape(-1, 1, 2)
-        wonky_pts_out = np.array(wonky_pts_out, dtype=np.float32)
-        print("wonky_pts_out: ", wonky_pts_out)
+        wonky_pts_out = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
+        
+        difference = corners - wonky_pts_out
+        print("Difference between corners and wonky_pts_out:", difference)
 
-        #self.draw_corner_image(image, ret, chessboard_size, wonky_pts_out)
-        self.draw_corner_image(image, ret, chessboard_size, corners)
+        self.draw_corner_image(image, chessboard_size, wonky_pts_out, ret)
+        # self.draw_corner_image(image, chessboard_size, corners, ret)
 
-
-    def draw_corner_image(self, image, ret, chessboard_size, corners):
+    def draw_corner_image(self, image, chessboard_size, corners, ret):
         if ret:
             print("Chessboard corners found!")
             # Draw the corners on the image
-            # print(corners)
             cv2.drawChessboardCorners(image, chessboard_size, corners, ret)
-            cv2.imshow('Chessboard Corners', image)
+            cv2.imshow("Chessboard Corners", image)
         else:
-            cv2.imshow('Loaded Image', image)
+            cv2.imshow("Loaded Image", image)
             print("Chessboard corners not found.")
 
         cv2.waitKey(0)  # Wait for a key press to close the window
         cv2.destroyAllWindows()
 
+
 def compute_model_chessboard(rows, cols):
     model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
     midpoint_row = rows / 2
     midpoint_col = cols / 2
-    for row in range(0,rows):
-        for col in range(0,cols):
+    for row in range(0, rows):
+        for col in range(0, cols):
             model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
             model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
     return model_chessboard
 
-def cart_to_hom(input_pts):
-    row_of_ones = np.ones((1, input_pts.shape[1]))
-    return np.vstack((input_pts, row_of_ones))
-    
-def hom_to_cart(input_pts):
-    w = input_pts[-1, :]
-    cart_pts = input_pts / w
-    return cart_pts[:-1, :]
+
+def cart_to_hom(points):
+    row_of_ones = np.ones((1, points.shape[1]))
+    return np.vstack((points, row_of_ones))
+
+
+def hom_to_cart(points):
+    w = points[-1]
+    cart_pts = points / w
+    return cart_pts[:-1]
+
 
 if __name__ == "__main__":
     model_chessboard = compute_model_chessboard(6, 8)
-    print(model_chessboard)
+    # print(model_chessboard)
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
     image_dir = script_dir + "/homography/"
@@ -216,4 +219,3 @@ if __name__ == "__main__":
     #     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
     #     corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1),
     #         criteria)
-
