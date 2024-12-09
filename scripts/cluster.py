@@ -6,6 +6,8 @@ from PIL import Image
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
+from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -128,82 +130,87 @@ class Cluster:
 
         self.patches = patch1.to(device)
 
-    def generate_clusters(self, k=5, iterations=100):
-        # K Means
+    def generate_clusters(self, k_values, iterations=100):
         representation_vectors = self.model.visual_encoder(self.patches)
         row_sums = representation_vectors.sum(dim=1, keepdim=True)
         representation_vectors = representation_vectors / row_sums
-        centroids = representation_vectors[torch.randperm(representation_vectors.size(0))[:k]]
 
-        for _ in range(iterations):
-            distances = torch.cdist(representation_vectors, centroids)
-            min_values, min_indices = torch.min(distances, dim=1)
-            new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
+        silhouette_scores = []
+        all_k_cluster_indices = {}
 
-            """
-            Silhouette Score
-            Cohesion
-            """
+        for k in k_values:
+            # Initialize centroids
+            centroids = representation_vectors[torch.randperm(representation_vectors.size(0))[:k]]
 
-            shadow = sum(min_values).item()
-            # print("shadow:  ", shadow)
-            # distances = torch.cdist(representation_vectors, centroids)
-            # distances = torch.min(distances, dim=1)
-            # print("distances:   ", distances)
+            for _ in range(iterations):
+                distances = torch.cdist(representation_vectors, centroids)
+                min_values, min_indices = torch.min(distances, dim=1)
+                new_centroids = torch.stack(
+                    [representation_vectors[min_indices == i].mean(dim=0) for i in range(k)]
+                )
 
-            if torch.allclose(centroids, new_centroids):
-                break
-            centroids = new_centroids
+                if torch.allclose(centroids, new_centroids):
+                    break
+                centroids = new_centroids
 
-        print("I made (K) clusters: ", k)
-        print("Number of items in each cluster.")
-        for i in range(0, k):
-            print(" [", i, "]: ", representation_vectors[min_indices == i].shape[0])
+            print(f"Clusters formed for k={k}:")
+            for cluster_idx in range(k):
+                cluster_size = representation_vectors[min_indices == cluster_idx].shape[0]
+                print(f"  Cluster {cluster_idx}: {cluster_size} points")
 
-        # Find the K farthest apart vectors for each cluster
-        cluster_rep_vectors = []
-        for i in range(0, k):
-            cluster = representation_vectors[min_indices == i]
-            row_norms = torch.norm(cluster, dim=1, keepdim=True)
-            normalized_tensor = cluster / row_norms
-            clusterT = cluster.transpose(0, 1)
-            clusterSim = torch.matmul(cluster, clusterT)
+            # Calculate Silhouette Score
+            silhouette_values = []
+            for i, vector in enumerate(representation_vectors):
+                # Intra-cluster distance (a)
+                cluster = representation_vectors[min_indices == min_indices[i]]
+                a = torch.mean(torch.norm(cluster - vector, dim=1))
 
-            cluster_indices = []
-            while len(cluster_indices) < 25:
-                min_value = clusterSim.min()
-                min_idx = (clusterSim == min_value).nonzero(as_tuple=False)
-                min_row = min_idx[0, 0].item()
-                min_col = min_idx[0, 1].item()
-                cluster_indices.append(min_row)
-                cluster_indices.append(min_col)
-                clusterSim[min_row, min_col] = 1
-                cluster_indices = list(set(cluster_indices))
+                # Nearest-cluster distance (b)
+                nearest_distances = []
+                for j in range(k):
+                    if j != min_indices[i]:
+                        other_cluster = representation_vectors[min_indices == j]
+                        if other_cluster.size(0) > 0:
+                            nearest_distances.append(torch.mean(torch.norm(other_cluster - vector, dim=1)))
+                b = min(nearest_distances) if nearest_distances else 0
 
-            # print("cluster.shape:   ", cluster.shape)
-            # print("cluster_indices:   ", cluster_indices)
-            cluster_subtensor = cluster[cluster_indices]
-            cluster_rep_vectors.append(cluster_subtensor)
+                # Silhouette score for the point
+                s = (b - a) / max(a, b) if max(a, b) > 0 else 0
+                silhouette_values.append(s)
 
-        all_cluster_image_indices = []
-        for index, cluster in enumerate(cluster_rep_vectors):
-            # print("CLUSTER: ", index)
-            cluster_image_indices = []
-            for row in cluster:
-                match = torch.all(representation_vectors == row, dim=1)
-                indices = torch.nonzero(match, as_tuple=True)[0]
-                if indices.numel() == 1:
-                    cluster_image_indices.append(indices.item())
-                else:
-                    # Handle multiple matches (e.g., take the first match)
-                    cluster_image_indices.append(indices[0].item())
-            all_cluster_image_indices.append(cluster_image_indices)
+            avg_silhouette_score = torch.mean(torch.tensor(silhouette_values)).item()
+            silhouette_scores.append((k, avg_silhouette_score))
 
-        for index, images in enumerate(all_cluster_image_indices):
-            print("CLUSTER: ", index)
-            print(images)
+            print(f"Silhouette Score for k={k}: {avg_silhouette_score}")
 
-        return all_cluster_image_indices
+            # Store cluster indices
+            all_cluster_image_indices = []
+            for cluster_idx in range(k):
+                cluster_vectors = representation_vectors[min_indices == cluster_idx]
+                cluster_image_indices = []
+
+                # Find indices of representative vectors in the cluster
+                for row in cluster_vectors:
+                    match = torch.all(representation_vectors == row, dim=1)
+                    indices = torch.nonzero(match, as_tuple=True)[0]
+                    if indices.numel() == 1:
+                        cluster_image_indices.append(indices.item())
+                    else:
+                        cluster_image_indices.append(indices[0].item())
+
+                all_cluster_image_indices.append(cluster_image_indices)
+
+            all_k_cluster_indices[k] = all_cluster_image_indices
+
+        print("Silhouette Scores for all k-values:")
+        for k, score in silhouette_scores:
+            print(f"  k={k}: {score}")
+
+        best_k = max(silhouette_scores, key=lambda x: x[1])[0]
+        print(f"Best k according to silhouette score: {best_k}")
+
+        return all_k_cluster_indices[best_k], silhouette_scores
+
 
 
 if __name__ == "__main__":
@@ -216,10 +223,13 @@ if __name__ == "__main__":
         data_pkl_path=os.path.join(script_dir, "../datasets/nrg_ahg_courtyard.pkl"),
         model_path=os.path.join(script_dir, "../models/vis_rep.pt"),
     )
-    all_cluster_image_indices = cluster.generate_clusters()
+
+    k_values = range(2, 10)
+    k_best_cluster_image_indices, silhouette_scores = cluster.generate_clusters(k_values)
+    
 
     # Render clusters
-    rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)
+    rendered_clusters = PatchRenderer.render_clusters(k_best_cluster_image_indices, cluster.patches)
     
     for i, cluster in enumerate(rendered_clusters):
         grid_image = PatchRenderer.image_grid(cluster)
