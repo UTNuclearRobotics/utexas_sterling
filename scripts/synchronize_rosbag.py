@@ -145,12 +145,12 @@ class SynchronizeRosbag:
         if self.VISUAL:
             # Initialize the video writer
             frame_size = (self.camera_info.width, self.camera_info.height)
-            fps = 20
+            fps = 10
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             video_save_path = os.path.join(self.BAG_PATH, self.BAG_PATH.split("/")[-1] + ".mp4")
             video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, frame_size)
 
-            for i in tqdm(range(len(self.sync_messages)), desc="Writing video"):
+            for i in tqdm(range(len(self.synced_msgs)), desc="Writing video"):
                 img_msg = self.synced_msgs[i][1]
                 img = np.frombuffer(img_msg.data, np.uint8)
                 img = cv2.imdecode(img, cv2.IMREAD_COLOR)
@@ -164,8 +164,8 @@ class SynchronizeRosbag:
         file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".pkl")
         with open(file_path, "wb") as file:
             pickle.dump(self.synced_msgs, file)
-        cprint(f"Total number of synchronized messages: {len(self.synced_msgs)}", "green")
         cprint(f"Data saved successfully: {file_path}", "green")
+        cprint(f"Total synced messages: {len(self.synced_msgs)}", "green")
 
 
 if __name__ == "__main__":
