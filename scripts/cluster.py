@@ -9,6 +9,8 @@ from train_representation import SterlingRepresentation
 from sklearn.metrics import silhouette_score
 import matplotlib.pyplot as plt
 from kneed import KneeLocator
+from sklearn.decomposition import PCA
+from matplotlib.patches import Ellipse
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -205,6 +207,9 @@ class Cluster:
         for index, images in enumerate(all_cluster_image_indices):
             print("CLUSTER: ", index)
             print(images)
+        
+        # Plot clusters only for the best k
+        self.plot_clusters(representation_vectors, min_indices, k)
 
         return all_cluster_image_indices
 
@@ -279,6 +284,10 @@ class Cluster:
         best_k = max(silhouette_scores, key=lambda x: x[1])[0]
         print(f"Best k according to silhouette score: {best_k}")
 
+        # Plot clusters only for the best k
+        best_k_indices = all_k_cluster_indices[best_k]
+        self.plot_clusters(representation_vectors, min_indices, best_k)
+
         return all_k_cluster_indices[best_k], silhouette_scores
 
     def calculate_silhouette_scores(self, representation_vectors, min_indices, k):
@@ -349,6 +358,41 @@ class Cluster:
         plt.show()
 
 
+    def plot_clusters(self, representation_vectors, min_indices, k):
+        """
+        Visualizes the k-means clusters after performing dimensionality reduction
+        using PCA.
+        """
+        # Reduce the dimensionality of the representation vectors for visualization
+        pca = PCA(n_components=2)  # Use PCA for dimensionality reduction
+        reduced_vectors = pca.fit_transform(representation_vectors.detach().numpy())  # Convert to numpy for PCA
+        
+        # Set up the plot
+        plt.figure(figsize=(8, 6))
+
+        # Plot each cluster with a different color
+        for cluster_idx in range(k):
+            cluster_points = reduced_vectors[min_indices == cluster_idx]
+            plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=f'Cluster {cluster_idx}', alpha=0.6)
+
+        # Plot centroids
+        centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
+        reduced_centroids = pca.transform(centroids.detach().numpy())  # Reduce dimensionality of centroids
+        plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c='black', marker='x', label='Centroids')
+
+        plt.title(f"K-means Clusters with k={k}")
+        plt.xlabel("PCA Component 1")
+        plt.ylabel("PCA Component 2")
+        plt.legend()
+        plt.grid(True)
+
+        # Save the plot
+        save_dir = os.path.join(script_dir, "clusters")
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
+        plt.show()
+
+
 if __name__ == "__main__":
     # Save directory
     save_dir = os.path.join(script_dir, "clusters")
@@ -361,7 +405,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 10)
-    k_values = 3
+    k_values = 4
     iterations = 200
 
     if isinstance(k_values, range):
