@@ -155,6 +155,19 @@ class Homography:
 class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
         super().__init__(torch.eye(3))
+        self.image = image
+        self.cb_rows = cb_rows
+        self.cb_cols = cb_cols
+
+        # Get the homography matrix
+        H = self.get_homography_matrix(image, cb_rows, cb_cols)
+
+        # Get the calibrated homography matrix
+        K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
+        self.H_calibrated = self.decompose_homography(H, K_inv)
+        print(self.H_calibrated)
+
+    def get_homography_matrix(self, image, cb_rows, cb_cols):
         chessboard_size = (cb_rows, cb_cols)
         chessboard_size_flipped = (cb_cols, cb_rows)
 
@@ -164,22 +177,19 @@ class HomographyFromChessboardImage(Homography):
         corners = corners.reshape(-1, 2)
 
         # Get model chessboard corners, cartesian NX2
-        model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
+        model_chessboard = self.compute_model_chessboard(cb_rows, cb_cols)
 
         H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
-        
-        points_out = H @ cart_to_hom(model_chessboard.T)
-        cart_pts_out = hom_to_cart(points_out)
+        return H
+
+        # Verify the homography matrix
+        points_out = H @ self.cart_to_hom(model_chessboard.T)
+        cart_pts_out = self.hom_to_cart(points_out)
         wonky_pts_out = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
-        
+
+        # These images should be the same
         self.draw_corner_image(image, chessboard_size, wonky_pts_out, ret)
-        # self.draw_corner_image(image, chessboard_size, corners, ret)
-
-        K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        h_cal = calibrated_hom(K_inv, H)
-
-
-
+        self.draw_corner_image(image, chessboard_size, corners, ret)
 
     def draw_corner_image(self, image, chessboard_size, corners, ret):
         if ret:
@@ -194,46 +204,48 @@ class HomographyFromChessboardImage(Homography):
         cv2.waitKey(0)  # Wait for a key press to close the window
         cv2.destroyAllWindows()
 
-def calibrated_hom(K_inv, H):
-    H = H.T
-    h1 = H[0]
-    h2 = H[1]
-    h3 = H[2]
-    #K_inv = np.linalg.inv(K)
-    L = 1 / np.linalg.norm(np.dot(K_inv, h1))
-    r1 = L * np.dot(K_inv, h1)
-    r2 = L * np.dot(K_inv, h2)
-    r3 = np.cross(r1, r2)
-    T = L * (K_inv @ h3.reshape(3, 1))
-    R = np.array([[r1], [r2], [r3]])
-    R = np.reshape(R, (3, 3))
-    return R
+    def decompose_homography(self, H, K_inv):
+        H = np.transpose(H)
+        h1 = H[0]
+        h2 = H[1]
+        h3 = H[2]
 
-    #def calc_hom(self):
+        L = 1 / np.linalg.norm(np.dot(K_inv, h1))
 
+        r1 = L * np.dot(K_inv, h1)
+        r2 = L * np.dot(K_inv, h2)
+        r3 = np.cross(r1, r2)
 
+        T = L * np.dot(K_inv, h3)
 
+        R = np.array([[r1], [r2], [r3]])
+        R = np.reshape(R, (3, 3))
+        U, S, V = np.linalg.svd(R, full_matrices=True)
 
-def compute_model_chessboard(rows, cols):
-    model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
-    midpoint_row = rows / 2
-    midpoint_col = cols / 2
-    for row in range(0, rows):
-        for col in range(0, cols):
-            model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
-            model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
-    return model_chessboard
+        U = np.matrix(U)
+        V = np.matrix(V)
+        R = U * V
 
+        return (R, T)
 
-def cart_to_hom(points):
-    row_of_ones = np.ones((1, points.shape[1]))
-    return np.vstack((points, row_of_ones))
+    def compute_model_chessboard(self, rows, cols):
+        model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
+        midpoint_row = rows / 2
+        midpoint_col = cols / 2
+        for row in range(0, rows):
+            for col in range(0, cols):
+                model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
+                model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
+        return model_chessboard
 
+    def cart_to_hom(self, points):
+        row_of_ones = np.ones((1, points.shape[1]))
+        return np.vstack((points, row_of_ones))
 
-def hom_to_cart(points):
-    w = points[-1]
-    cart_pts = points / w
-    return cart_pts[:-1]
+    def hom_to_cart(self, points):
+        w = points[-1]
+        cart_pts = points / w
+        return cart_pts[:-1]
 
 
 if __name__ == "__main__":
