@@ -59,13 +59,28 @@ class CameraCalibration:
             self.objpoints, self.imgpoints, (w, h), None, None
         )
 
+        mean_error = self.calculate_reprojection_error(rvecs, tvecs, mtx, dist)
+
         return {
             "ret": ret,
             "camera_matrix": mtx,
             "distortion_coefficients": dist,
             "rotation_vectors": rvecs,
             "translation_vectors": tvecs,
+            "mean_error": mean_error,
         }
+    
+    def calculate_reprojection_error(self, rvecs, tvecs, mtx, dist):
+        """
+        Calculate the mean reprojection error for the calibration.
+        """
+        mean_error = 0
+        for i in range(len(self.objpoints)):
+            imgpoints2, _ = cv.projectPoints(self.objpoints[i], rvecs[i], tvecs[i], mtx, dist)
+            error = cv.norm(self.imgpoints[i], imgpoints2, cv.NORM_L2) / len(imgpoints2)
+            mean_error += error
+
+        return mean_error / len(self.objpoints)
 
 # Example usage
 if __name__ == "__main__":
@@ -77,3 +92,4 @@ if __name__ == "__main__":
     print("Distortion coefficients:\n", results["distortion_coefficients"])
     print("Rotation vectors:\n", results["rotation_vectors"])
     print("Translation vectors:\n", results["translation_vectors"])
+    print("Mean error:\n", results["mean_error"])
