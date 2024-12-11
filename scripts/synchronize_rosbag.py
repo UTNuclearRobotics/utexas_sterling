@@ -60,7 +60,6 @@ class SynchronizeRosbag:
         self.sync_messages()
 
     def sync_messages(self):
-        print(f"Image: {len(self.image_msgs)} IMU: {len(self.imu_msgs)} Odom: {len(self.odom_msgs)}")
         while self.image_msgs and self.imu_msgs and self.odom_msgs:
             image_time = self.image_msgs[0].header.stamp.sec + self.image_msgs[0].header.stamp.nanosec * 1e-9
             imu_time = self.imu_msgs[0].header.stamp.sec + self.imu_msgs[0].header.stamp.nanosec * 1e-9
