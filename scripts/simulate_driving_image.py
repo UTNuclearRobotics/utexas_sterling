@@ -45,6 +45,7 @@ def normalized_homography_vect_vect(rotation_vector, translation_vector):
     return torch.cat((rotate_xyz(rotation_vector)[:, :2], translation_vector), dim=1)
 
 run = True
+show_depth = False
 
 T = torch.tensor([[0.0], [0.0], [1.0]])
 R = torch.tensor([[0.0], [0.0], [0.0]])
@@ -58,6 +59,25 @@ def reset_transform():
     global R
     T = torch.tensor([[0.0], [0.0], [1.0]])
     R = torch.tensor([[0.0], [0.0], [0.0]])
+
+def toggle_depth():
+    global show_depth
+    show_depth = not show_depth
+
+def fixedWarpPerspective(H, image):
+    image_height, image_width, channels = image.shape
+    x, y = np.meshgrid(np.arange(image_width), np.arange(image_height))
+    coords = np.stack([x.ravel(), y.ravel(), np.ones_like(x.ravel())], axis=1)
+    transformed_coords = (H @ coords.T).T
+    
+    w_prime = transformed_coords[:, 2]  # Extract z-coordinate
+    depth_matrix = w_prime.reshape(image_height, image_width)  # Reshape to h x w
+    print("image.shape: ", image.shape)
+    print("depth_matrix.shape: ", depth_matrix.shape)
+    thresholded = np.where(depth_matrix > 0, 255, 0).astype(np.uint8)
+    # normalized_depth = cv2.normalize(depth_matrix, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return thresholded
+
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -87,6 +107,7 @@ if __name__ == "__main__":
     actions = {
         113: quit,                                                      #q          Quit
         101: reset_transform,                                           #e          Reset Transform
+        92: toggle_depth,                                               #\|         Toggle Depth
         97: lambda: T.__setitem__((0, 0), T[0, 0] - 10),                #a          Translate X
         100: lambda: T.__setitem__((0, 0), T[0, 0] + 10),               #d
         119: lambda: T.__setitem__((1, 0), T[1, 0] - 10),               #w          Translate Y
@@ -110,11 +131,17 @@ if __name__ == "__main__":
         # H = normalized_homography_vect_vect(R, T)
         print(H)
         H = H.numpy()
+        depth_indicator = fixedWarpPerspective(H, map_image)
+        new_map_image = map_image.copy()
+        new_map_image[:, :, 2] = depth_indicator
+        image_to_show = new_map_image if show_depth else map_image 
         camera_view = \
-            cv2.warpPerspective(map_image, H, (image_width * 2, image_height * 2), \
+            cv2.warpPerspective(image_to_show, H, (image_width * 2, image_height * 2), \
             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-        resized_image = cv2.resize(camera_view, (new_width, new_height))
-        cv2.imshow("Fullscreen Image", resized_image)
+        # map_image_rgba = cv2.cvtColor(map_image, cv2.COLOR_BGR2BGRA)
+
+        # resized_image = cv2.resize(image_to_show, (new_width, new_height))
+        cv2.imshow("Fullscreen Image", camera_view)
         key = cv2.waitKey(0)
         print("key: ", key)
         if key in actions:
