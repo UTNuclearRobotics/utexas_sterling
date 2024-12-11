@@ -105,10 +105,6 @@ RT_i^-1 * RT_imu ->> Turn this into R R T - H_ideal
 H = K * h_ideal
 
 
-class IMURTsByTimestamp
-
-class ImagesByTimestamp
-
 class HomographyFromChessboard
 
 class HomographyTransformed
@@ -244,6 +240,14 @@ class HomographyFromChessboardImage(Homography):
         return (R, T)
 
 
+class HomographyTransformed:
+    def __init__(self, synced_data):
+        self.synced_data = synced_data
+        
+    ### Pseudocode
+    # Use IMURTsByTimestamp to tranform homography into other video frames
+
+
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
@@ -252,6 +256,9 @@ if __name__ == "__main__":
 
     image = cv2.imread(path_to_image)
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
+    
+    H = chessboard_homography.get_homography()
+    H_calibrated = chessboard_homography.get_calibrated_homography()
 
     # if ret:
     #     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
