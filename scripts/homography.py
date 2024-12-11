@@ -216,7 +216,7 @@ class HomographyFromChessboardImage(Homography):
         cart_pts = points / w
         return cart_pts[:-1]
 
-    def decompose_homography(self, H, K_inv):
+    def decompose_homography_return_rt(self, H, K_inv):
         H = np.transpose(H)
         h1 = H[0]
         h2 = H[1]
@@ -237,10 +237,93 @@ class HomographyFromChessboardImage(Homography):
         U = np.matrix(U)
         V = np.matrix(V)
         R = U * V
-        return (R, T)
+
+        M = np.eye(4, dtype=np.float32)
+        M[:3, :3] = R                  
+        M[:3, 3] = T.ravel()
+        return M
+
+class RobotDataAtTimestep:
+    def __init__(self, nTimeSteps):
+        print("FILLER")
+        self.nTimeSteps = nTimeSteps
+
+    def getNTimeSteps(self):
+        return self.nTimeSteps
+    
+    def getImageAtTimeStep(self, idx):
+        print("FILLER")
+        #return the image
+    
+    def getIMUAtTimeStep(self, idx):
+        print("FILLER")
+        #return the IMU as a 4x4 matrix
+    
+    def getOdomAtTimeStep(self, idx):
+        print("FILLER")
+        #return the Odom as a 4x4 matrix
+
+'''
+    Inertial frame "the tape x in the drone cage"
+    Base link cur where the robot is
+    Base link past where the robot was
+    Base link to camera
+
+    Inertial frame * base link * base link to camera -- Do some magic -- BEV image
+    Inertial frame * base link past * base link to camera -- Do some magic -- BEV image in the past
+
+    Transform from cur to past
+
+    (Inertial frame * base link)^-1 <-- inverse * (Inertial frame * base link past) = cur_to_past
+    Assume the inertial frame is identity
+    base link^-1 * base link past = cur_to_past
+
+    Assume that base link to camera is always the same..
+    Meaning it was the same in the inertial frame
+    And in the current frame
+    And in the past frame
+
+    Determining how the camera moved, is now just cur_to_past
+    The past orientation of the camera with respect to the homography is just
+    cur_to_past * rt_to_calibrated_homography = cool_tranform
+    Turn cool_tranform into a calibrated homography
+    [   R1 R2 R3   T
+        0           1
+    ]
+
+    [R1 R2 T] = calibrated_hom_past
+
+    Turn it into something you can use to get the same BEV image patch
+
+    At the current frame it is cv2.warpImage(cur_image, H)
+    In the past frame it is cv2.warpImage(past_image, K * calibrated_hom_past)
+'''
+
+class FramePlusHistory:
+    def __init__(self, start_frame, frames):
+        print("FILLER")
+        self.start_frame = start_frame  #The frame at the current timestep
+        self.frames = frames            #The history for n timesteps
+
+def ComputeVicRegData(\
+        synced_data, camera_calibration_matrix, \
+        rt_to_calibrated_homography, robot_at_timestep, n_history = 10):
+        
+        n_timesteps = robot_at_timestep.getNTimeSteps()
+        for timestep in range(0, n_timesteps):
+            cur_image = robot_at_timestep.getImageAtTimeStep(timestep)
+            cur_rt = robot_at_timestep.getOdomAtTimeStep(timestep)
+            for past_hist in range(1, n_history):
+                past_timestep = timestep - past_hist
+                if past_timestep >= 0:
+                    past_image = robot_at_timestep.getImageAtTimeStep(past_timestep)
+                    past_rt = robot_at_timestep.getOdomAtTimeStep(past_timestep)
+                    cur_to_past_rt = past_rt @ np.invert(cur_rt)
+                
 
 
-class HomographyTransformed:
+
+class InData:
     def __init__(self, synced_data):
         self.synced_data = synced_data
         
