@@ -39,11 +39,11 @@ class CameraCalibration:
                 self.imgpoints.append(corners2)
 
                 # Draw and display corners
-                cv.drawChessboardCorners(img, self.grid_size, corners2, ret)
-                cv.imshow('Detected Corners', img)
-                cv.waitKey(500)
+                #cv.drawChessboardCorners(img, self.grid_size, corners2, ret)
+                #cv.imshow('Detected Corners', img)
+                #cv.waitKey(500)
 
-        cv.destroyAllWindows()
+        #cv.destroyAllWindows()
 
     def calibrate_camera(self):
         """
@@ -83,13 +83,14 @@ class CameraCalibration:
         return mean_error / len(self.objpoints)
 
 # Example usage
+
 if __name__ == "__main__":
     calibration = CameraCalibration(image_path_pattern='./scripts/homography/calibration_images/*.jpg')
     calibration.find_image_points()
     results = calibration.calibrate_camera()
 
     print("Camera matrix:\n", results["camera_matrix"])
-    print("Distortion coefficients:\n", results["distortion_coefficients"])
-    print("Rotation vectors:\n", results["rotation_vectors"])
-    print("Translation vectors:\n", results["translation_vectors"])
+    #print("Distortion coefficients:\n", results["distortion_coefficients"])
+    #print("Rotation vectors:\n", results["rotation_vectors"])
+    #print("Translation vectors:\n", results["translation_vectors"])
     print("Mean error:\n", results["mean_error"])

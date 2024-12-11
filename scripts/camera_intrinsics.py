@@ -1,10 +1,9 @@
 import os
-
+import cv2 as cv
 import torch
 import yaml
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-
 
 class CameraIntrinsics:
     def __init__(self, config_path=os.path.join(script_dir, "homography", "camera_config.yaml")):
@@ -12,8 +11,8 @@ class CameraIntrinsics:
         with open(config_path, "r") as file:
             config = yaml.safe_load(file)
             self.CAMERA_INTRINSICS = config["camera_intrinsics"]
-            self.CAMERA_IMU_TRANSFORM = config["camera_imu_transform"]
-
+            #self.CAMERA_IMU_TRANSFORM = config["camera_imu_transform"]
+    
     def get_camera_calibration_matrix(self):
         """
         Get camera intrinsics and its inverse as a tensors.
@@ -21,6 +20,7 @@ class CameraIntrinsics:
             K: Camera intrinsic matrix.
             K_inv: Inverse of the camera intrinsic matrix.
         """
+        
         fx = self.CAMERA_INTRINSICS["fx"]
         fy = self.CAMERA_INTRINSICS["fy"]
         cx = self.CAMERA_INTRINSICS["cx"]
@@ -29,5 +29,4 @@ class CameraIntrinsics:
         K = torch.tensor([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=torch.float32)
         K_inv = torch.inverse(K)
         return K, K_inv
-    
     
