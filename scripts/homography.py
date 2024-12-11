@@ -133,6 +133,11 @@ Use Rigid Transform to compute relative homographies onto a larger plane.
 
 Costmap is just that computation after applying the scoring function neural net
 
+Metric calibration
+5 images of chessboard from different views
+Cannot be coparallel
+
+
 """
 
 import cv2
