@@ -1,10 +1,15 @@
 albumentations
+glfw
+keyboard
 kneed
 matplotlib
+numpy
 opencv-python
 pillow
 pycairo
+PyGLM
 PyGObject
+PyOpenGL
 pytorch-lightning
 PyYAML
 scikit-learn

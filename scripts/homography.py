@@ -133,18 +133,12 @@ Use Rigid Transform to compute relative homographies onto a larger plane.
 
 Costmap is just that computation after applying the scoring function neural net
 
-List of IMU timesteps
-List of image timesteps
-List of odom timesteps
-Provide in a n x 4 matrix
-
 """
 
 import cv2
 import numpy as np
 import os
 import torch
-from camera_intrinsics import CameraIntrinsics
 
 
 class Homography:
@@ -175,12 +169,6 @@ class HomographyFromChessboardImage(Homography):
         self.draw_corner_image(image, chessboard_size, wonky_pts_out, ret)
         # self.draw_corner_image(image, chessboard_size, corners, ret)
 
-        K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        h_cal = calibrated_hom(K_inv, H)
-
-
-
-
     def draw_corner_image(self, image, chessboard_size, corners, ret):
         if ret:
             print("Chessboard corners found!")
@@ -193,25 +181,6 @@ class HomographyFromChessboardImage(Homography):
 
         cv2.waitKey(0)  # Wait for a key press to close the window
         cv2.destroyAllWindows()
-
-def calibrated_hom(K_inv, H):
-    H = H.T
-    h1 = H[0]
-    h2 = H[1]
-    h3 = H[2]
-    #K_inv = np.linalg.inv(K)
-    L = 1 / np.linalg.norm(np.dot(K_inv, h1))
-    r1 = L * np.dot(K_inv, h1)
-    r2 = L * np.dot(K_inv, h2)
-    r3 = np.cross(r1, r2)
-    T = L * (K_inv @ h3.reshape(3, 1))
-    R = np.array([[r1], [r2], [r3]])
-    R = np.reshape(R, (3, 3))
-    return R
-
-    #def calc_hom(self):
-
-
 
 
 def compute_model_chessboard(rows, cols):
@@ -237,6 +206,8 @@ def hom_to_cart(points):
 
 
 if __name__ == "__main__":
+    model_chessboard = compute_model_chessboard(6, 8)
+    # print(model_chessboard)
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
     image_dir = script_dir + "/homography/"

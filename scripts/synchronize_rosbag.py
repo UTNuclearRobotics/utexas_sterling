@@ -42,8 +42,8 @@ class SynchronizeRosbag:
         self.imu_msgs = deque()
         self.odom_msgs = deque()
 
-        # List to store synchronized messages
-        self.synced_msgs = []
+        # Lists to store synchronized messages
+        self.synced_msgs = {"image": [], "imu": [], "odom": []}
 
         self.camera_info = None
 
@@ -60,6 +60,7 @@ class SynchronizeRosbag:
         self.sync_messages()
 
     def sync_messages(self):
+        print(f"Image: {len(self.image_msgs)} IMU: {len(self.imu_msgs)} Odom: {len(self.odom_msgs)}")
         while self.image_msgs and self.imu_msgs and self.odom_msgs:
             image_time = self.image_msgs[0].header.stamp.sec + self.image_msgs[0].header.stamp.nanosec * 1e-9
             imu_time = self.imu_msgs[0].header.stamp.sec + self.imu_msgs[0].header.stamp.nanosec * 1e-9
@@ -78,7 +79,54 @@ class SynchronizeRosbag:
                 img_msg = self.image_msgs.popleft()
                 imu_msg = self.imu_msgs.popleft()
                 odom_msg = self.odom_msgs.popleft()
-                self.synced_msgs.append([avg_time, img_msg, imu_msg, odom_msg])
+
+                # Process image message
+                img_data = np.frombuffer(img_msg.data, np.uint8)
+                # img = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+                img_msg_fields = {"timestamp": image_time, "data": img_data}
+                self.synced_msgs["image"].append(img_msg_fields)
+
+                # Process IMU message
+                imu_msg_fields = {
+                    "timestamp": imu_time,
+                    "orientation": np.array(
+                        [imu_msg.orientation.x, imu_msg.orientation.y, imu_msg.orientation.z, imu_msg.orientation.w]
+                    ),
+                    "angular_velocity": np.array(
+                        [imu_msg.angular_velocity.x, imu_msg.angular_velocity.y, imu_msg.angular_velocity.z]
+                    ),
+                    "linear_acceleration": np.array(
+                        [imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z]
+                    ),
+                }
+                self.synced_msgs["imu"].append(imu_msg_fields)
+
+                # Process odometry message
+                odom_msg_fields = {
+                    "timestamp": odom_time,
+                    "pose": np.array(
+                        [
+                            odom_msg.pose.pose.position.x,
+                            odom_msg.pose.pose.position.y,
+                            odom_msg.pose.pose.position.z,
+                            odom_msg.pose.pose.orientation.x,
+                            odom_msg.pose.pose.orientation.y,
+                            odom_msg.pose.pose.orientation.z,
+                            odom_msg.pose.pose.orientation.w,
+                        ]
+                    ),
+                    "twist": np.array(
+                        [
+                            odom_msg.twist.twist.linear.x,
+                            odom_msg.twist.twist.linear.y,
+                            odom_msg.twist.twist.linear.z,
+                            odom_msg.twist.twist.angular.x,
+                            odom_msg.twist.twist.angular.y,
+                            odom_msg.twist.twist.angular.z,
+                        ]
+                    ),
+                }
+                self.synced_msgs["odom"].append(odom_msg_fields)
             else:
                 # Discard the earliest message to find a better match
                 if image_time <= imu_time and image_time <= odom_time:
@@ -130,8 +178,7 @@ class SynchronizeRosbag:
                         self.image_callback(msg)
                     case "sensor_msgs/msg/CameraInfo":
                         msg = deserialize_message(msg, CameraInfo)
-                        if self.camera_info is None:
-                            self.camera_info = msg
+                        self.camera_info = msg
                     case "nav_msgs/msg/Odometry":
                         msg = deserialize_message(msg, Odometry)
                         self.odom_callback(msg)
@@ -165,7 +212,7 @@ class SynchronizeRosbag:
         with open(file_path, "wb") as file:
             pickle.dump(self.synced_msgs, file)
         cprint(f"Data saved successfully: {file_path}", "green")
-        cprint(f"Total synced messages: {len(self.synced_msgs)}", "green")
+        cprint(f"Total synced messages: {len(self.synced_msgs['imu'])}", "green")
 
 
 if __name__ == "__main__":

@@ -19,4 +19,4 @@ camera_imu_transform:
   t2: [4.20, 0.0, 6.0]
 
   # IMU: 50 Hz
-  # Camera: 30 Hz
+  # Camera: 10 Hz
