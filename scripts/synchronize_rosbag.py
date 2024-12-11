@@ -196,9 +196,9 @@ class SynchronizeRosbag:
             video_save_path = os.path.join(self.BAG_PATH, self.BAG_PATH.split("/")[-1] + ".mp4")
             video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, frame_size)
 
-            for i in tqdm(range(len(self.synced_msgs)), desc="Writing video"):
-                img_msg = self.synced_msgs[i][1]
-                img = np.frombuffer(img_msg.data, np.uint8)
+            for i in tqdm(range(len(self.synced_msgs["image"])), desc="Writing video"):
+                img_data = self.synced_msgs["image"][i]["data"]
+                img = np.frombuffer(img_data, np.uint8)
                 img = cv2.imdecode(img, cv2.IMREAD_COLOR)
                 video_writer.write(img)
 
