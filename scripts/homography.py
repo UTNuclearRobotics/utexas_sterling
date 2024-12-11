@@ -166,11 +166,11 @@ class HomographyFromChessboardImage(Homography):
         model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
 
         H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
-        
+
         points_out = H @ cart_to_hom(model_chessboard.T)
         cart_pts_out = hom_to_cart(points_out)
         wonky_pts_out = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
-        
+
         self.draw_corner_image(image, chessboard_size, wonky_pts_out, ret)
         # self.draw_corner_image(image, chessboard_size, corners, ret)
 
@@ -210,9 +210,31 @@ def hom_to_cart(points):
     return cart_pts[:-1]
 
 
+def decompose_homography(H, K_inv):
+    H = np.transpose(H)
+    h1 = H[0]
+    h2 = H[1]
+    h3 = H[2]
+
+    L = 1 / np.linalg.norm(np.dot(K_inv, h1))
+
+    r1 = L * np.dot(K_inv, h1)
+    r2 = L * np.dot(K_inv, h2)
+    r3 = np.cross(r1, r2)
+
+    T = L * np.dot(K_inv, h3)
+
+    R = np.array([[r1], [r2], [r3]])
+    R = np.reshape(R, (3, 3))
+    U, S, V = np.linalg.svd(R, full_matrices=True)
+
+    U = np.matrix(U)
+    V = np.matrix(V)
+    R = U * V
+    return (R, T)
+
+
 if __name__ == "__main__":
-    model_chessboard = compute_model_chessboard(6, 8)
-    # print(model_chessboard)
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
     image_dir = script_dir + "/homography/"
