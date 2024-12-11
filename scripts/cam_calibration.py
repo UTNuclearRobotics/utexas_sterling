@@ -10,9 +10,9 @@ class CameraCalibration:
         self.criteria = termination_criteria
         self.objpoints = []  # 3D points in real-world space
         self.imgpoints = []  # 2D points in image plane
-        self.objp = self._prepare_object_points()
+        self.objp = self.prepare_object_points()
 
-    def _prepare_object_points(self):
+    def prepare_object_points(self):
         """
         Prepare object points like (0,0,0), (1,0,0), ..., (grid_width-1, grid_height-1, 0)
         """
