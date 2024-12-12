@@ -76,7 +76,15 @@ def fixedWarpPerspective(H, image):
     print("depth_matrix.shape: ", depth_matrix.shape)
     thresholded = np.where(depth_matrix > 0, 255, 0).astype(np.uint8)
     # normalized_depth = cv2.normalize(depth_matrix, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    return thresholded
+    b, g, r = cv2.split(image)
+    b_out = cv2.bitwise_and(b, thresholded)
+    g_out = cv2.bitwise_and(g, thresholded)
+    r_out = cv2.bitwise_and(r, thresholded)
+    # new_map_image = map_image.copy()
+    # new_map_image[:, :, 2] = depth_indicator
+    merged_image = cv2.merge((b_out, g_out, r_out))
+    return cv2.warpPerspective(merged_image, H, (image_width * 2, image_height * 2), \
+            borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
 
 
 if __name__ == "__main__":
@@ -131,17 +139,13 @@ if __name__ == "__main__":
         # H = normalized_homography_vect_vect(R, T)
         print(H)
         H = H.numpy()
-        depth_indicator = fixedWarpPerspective(H, map_image)
-        new_map_image = map_image.copy()
-        new_map_image[:, :, 2] = depth_indicator
-        image_to_show = new_map_image if show_depth else map_image 
-        camera_view = \
-            cv2.warpPerspective(image_to_show, H, (image_width * 2, image_height * 2), \
+        image_to_show = fixedWarpPerspective(H, map_image) if show_depth else \
+            cv2.warpPerspective(map_image, H, (image_width * 2, image_height * 2), \
             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
         # map_image_rgba = cv2.cvtColor(map_image, cv2.COLOR_BGR2BGRA)
 
         # resized_image = cv2.resize(image_to_show, (new_width, new_height))
-        cv2.imshow("Fullscreen Image", camera_view)
+        cv2.imshow("Fullscreen Image", image_to_show)
         key = cv2.waitKey(0)
         print("key: ", key)
         if key in actions:
