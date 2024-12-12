@@ -153,7 +153,7 @@ class Homography:
 class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
         super().__init__(torch.eye(3))
-        
+
         # Get image chessboard corners, cartesian NX2
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
@@ -163,7 +163,7 @@ class HomographyFromChessboardImage(Homography):
         model_chessboard = self.compute_model_chessboard(cb_rows, cb_cols)
 
         self.H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
-        K, K_inv = CameraIntrinsics().get_camera_intrinsics()
+        K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
         self.H_calibrated = self.decompose_homography(self.H, K_inv)
 
         ### These 2 images should be the same
@@ -172,13 +172,13 @@ class HomographyFromChessboardImage(Homography):
         # validate_pts = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
         # self.draw_corner_image(image, (cb_rows, cb_cols), validate_pts, ret)
         # self.draw_corner_image(image, (cb_rows, cb_cols), corners, ret)
-        
+
     def get_homography(self):
         """
         Return the homography matrix from the chessboard image.
         """
         return self.H
-        
+
     def get_calibrated_homography(self):
         """
         Return the calibrated homography matrix from the chessboard image.
@@ -217,7 +217,11 @@ class HomographyFromChessboardImage(Homography):
         cart_pts = points / w
         return cart_pts[:-1]
 
-    def decompose_homography_return_rt(self, H, K_inv):
+    def decompose_homography(self, H, K_inv):
+        """
+        Returns:
+            RT: 4x4 transformation matrix.
+        """
         H = np.transpose(H)
         h1 = H[0]
         h2 = H[1]
@@ -239,102 +243,112 @@ class HomographyFromChessboardImage(Homography):
         V = np.matrix(V)
         R = U * V
 
-        M = np.eye(4, dtype=np.float32)
-        M[:3, :3] = R                  
-        M[:3, 3] = T.ravel()
-        return M
+        RT = np.eye(4, dtype=np.float32)
+        RT[:3, :3] = R
+        RT[:3, 3] = T.ravel()
+        return RT
+
 
 """class RobotDataAtTimestep:
-    def __init__(self, nTimeSteps):
+    def __init__(self, nTimesteps):
         print("FILLER")
-        self.nTimeSteps = nTimeSteps
+        self.nTimesteps = nTimesteps
 
-    def getNTimeSteps(self):
-        return self.nTimeSteps
+    def getNTimesteps(self):
+        return self.nTimesteps
     
-    def getImageAtTimeStep(self, idx):
+    def getImageAtTimestep(self, idx):
         print("FILLER")
         #return the image
     
-    def getIMUAtTimeStep(self, idx):
+    def getIMUAtTimestep(self, idx):
         print("FILLER")
         #return the IMU as a 4x4 matrix
     
-    def getOdomAtTimeStep(self, idx):
+    def getOdomAtTimestep(self, idx):
         print("FILLER")
         #return the Odom as a 4x4 matrix"""
+
 
 class RobotDataAtTimestep:
     def __init__(self, file_path):
         # Load the .pkl file
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             self.data = pickle.load(f)
 
         # Ensure the file contains the expected keys
-        required_keys = {'image', 'imu', 'odom'}
+        required_keys = {"image", "imu", "odom"}
         if not required_keys.issubset(self.data.keys()):
             raise ValueError(f"The .pkl file must contain the keys: {required_keys}")
 
         # Determine the number of timesteps from one of the keys
-        self.nTimeSteps = len(self.data['image'])
+        self.nTimesteps = len(self.data["image"])
 
-    def getNTimeSteps(self):
+    def getNTimesteps(self):
         """Return the number of timesteps."""
-        return self.nTimeSteps
+        return self.nTimesteps
 
-    def getImageAtTimeStep(self, idx):
+    def getImageAtTimestep(self, idx):
         """Return the image at the given timestep index."""
-        if 0 <= idx < self.nTimeSteps:
-            image_data = self.data['image'][idx]
+        return self.data["image"][idx]["data"]
+
+        if 0 <= idx < self.nTimesteps:
+            image_data = self.data["image"][idx]
             if isinstance(image_data, dict):
                 # Handle the dictionary (e.g., extract the 'data' field)
-                image_data = image_data.get('data', None)  # Adjust based on actual structure
+                image_data = image_data.get("data", None)  # Adjust based on actual structure
                 if image_data is None:
                     raise TypeError("No 'data' field found in the image dictionary.")
             return torch.tensor(image_data, dtype=torch.float32)
         else:
             raise IndexError("Index out of range for timesteps.")
 
-    def getIMUAtTimeStep(self, idx):
+    def getIMUAtTimestep(self, idx):
         """Return the IMU data as a 4x4 matrix at the given timestep index."""
-        if 0 <= idx < self.nTimeSteps:
-            imu_data = self.data['imu'][idx]
-            print("IMU data at timestep", idx, ":", imu_data)  # Debug line
-            
+        if 0 <= idx < self.nTimesteps:
+            imu_data = self.data["imu"][idx]
+
             # Extract relevant data from the dictionary
-            orientation = imu_data['orientation']  # Should be a 4-element vector
-            angular_velocity = imu_data['angular_velocity']  # Should be a 3-element vector
-            linear_acceleration = imu_data['linear_acceleration']  # Should be a 3-element vector
-            
+            orientation = imu_data["orientation"]  # Should be a 4-element vector
+            angular_velocity = imu_data["angular_velocity"]  # Should be a 3-element vector
+            linear_acceleration = imu_data["linear_acceleration"]  # Should be a 3-element vector
+
             # Convert to tensors
             orientation_tensor = torch.tensor(orientation, dtype=torch.float32)  # 4 elements
             angular_velocity_tensor = torch.tensor(angular_velocity, dtype=torch.float32)  # 3 elements
             linear_acceleration_tensor = torch.tensor(linear_acceleration, dtype=torch.float32)  # 3 elements
-            
+
             # Pad the angular velocity and linear acceleration tensors with zeros to make them 4-element tensors
             angular_velocity_tensor = torch.cat([angular_velocity_tensor, torch.zeros(1, dtype=torch.float32)])
             linear_acceleration_tensor = torch.cat([linear_acceleration_tensor, torch.zeros(1, dtype=torch.float32)])
 
             # Combine the tensors into a 4x4 matrix (by stacking them row-wise)
-            imu_matrix = torch.stack([orientation_tensor, angular_velocity_tensor, linear_acceleration_tensor, torch.zeros(4, dtype=torch.float32)], dim=0)
+            imu_matrix = torch.stack(
+                [
+                    orientation_tensor,
+                    angular_velocity_tensor,
+                    linear_acceleration_tensor,
+                    torch.zeros(4, dtype=torch.float32),
+                ],
+                dim=0,
+            )
 
             return imu_matrix
-            
+
         else:
             raise IndexError("Index out of range for timesteps.")
 
-    def getOdomAtTimeStep(self, idx):
+    def getOdomAtTimestep(self, idx):
         """Return the IMU data as a 4x4 matrix at the given timestep index."""
-        if 0 <= idx < self.nTimeSteps:
-            odom_data = self.data['odom'][idx]
-            print("Odom data at timestep", idx, ":", odom_data)  # Debug line
+        if 0 <= idx < self.nTimesteps:
+            odom_data = self.data["odom"][idx]
 
             # Extract position and quaternion from the pose
-            position = torch.tensor(odom_data['pose'][:3], dtype=torch.float32)  # x, y, z position
-            quaternion = torch.tensor(odom_data['pose'][3:], dtype=torch.float32)  # quaternion (qx, qy, qz, qw)
+            position = np.array(odom_data["pose"][:3], dtype=np.float32)  # x, y, z position
+            quaternion = np.array(odom_data["pose"][3:], dtype=np.float32)  # quaternion (qx, qy, qz, qw)
 
             # Construct the 4x4 transformation matrix
-            transformation_matrix = torch.eye(4, dtype=torch.float32)  # 4x4 identity matrix
+            transformation_matrix = np.eye(4, dtype=np.float32)  # 4x4 identity matrix
 
             # Set the translation part (position)
             transformation_matrix[:3, 3] = position
@@ -350,49 +364,54 @@ class RobotDataAtTimestep:
         qx, qy, qz, qw = quaternion
 
         # Compute the rotation matrix using the quaternion
-        R = torch.tensor([
-            [1 - 2 * (qy**2 + qz**2), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy)],
-            [2 * (qx * qy + qw * qz), 1 - 2 * (qx**2 + qz**2), 2 * (qy * qz - qw * qx)],
-            [2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx**2 + qy**2)]
-        ], dtype=torch.float32)
+        R = torch.tensor(
+            [
+                [1 - 2 * (qy**2 + qz**2), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy)],
+                [2 * (qx * qy + qw * qz), 1 - 2 * (qx**2 + qz**2), 2 * (qy * qz - qw * qx)],
+                [2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx**2 + qy**2)],
+            ],
+            dtype=torch.float32,
+        )
 
         return R
 
-'''
-    Inertial frame "the tape x in the drone cage"
-    Base link cur where the robot is
-    Base link past where the robot was
-    Base link to camera
 
-    Inertial frame * base link * base link to camera -- Do some magic -- BEV image
-    Inertial frame * base link past * base link to camera -- Do some magic -- BEV image in the past
+"""
+Inertial frame "the tape x in the drone cage"
+Base link cur where the robot is
+Base link past where the robot was
+Base link to camera
 
-    Transform from cur to past
+Inertial frame * base link * base link to camera -- Do some magic -- BEV image
+Inertial frame * base link past * base link to camera -- Do some magic -- BEV image in the past
 
-    (Inertial frame * base link)^-1 <-- inverse * (Inertial frame * base link past) = cur_to_past
-    Assume the inertial frame is identity
-    base link^-1 * base link past = cur_to_past
+Transform from cur to past
 
-    Assume that base link to camera is always the same..
-    Meaning it was the same in the inertial frame
-    And in the current frame
-    And in the past frame
+(Inertial frame * base link)^-1 <-- inverse * (Inertial frame * base link past) = cur_to_past
+Assume the inertial frame is identity
+base link^-1 * base link past = cur_to_past
 
-    Determining how the camera moved, is now just cur_to_past
-    The past orientation of the camera with respect to the homography is just
-    cur_to_past * rt_to_calibrated_homography = cool_tranform
-    Turn cool_tranform into a calibrated homography
-    [   R1 R2 R3   T
-        0           1
-    ]
+Assume that base link to camera is always the same..
+Meaning it was the same in the inertial frame
+And in the current frame
+And in the past frame
 
-    [R1 R2 T] = calibrated_hom_past
+Determining how the camera moved, is now just cur_to_past
+The past orientation of the camera with respect to the homography is just
+cur_to_past * rt_to_calibrated_homography = cool_tranform
+Turn cool_tranform into a calibrated homography
+[   R1 R2 R3   T
+    0           1
+]
 
-    Turn it into something you can use to get the same BEV image patch
+[R1 R2 T] = calibrated_hom_past
 
-    At the current frame it is cv2.warpImage(cur_image, H)
-    In the past frame it is cv2.warpImage(past_image, K * calibrated_hom_past)
-'''
+Turn it into something you can use to get the same BEV image patch
+
+At the current frame it is cv2.warpImage(cur_image, H)
+In the past frame it is cv2.warpImage(past_image, K * calibrated_hom_past)
+"""
+
 
 class FramePlusHistory:
     def __init__(self, robot_data, start_frame, history_size=10):
@@ -409,50 +428,86 @@ class FramePlusHistory:
 
         # Collect the images from the history
         history_images = []
-        for i in range(end_idx-1, start_idx-1,-1):
-            image = self.robot_data.getImageAtTimeStep(i)
+        for i in range(end_idx - 1, start_idx - 1, -1):
+            image = self.robot_data.getImageAtTimestep(i)
             history_images.append(image)
 
         return history_images
 
-def ComputeVicRegData(\
-        synced_data, camera_calibration_matrix, \
-        rt_to_calibrated_homography, RobotDataAtTimestep, n_history = 10):
-        
-        n_timesteps = RobotDataAtTimestep.getNTimeSteps()
-        for timestep in range(0, n_timesteps):
-            cur_image = RobotDataAtTimestep.getImageAtTimeStep(timestep)
-            cur_rt = RobotDataAtTimestep.getOdomAtTimeStep(timestep)
-            for past_hist in range(1, n_history):
-                past_timestep = timestep - past_hist
-                if past_timestep >= 0:
-                    past_image = RobotDataAtTimestep.getImageAtTimeStep(past_timestep)
-                    past_rt = RobotDataAtTimestep.getOdomAtTimeStep(past_timestep)
-                    cur_to_past_rt = past_rt @ np.invert(cur_rt)
-                
+
+def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=10):
+    """
+    Args:
+        K: Camera intrinsic matrix.
+        rt_to_calibrated_homography: Homography from the chessboard image.
+        robot_data: Instance of RobotDataAtTimestep.
+        history_size: Number of timesteps to consider in the past.
+    Returns:
+        patches: List of patches for each timestep.
+    """
+    n_timesteps = robot_data.getNTimesteps()
+    patches = []
+
+    # Loops through entire dataset
+    for timestep in range(history_size, n_timesteps):
+        cur_image = robot_data.getImageAtTimestep(timestep)
+        cur_rt = robot_data.getOdomAtTimestep(timestep)
+
+        # Get past patches from current frame
+        # frame_history = FramePlusHistory(robot_data, start_frame=timestep, history_size=history_size).frames
+
+        timestep_patches = []
+
+        # Get current patch
+        # cur_patch = cv2.warpPerspective(cur_image, rt_to_calibrated_homography, (64, 64))
+        # timestep_patches.append(cur_patch)
+
+        for past_hist in range(1, history_size):
+            past_timestep = timestep - past_hist
+
+            # Get past image
+            past_image = robot_data.getImageAtTimestep(past_timestep)
+            print(f"Past image shape: {past_image.shape}")
+
+            # Get homography from past image
+            past_rt = robot_data.getOdomAtTimestep(past_timestep)
+            cur_to_past_rt = past_rt @ np.linalg.inv(cur_rt)
+            cool_transform = cur_to_past_rt @ rt_to_calibrated_homography
+            calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
+            print("Type of K:", type(K))
+            print("Type of calibrated_hom_past:", type(calibrated_hom_past))
+            print("Calibrated homography past matrix:   ", calibrated_hom_past)
+
+            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(64, 64))
+            timestep_patches.append(past_patch)
+
+        patches.append(timestep_patches)
+
+    return patches
 
 
 if __name__ == "__main__":
-    """script_path = os.path.abspath(__file__)
+    script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
     image_dir = script_dir + "/homography/"
     path_to_image = image_dir + "raw_image.jpg"
 
     image = cv2.imread(path_to_image)
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    
+
     H = chessboard_homography.get_homography()
-    H_calibrated = chessboard_homography.get_calibrated_homography()"""
+    H_calibrated = chessboard_homography.get_calibrated_homography()
+    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
-    robot_data = RobotDataAtTimestep('bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl')
-
-    RobotDataAtTimestep('bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl').getIMUAtTimeStep(100)
-    frame_history = FramePlusHistory(robot_data,start_frame=15, history_size =15)
+    robot_data = RobotDataAtTimestep(
+        os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
+    )
+    vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
 
     # Access the frames (history) for the current timestep
-    #print(f"Image history for timestep 15:")
-    #for i, img in enumerate(frame_history.frames):
-     #   print(f"Image {frame_history.start_frame-i}: {img}")
+    # print(f"Image history for timestep 15:")
+    # for i, img in enumerate(frame_history.frames):
+    #   print(f"Image {frame_history.start_frame-i}: {img}")
 
     # if ret:
     #     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
