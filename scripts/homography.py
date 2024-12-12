@@ -141,8 +141,10 @@ import numpy as np
 import os
 import torch
 import pickle
+import math
 
 from camera_intrinsics import CameraIntrinsics
+from tqdm import tqdm
 
 
 class Homography:
@@ -446,11 +448,12 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
     Returns:
         patches: List of patches for each timestep.
     """
-    n_timesteps = robot_data.getNTimesteps()
+    n_timesteps = 20
+    # n_timesteps = robot_data.getNTimesteps()
     patches = []
 
     # Loops through entire dataset
-    for timestep in range(history_size, n_timesteps):
+    for timestep in tqdm(range(history_size, n_timesteps), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
 
@@ -460,8 +463,8 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         timestep_patches = []
 
         # Get current patch
-        # cur_patch = cv2.warpPerspective(cur_image, rt_to_calibrated_homography, (64, 64))
-        # timestep_patches.append(cur_patch)
+        cur_patch = cv2.warpPerspective(cur_image, rt_to_calibrated_homography[:3, [0, 1, 3]], dsize=(64, 64))
+        timestep_patches.append(cur_patch)
 
         for past_hist in range(1, history_size):
             past_timestep = timestep - past_hist
@@ -474,7 +477,7 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
             cur_to_past_rt = past_rt @ np.linalg.inv(cur_rt)
             cool_transform = cur_to_past_rt @ rt_to_calibrated_homography
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
-            print("Calibrated homography past matrix:   ", calibrated_hom_past)
+            # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
             past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(64, 64))
             timestep_patches.append(past_patch)
@@ -482,6 +485,34 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         patches.append(timestep_patches)
 
     return patches
+
+
+def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
+    # Determine the grid size if not provided
+    if grid_size is None:
+        num_patches = len(patches)
+        grid_cols = math.ceil(math.sqrt(num_patches))
+        grid_rows = math.ceil(num_patches / grid_cols)
+    else:
+        grid_rows, grid_cols = grid_size
+
+    # Get the dimensions of the patches (assuming all patches are the same size)
+    patch_height, patch_width, _ = patches[0].shape
+
+    # Create a blank canvas to hold the grid with gaps
+    grid_height = grid_rows * patch_height + (grid_rows - 1) * gap_size
+    grid_width = grid_cols * patch_width + (grid_cols - 1) * gap_size
+    canvas = np.full((grid_height, grid_width, 3), gap_color, dtype=np.uint8)
+
+    # Place each patch in the appropriate position on the canvas
+    for idx, patch in enumerate(patches):
+        row = idx // grid_cols
+        col = idx % grid_cols
+        start_y = row * (patch_height + gap_size)
+        start_x = col * (patch_width + gap_size)
+        canvas[start_y : start_y + patch_height, start_x : start_x + patch_width] = patch
+
+    return canvas
 
 
 if __name__ == "__main__":
@@ -501,6 +532,17 @@ if __name__ == "__main__":
         os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
     )
     vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
+
+    # Get the current image from robot_data
+    current_image = robot_data.getImageAtTimestep(5)
+    patch_images = stitch_patches_in_grid(vicreg_data[5])
+    cv2.imshow("Original Image", current_image)
+    cv2.imshow("Patches Grid", patch_images)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    # Show the current image side by side with the vicreg_data
+    # show_images_separately(current_image, vicreg_data[5])
 
     # Access the frames (history) for the current timestep
     # print(f"Image history for timestep 15:")
