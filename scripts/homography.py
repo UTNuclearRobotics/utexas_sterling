@@ -396,7 +396,7 @@ Meaning it was the same in the inertial frame
 And in the current frame
 And in the past frame
 
-Determining how the camera moved, is now just cur_to_past
+Determining how the camera moved is now just cur_to_past
 The past orientation of the camera with respect to the homography is just
 cur_to_past * rt_to_calibrated_homography = cool_tranform
 Turn cool_tranform into a calibrated homography
