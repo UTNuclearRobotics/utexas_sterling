@@ -166,7 +166,7 @@ class HomographyFromChessboardImage(Homography):
 
         self.H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
         K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        self.H_calibrated = self.decompose_homography(self.H, K)
+        self.H_calibrated = self.decompose_homography(self.H, K_inv)
 
         ### These 2 images should be the same
         # points_out = H @ self.cart_to_hom(model_chessboard.T)
@@ -219,56 +219,57 @@ class HomographyFromChessboardImage(Homography):
         cart_pts = points / w
         return cart_pts[:-1]
 
-    # def decompose_homography(self, H, K_inv):
-    #     """
-    #     Returns:
-    #         RT: 4x4 transformation matrix.
-    #     """
-    #     H = np.transpose(H)
-    #     h1 = H[0]
-    #     h2 = H[1]
-    #     h3 = H[2]
+    def decompose_homography(self, H, K_inv):
+        """
+        Returns:
+            RT: 4x4 transformation matrix.
+        """
+        H = np.transpose(H)
+        h1 = H[0]
+        h2 = H[1]
+        h3 = H[2]
 
-    #     L = 1 / np.linalg.norm(np.dot(K_inv, h1))
+        L = 1 / np.linalg.norm(np.dot(K_inv, h1))
 
-    #     r1 = L * np.dot(K_inv, h1)
-    #     r2 = L * np.dot(K_inv, h2)
-    #     r3 = np.cross(r1, r2)
+        r1 = L * np.dot(K_inv, h1)
+        r2 = L * np.dot(K_inv, h2)
+        r3 = np.cross(r1, r2)
 
-    #     T = L * np.dot(K_inv, h3)
+        T = L * np.dot(K_inv, h3)
 
-    #     R = np.array([[r1], [r2], [r3]])
-    #     R = np.reshape(R, (3, 3))
-    #     U, S, V = np.linalg.svd(R, full_matrices=True)
+        R = np.array([[r1], [r2], [r3]])
+        R = np.reshape(R, (3, 3))
+        U, S, V = np.linalg.svd(R, full_matrices=True)
 
-    #     U = np.matrix(U)
-    #     V = np.matrix(V)
-    #     R = U * V
+        U = np.matrix(U)
+        V = np.matrix(V)
+        R = U * V
 
-    #     RT = np.eye(4, dtype=np.float32)
-    #     RT[:3, :3] = R
-    #     RT[:3, 3] = T.ravel()
-    #     return RT
-    
-    def decompose_homography(self, H, K):
-        # Compute the normalized homography
-        _, rotations, translations, normals = cv2.decomposeHomographyMat(H, K)
-
-        # Choose the solution with the positive Z component in the translation vector
-        for i in range(len(translations)):
-            if translations[i][2] > 0:
-                R = rotations[i]
-                T = translations[i]
-                break
-        else:
-            R = rotations[0]
-            T = translations[0]
-
-        # Construct the RT matrix
         RT = np.eye(4, dtype=np.float32)
         RT[:3, :3] = R
         RT[:3, 3] = T.ravel()
         return RT
+
+
+"""class RobotDataAtTimestep:
+    def __init__(self, nTimesteps):
+        print("FILLER")
+        self.nTimesteps = nTimesteps
+
+    def getNTimesteps(self):
+        return self.nTimesteps
+    
+    def getImageAtTimestep(self, idx):
+        print("FILLER")
+        #return the image
+    
+    def getIMUAtTimestep(self, idx):
+        print("FILLER")
+        #return the IMU as a 4x4 matrix
+    
+    def getOdomAtTimestep(self, idx):
+        print("FILLER")
+        #return the Odom as a 4x4 matrix"""
 
 
 class RobotDataAtTimestep:
@@ -311,22 +312,28 @@ class RobotDataAtTimestep:
             imu_data = self.data["imu"][idx]
 
             # Extract relevant data from the dictionary
-            orientation = np.array(imu_data["orientation"], dtype=np.float32)  # Should be a 4-element vector
-            angular_velocity = np.array(imu_data["angular_velocity"], dtype=np.float32)  # Should be a 3-element vector
-            linear_acceleration = np.array(imu_data["linear_acceleration"], dtype=np.float32)  # Should be a 3-element vector
+            orientation = imu_data["orientation"]  # Should be a 4-element vector
+            angular_velocity = imu_data["angular_velocity"]  # Should be a 3-element vector
+            linear_acceleration = imu_data["linear_acceleration"]  # Should be a 3-element vector
 
-            # Pad the angular velocity and linear acceleration arrays with zeros to make them 4-element arrays
-            angular_velocity = np.append(angular_velocity, 0.0)
-            linear_acceleration = np.append(linear_acceleration, 0.0)
+            # Convert to tensors
+            orientation_tensor = torch.tensor(orientation, dtype=torch.float32)  # 4 elements
+            angular_velocity_tensor = torch.tensor(angular_velocity, dtype=torch.float32)  # 3 elements
+            linear_acceleration_tensor = torch.tensor(linear_acceleration, dtype=torch.float32)  # 3 elements
 
-            # Combine the arrays into a 4x4 matrix (by stacking them row-wise)
-            imu_matrix = np.vstack(
-            [
-                orientation,
-                angular_velocity,
-                linear_acceleration,
-                np.zeros(4, dtype=np.float32),
-            ]
+            # Pad the angular velocity and linear acceleration tensors with zeros to make them 4-element tensors
+            angular_velocity_tensor = torch.cat([angular_velocity_tensor, torch.zeros(1, dtype=torch.float32)])
+            linear_acceleration_tensor = torch.cat([linear_acceleration_tensor, torch.zeros(1, dtype=torch.float32)])
+
+            # Combine the tensors into a 4x4 matrix (by stacking them row-wise)
+            imu_matrix = torch.stack(
+                [
+                    orientation_tensor,
+                    angular_velocity_tensor,
+                    linear_acceleration_tensor,
+                    torch.zeros(4, dtype=torch.float32),
+                ],
+                dim=0,
             )
 
             return imu_matrix
@@ -356,17 +363,17 @@ class RobotDataAtTimestep:
             return transformation_matrix
 
     def quaternion_to_rotation_matrix(self, quaternion):
-        """Convert a quaternion to a 3x3 rotation matrix using NumPy."""
+        """Convert a quaternion to a 3x3 rotation matrix using PyTorch."""
         qx, qy, qz, qw = quaternion
 
         # Compute the rotation matrix using the quaternion
-        R = np.array(
+        R = torch.tensor(
             [
                 [1 - 2 * (qy**2 + qz**2), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy)],
                 [2 * (qx * qy + qw * qz), 1 - 2 * (qx**2 + qz**2), 2 * (qy * qz - qw * qx)],
                 [2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx**2 + qy**2)],
             ],
-            dtype=np.float32,
+            dtype=torch.float32,
         )
 
         return R
@@ -430,6 +437,40 @@ class FramePlusHistory:
 
         return history_images
 
+def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
+    """
+    Draws the corners of a patch on the original image using the given homography.
+
+    Args:
+        image: Original image (numpy array).
+        homography: Homography matrix mapping patch space to image space.
+        patch_size: Size of the patch (width, height).
+
+    Returns:
+        Image with patch corners drawn.
+    """
+    # Define the corners of the patch in the patch coordinate space
+    patch_corners = np.array([
+        [0, 0],
+        [patch_size[0], 0],
+        [0, patch_size[0]],
+        [patch_size[0], patch_size[0]]
+    ]).T  # Shape (3, 4)
+
+    # Transform the patch corners to the original image coordinate space
+    transformed_corners = homography @ patch_corners
+    transformed_corners /= transformed_corners[2, :]  # Normalize by the third row
+    transformed_corners = transformed_corners[:2, :].T.astype(int)  # Convert to (x, y) integers
+
+    # Draw the corners on the image
+    image_with_corners = image.copy()
+    for corner in transformed_corners:
+        cv2.circle(image_with_corners, tuple(corner), radius=5, color=(0, 0, 255), thickness=-1)
+
+    # Optionally, connect the corners to form a polygon
+    cv2.polylines(image_with_corners, [transformed_corners], isClosed=True, color=(0, 255, 0), thickness=2)
+
+    return image_with_corners
 
 def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=10):
     """
@@ -444,7 +485,7 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
     n_timesteps = 20
     # n_timesteps = robot_data.getNTimesteps()
     patches = []
-    
+
     # Loops through entire dataset
     for timestep in tqdm(range(history_size, n_timesteps), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
@@ -456,7 +497,14 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         timestep_patches = []
 
         # Get current patch
-        cur_patch = cv2.warpPerspective(cur_image, K * rt_to_calibrated_homography[:3, [0, 1, 3]], dsize=(128, 128))
+        cur_homography = rt_to_calibrated_homography[:3, [0, 1, 3]]
+        cur_patch = cv2.warpPerspective(cur_image, cur_homography, dsize=(128, 128))
+        
+         # Draw the patch corners in the original image
+        cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
+        cv2.imshow('Current Patch Corners', cur_image_with_corners)
+        cv2.waitKey(1)
+
         timestep_patches.append(cur_patch)
 
         for past_hist in range(1, history_size):
@@ -482,14 +530,9 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
 
 
 def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
-    """
-    Shows an image grid with the current image and past images.
-    The first row is the current image.
-    The rest of the rows are the past images.
-    """
     # Determine the grid size if not provided
     if grid_size is None:
-        num_patches = len(patches) - 1  # Exclude the first image
+        num_patches = len(patches)
         grid_cols = math.ceil(math.sqrt(num_patches))
         grid_rows = math.ceil(num_patches / grid_cols)
     else:
@@ -499,17 +542,14 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
     patch_height, patch_width, _ = patches[0].shape
 
     # Create a blank canvas to hold the grid with gaps
-    grid_height = (grid_rows + 1) * patch_height + grid_rows * gap_size  # +1 for the first image row
-    grid_width = max(grid_cols * patch_width + (grid_cols - 1) * gap_size, patch_width)
+    grid_height = grid_rows * patch_height + (grid_rows - 1) * gap_size
+    grid_width = grid_cols * patch_width + (grid_cols - 1) * gap_size
     canvas = np.full((grid_height, grid_width, 3), gap_color, dtype=np.uint8)
 
-    # Place the first image on its own row
-    canvas[:patch_height, :patch_width] = patches[0]
-
-    # Place the rest of the patches in the grid below the first image
-    for idx, patch in enumerate(patches[1:], start=1):
-        row = (idx - 1) // grid_cols + 1  # +1 to account for the first image row
-        col = (idx - 1) % grid_cols
+    # Place each patch in the appropriate position on the canvas
+    for idx, patch in enumerate(patches):
+        row = idx // grid_cols
+        col = idx % grid_cols
         start_y = row * (patch_height + gap_size)
         start_x = col * (patch_width + gap_size)
         canvas[start_y : start_y + patch_height, start_x : start_x + patch_width] = patch
@@ -539,7 +579,8 @@ if __name__ == "__main__":
     timestep = 5
     current_image = robot_data.getImageAtTimestep(timestep+10)
     patch_images = stitch_patches_in_grid(vicreg_data[5])
-    cv2.imshow("Original Image", current_image)
+
+    #cv2.imshow("Original Image", current_image)
     cv2.imshow("Patches Grid", patch_images)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
