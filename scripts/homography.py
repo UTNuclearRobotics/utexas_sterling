@@ -299,7 +299,7 @@ class RobotDataAtTimestep:
         """Return the IMU data as a 4x4 matrix at the given timestep index."""
         if 0 <= idx < self.nTimeSteps:
             imu_data = self.data['imu'][idx]
-            #print("IMU data at timestep", idx, ":", imu_data)  # Debug line
+            print("IMU data at timestep", idx, ":", imu_data)  # Debug line
             
             # Extract relevant data from the dictionary
             orientation = imu_data['orientation']  # Should be a 4-element vector
@@ -327,7 +327,7 @@ class RobotDataAtTimestep:
         """Return the IMU data as a 4x4 matrix at the given timestep index."""
         if 0 <= idx < self.nTimeSteps:
             odom_data = self.data['odom'][idx]
-            #print("Odom data at timestep", idx, ":", odom_data)  # Debug line
+            print("Odom data at timestep", idx, ":", odom_data)  # Debug line
 
             # Extract position and quaternion from the pose
             position = torch.tensor(odom_data['pose'][:3], dtype=torch.float32)  # x, y, z position
@@ -417,28 +417,19 @@ class FramePlusHistory:
 
 def ComputeVicRegData(\
         synced_data, camera_calibration_matrix, \
-        rt_to_calibrated_homography, robot_at_timestep, n_history = 10):
+        rt_to_calibrated_homography, RobotDataAtTimestep, n_history = 10):
         
-        n_timesteps = robot_at_timestep.getNTimeSteps()
+        n_timesteps = RobotDataAtTimestep.getNTimeSteps()
         for timestep in range(0, n_timesteps):
-            cur_image = robot_at_timestep.getImageAtTimeStep(timestep)
-            cur_rt = robot_at_timestep.getOdomAtTimeStep(timestep)
+            cur_image = RobotDataAtTimestep.getImageAtTimeStep(timestep)
+            cur_rt = RobotDataAtTimestep.getOdomAtTimeStep(timestep)
             for past_hist in range(1, n_history):
                 past_timestep = timestep - past_hist
                 if past_timestep >= 0:
-                    past_image = robot_at_timestep.getImageAtTimeStep(past_timestep)
-                    past_rt = robot_at_timestep.getOdomAtTimeStep(past_timestep)
+                    past_image = RobotDataAtTimestep.getImageAtTimeStep(past_timestep)
+                    past_rt = RobotDataAtTimestep.getOdomAtTimeStep(past_timestep)
                     cur_to_past_rt = past_rt @ np.invert(cur_rt)
                 
-
-
-
-class InData:
-    def __init__(self, synced_data):
-        self.synced_data = synced_data
-        
-    ### Pseudocode
-    # Use IMURTsByTimestamp to tranform homography into other video frames
 
 
 if __name__ == "__main__":
@@ -454,12 +445,14 @@ if __name__ == "__main__":
     H_calibrated = chessboard_homography.get_calibrated_homography()"""
 
     robot_data = RobotDataAtTimestep('bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl')
+
+    RobotDataAtTimestep('bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl').getIMUAtTimeStep(100)
     frame_history = FramePlusHistory(robot_data,start_frame=15, history_size =15)
 
     # Access the frames (history) for the current timestep
-    print(f"Image history for timestep 15:")
-    for i, img in enumerate(frame_history.frames):
-        print(f"Image {frame_history.start_frame-i}: {img}")
+    #print(f"Image history for timestep 15:")
+    #for i, img in enumerate(frame_history.frames):
+     #   print(f"Image {frame_history.start_frame-i}: {img}")
 
     # if ret:
     #     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
