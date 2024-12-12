@@ -290,7 +290,8 @@ class RobotDataAtTimestep:
 
     def getImageAtTimestep(self, idx):
         """Return the image at the given timestep index."""
-        return self.data["image"][idx]["data"]
+        img_data = self.data["image"][idx]["data"]
+        return cv2.imdecode(img_data, cv2.IMREAD_COLOR)
 
         if 0 <= idx < self.nTimesteps:
             image_data = self.data["image"][idx]
@@ -467,15 +468,12 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
 
             # Get past image
             past_image = robot_data.getImageAtTimestep(past_timestep)
-            print(f"Past image shape: {past_image.shape}")
 
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
             cur_to_past_rt = past_rt @ np.linalg.inv(cur_rt)
             cool_transform = cur_to_past_rt @ rt_to_calibrated_homography
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
-            print("Type of K:", type(K))
-            print("Type of calibrated_hom_past:", type(calibrated_hom_past))
             print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
             past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(64, 64))
