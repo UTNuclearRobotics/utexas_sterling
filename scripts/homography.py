@@ -463,7 +463,7 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         timestep_patches = []
 
         # Get current patch
-        cur_patch = cv2.warpPerspective(cur_image, rt_to_calibrated_homography[:3, [0, 1, 3]], dsize=(64, 64))
+        cur_patch = cv2.warpPerspective(cur_image, K * rt_to_calibrated_homography[:3, [0, 1, 3]], dsize=(128, 128))
         timestep_patches.append(cur_patch)
 
         for past_hist in range(1, history_size):
@@ -479,10 +479,11 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
             # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
-            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(64, 64))
+            past_patch = cv2.warpPerspective(past_image, K * calibrated_hom_past, dsize=(128, 128))
             timestep_patches.append(past_patch)
 
         patches.append(timestep_patches)
+
 
     return patches
 
@@ -534,7 +535,8 @@ if __name__ == "__main__":
     vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
 
     # Get the current image from robot_data
-    current_image = robot_data.getImageAtTimestep(5)
+    timestep = 5
+    current_image = robot_data.getImageAtTimestep(timestep+10)
     patch_images = stitch_patches_in_grid(vicreg_data[5])
     cv2.imshow("Original Image", current_image)
     cv2.imshow("Patches Grid", patch_images)
