@@ -169,34 +169,31 @@ class HomographyFromChessboardImage(Homography):
         H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
         print(H)
         K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        H_calibrated = K_inv @ H        
-        
+
+        # Assign global variables
+        self.H = H
+        self.RT = self.decompose_homography(H, K)
+        self.K = K
+
         # Transform model chessboard points to image points
         transformed_model_corners = self.transform_points(model_chessboard.T, H)
         transformed_model_pts = transformed_model_corners.T.reshape(-1, 1, 2).astype(np.float32)
         self.draw_corner_image(transformed_model_pts, ret)
 
-               
-        birds_eye_view = self.get_birds_eye_view(H_calibrated, model_chessboard, corners)
+        # birds_eye_view = self.get_BEV_perspective_transform(model_chessboard, corners)
+        birds_eye_view = self.get_BEV(image, K, H)
 
         # Display the bird's-eye view
         cv2.imshow("Bird's Eye View", birds_eye_view)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-    
-
-        # Assign global variables
-        self.H = H
-        self.H_calibrated = H_calibrated
-        self.RT = self.decompose_homography(H, K)
- 
 
     def get_homography_matrix(self):
         return self.H
 
     def get_rotation_translation_matrix(self):
         return self.RT
-        
+
     def draw_corner_image(self, corners, ret):
         image = self.image.copy()
         if ret:
@@ -281,12 +278,11 @@ class HomographyFromChessboardImage(Homography):
 
         return RT
     
-    def get_birds_eye_view(self, H_calibrated, model_chessboard, corners, scale_factor=1000):
+    def get_BEV_perspective_transform(self, model_chessboard, corners, scale_factor=1000):
         """
         Generates a bird's-eye view of the chessboard in the image using the calibrated homography.
 
         Args:
-            H_calibrated (np.ndarray): The calibrated homography matrix (from model to image coordinates).
             model_chessboard (np.ndarray): The model chessboard points (NX2) in real-world units.
             corners (np.ndarray): The detected chessboard corners in the image (NX2).
             scale_factor (float): The scale factor to convert from real-world units to pixels.
@@ -295,9 +291,6 @@ class HomographyFromChessboardImage(Homography):
             np.ndarray: The warped bird's-eye view image.
         """
         image = self.image.copy()
-
-        # Compute the inverse of the calibrated homography to map image points to model coordinates
-        H_inv = np.linalg.inv(H_calibrated)
 
         # Scale model chessboard points to desired output pixel size
         model_chessboard_scaled = model_chessboard * scale_factor
@@ -315,10 +308,10 @@ class HomographyFromChessboardImage(Homography):
         # Select the four outer corners of the chessboard
         cb_rows, cb_cols = self.chessboard_size
         indices = [
-            0,                              # Top-left corner
-            cb_cols - 1,                    # Top-right corner
-            (cb_rows * cb_cols) - 1,        # Bottom-right corner
-            (cb_rows - 1) * cb_cols         # Bottom-left corner
+            0,  # Top-left corner
+            cb_cols - 1,  # Top-right corner
+            (cb_rows * cb_cols) - 1,  # Bottom-right corner
+            (cb_rows - 1) * cb_cols,  # Bottom-left corner
         ]
 
         # Prepare source (image) and destination (model) points
@@ -330,6 +323,15 @@ class HomographyFromChessboardImage(Homography):
 
         # Warp the image to obtain the bird's-eye view
         birdseye_view = cv2.warpPerspective(image, M, (width, height))
+
+        return birdseye_view
+
+    def get_BEV(self, image, K, H):
+        image = image.copy()
+        height, width = image.shape[:2]
+
+        # Warp the image to obtain the bird's-eye view
+        birdseye_view = cv2.warpPerspective(image, K @ np.linalg.inv(H), (width, height))
 
         return birdseye_view
 
