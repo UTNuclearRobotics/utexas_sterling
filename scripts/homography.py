@@ -183,11 +183,6 @@ class HomographyFromChessboardImage(Homography):
         # birds_eye_view = self.get_BEV_perspective_transform(model_chessboard, corners)
         birds_eye_view = self.get_BEV(image, K, H)
 
-        # Display the bird's-eye view
-        cv2.imshow("Bird's Eye View", birds_eye_view)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
     def get_homography_matrix(self):
         return self.H
 
@@ -277,7 +272,7 @@ class HomographyFromChessboardImage(Homography):
         RT[:3, 3] = t
 
         return RT
-    
+
     def get_BEV_perspective_transform(self, model_chessboard, corners, scale_factor=1000):
         """
         Generates a bird's-eye view of the chessboard in the image using the calibrated homography.
@@ -327,34 +322,92 @@ class HomographyFromChessboardImage(Homography):
         return birdseye_view
 
     def get_BEV(self, image, K, H):
+        """
+        Args:
+            image: The original image.
+            K: Camera intrinsic matrix.
+            H: Homography matrix from model chessboard to image chessboard.
+        """
+        # TODO: Somehow get the dimensions to transform into?
+        # Perform a translation to shift the image into frame to see the entire trapezoid
         image = image.copy()
         height, width = image.shape[:2]
 
+        # Define the corners of the original image
+        img_corners = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
+        print("Image corners:   ", img_corners)
+        transformed_corners = cv2.perspectiveTransform(np.array([img_corners]), K @ np.linalg.inv(H))[0]
+        print("Transformed image corners:   ", transformed_corners)
+
+        # Find the bounding box that contains all the transformed points
+        min_x = min(transformed_corners[:, 0])
+        max_x = max(transformed_corners[:, 0])
+        min_y = min(transformed_corners[:, 1])
+        max_y = max(transformed_corners[:, 1])
+
+        # Compute the width and height of the bounding box
+        new_width = int(max_x - min_x)
+        new_height = int(max_y - min_y)
+        print("X:   ", min_x)
+        print("Y:   ", min_y)
+
+        # Adjust the transformation matrix to account for the translation
+        translation_matrix = np.array([[1, 0, width], [0, 1, 0], [0, 0, 1]])
+
         # Warp the image to obtain the bird's-eye view
-        birdseye_view = cv2.warpPerspective(image, K @ np.linalg.inv(H), (width, height))
+        birdseye_view = cv2.warpPerspective(image, translation_matrix @ K @ np.linalg.inv(H), (width * 2, height * 2))
 
-        return birdseye_view
+        self.plot_transformed_corners(transformed_corners)
 
+        # Display the result
+        cv2.imshow("BEV", birdseye_view)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
-"""class RobotDataAtTimestep:
-    def __init__(self, nTimesteps):
-        print("FILLER")
-        self.nTimesteps = nTimesteps
+    def plot_transformed_corners(self, transformed_corners):
+        # Find the bounding box that contains all the transformed points
+        min_x = min(transformed_corners[:, 0])
+        max_x = max(transformed_corners[:, 0])
+        min_y = min(transformed_corners[:, 1])
+        max_y = max(transformed_corners[:, 1])
 
-    def getNTimesteps(self):
-        return self.nTimesteps
-    
-    def getImageAtTimestep(self, idx):
-        print("FILLER")
-        #return the image
-    
-    def getIMUAtTimestep(self, idx):
-        print("FILLER")
-        #return the IMU as a 4x4 matrix
-    
-    def getOdomAtTimestep(self, idx):
-        print("FILLER")
-        #return the Odom as a 4x4 matrix"""
+        # Compute the width and height of the bounding box
+        new_width = int(max_x - min_x)
+        new_height = int(max_y - min_y)
+
+        # Create a larger canvas to accommodate all the transformed points
+        canvas = np.zeros((new_height, new_width, 3), dtype=np.uint8)
+
+        # Translate the points to fit within the new canvas
+        translated_corners = transformed_corners - [min_x, min_y]
+
+        # Define the color and thickness for the circles and lines
+        color = (0, 255, 0)  # Green color
+        thickness = 2
+
+        # Draw circles at each transformed corner
+        for corner in translated_corners:
+            x, y = int(corner[0]), int(corner[1])
+            cv2.circle(canvas, (x, y), 5, color, thickness)
+
+        # Draw lines connecting the corners to form a polygon
+        num_corners = len(translated_corners)
+        for i in range(num_corners):
+            start_point = (int(translated_corners[i][0]), int(translated_corners[i][1]))
+            end_point = (
+                int(translated_corners[(i + 1) % num_corners][0]),
+                int(translated_corners[(i + 1) % num_corners][1]),
+            )
+            cv2.line(canvas, start_point, end_point, color, thickness)
+
+        # Print the height and width of the canvas
+        print(f"Canvas height: {canvas.shape[0]}")
+        print(f"Canvas width: {canvas.shape[1]}")
+
+        # Display the result
+        cv2.imshow("Image with Transformed Corners", canvas)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
 
 class RobotDataAtTimestep:
