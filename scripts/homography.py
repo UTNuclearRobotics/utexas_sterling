@@ -166,14 +166,14 @@ class HomographyFromChessboardImage(Homography):
 
         self.H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
         K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        self.H_calibrated = self.decompose_homography(self.H, K_inv)
+        self.H_calibrated = self.decompose_homography(self.H, K)
 
         ### These 2 images should be the same
-        # points_out = H @ self.cart_to_hom(model_chessboard.T)
-        # cart_pts_out = self.hom_to_cart(points_out)
-        # validate_pts = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
-        # self.draw_corner_image(image, (cb_rows, cb_cols), validate_pts, ret)
-        # self.draw_corner_image(image, (cb_rows, cb_cols), corners, ret)
+        #points_out = self.H @ self.cart_to_hom(model_chessboard.T)
+        #cart_pts_out = self.hom_to_cart(points_out)
+        #validate_pts = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
+        #self.draw_corner_image(image, (cb_rows, cb_cols), validate_pts, ret)
+        #self.draw_corner_image(image, (cb_rows, cb_cols), corners, ret)
 
     def get_homography(self):
         """
@@ -219,7 +219,7 @@ class HomographyFromChessboardImage(Homography):
         cart_pts = points / w
         return cart_pts[:-1]
 
-    def decompose_homography(self, H, K_inv):
+    #def decompose_homography(self, H, K_inv):
         """
         Returns:
             RT: 4x4 transformation matrix.
@@ -248,6 +248,51 @@ class HomographyFromChessboardImage(Homography):
         RT = np.eye(4, dtype=np.float32)
         RT[:3, :3] = R
         RT[:3, 3] = T.ravel()
+        return RT
+
+    def decompose_homography(self, H, K):
+        """
+        Decomposes a homography matrix H into a 4x4 transformation matrix RT
+        using OpenCV's decomposeHomographyMat and selecting the valid decomposition.
+
+        Args:
+            H (np.ndarray): 3x3 homography matrix.
+            K (np.ndarray): 3x3 intrinsic camera matrix.
+
+        Returns:
+            np.ndarray: 4x4 transformation matrix RT combining rotation and translation.
+            """
+        # Normalize the homography using the intrinsic matrix
+        K_inv = np.linalg.inv(K)
+        normalized_H = K_inv @ H
+
+        # Decompose the homography matrix
+        num_decompositions, rotations, translations, normals = cv2.decomposeHomographyMat(normalized_H, K)
+
+        # Logic to select the correct decomposition
+        best_index = -1
+        max_z_translation = -np.inf  # Example criterion: largest positive translation in Z-axis
+        for i in range(num_decompositions):
+            # Ensure the plane normal points towards the camera (positive Z-axis)
+            normal_z = normals[i][2]
+            translation_z = translations[i][2]
+
+            if normal_z > 0 and translation_z > max_z_translation:
+                max_z_translation = translation_z
+                best_index = i
+
+        if best_index == -1:
+            raise ValueError("No valid decomposition found.")
+
+        # Use the selected decomposition
+        R = rotations[best_index]
+        t = translations[best_index].flatten()
+
+        # Create the 4x4 transformation matrix
+        RT = np.eye(4, dtype=np.float32)
+        RT[:3, :3] = R
+        RT[:3, 3] = t
+
         return RT
 
 
@@ -451,10 +496,10 @@ def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
     """
     # Define the corners of the patch in the patch coordinate space
     patch_corners = np.array([
-        [0, 0],
-        [patch_size[0], 0],
-        [0, patch_size[0]],
-        [patch_size[0], patch_size[0]]
+        [0, 0,1],
+        [patch_size[0], 0,1],
+        [0, patch_size[0],1],
+        [patch_size[0], patch_size[0],1]
     ]).T  # Shape (3, 4)
 
     # Transform the patch corners to the original image coordinate space
@@ -482,12 +527,12 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
     Returns:
         patches: List of patches for each timestep.
     """
-    n_timesteps = 20
+    n_timesteps = 500
     # n_timesteps = robot_data.getNTimesteps()
     patches = []
 
     # Loops through entire dataset
-    for timestep in tqdm(range(history_size, n_timesteps), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(490, n_timesteps), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
 
@@ -501,8 +546,8 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         cur_patch = cv2.warpPerspective(cur_image, cur_homography, dsize=(128, 128))
         
          # Draw the patch corners in the original image
-        cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
-        cv2.imshow('Current Patch Corners', cur_image_with_corners)
+        #cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
+        cv2.imshow('Current Patch Corners', cur_patch)
         cv2.waitKey(1)
 
         timestep_patches.append(cur_patch)
@@ -512,15 +557,17 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
 
             # Get past image
             past_image = robot_data.getImageAtTimestep(past_timestep)
+            cv2.imshow('Past image{past_hist}', past_image)
+            cv2.waitKey(5)
 
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
-            cur_to_past_rt = past_rt @ np.linalg.inv(cur_rt)
+            cur_to_past_rt = np.linalg.inv(past_rt) @ cur_rt
             cool_transform = cur_to_past_rt @ rt_to_calibrated_homography
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
             # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
-            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(64, 64))
+            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(128, 128))
             timestep_patches.append(past_patch)
 
         patches.append(timestep_patches)
@@ -572,9 +619,14 @@ if __name__ == "__main__":
     robot_data = RobotDataAtTimestep(
         os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
     )
-    vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
+    
+    print(H_calibrated)
+    #vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
+
+
 
     # Get the current image from robot_data
+"""
     current_image = robot_data.getImageAtTimestep(5)
     patch_images = stitch_patches_in_grid(vicreg_data[5])
 
@@ -582,6 +634,7 @@ if __name__ == "__main__":
     cv2.imshow("Patches Grid", patch_images)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+    """
 
     # Show the current image side by side with the vicreg_data
     # show_images_separately(current_image, vicreg_data[5])
