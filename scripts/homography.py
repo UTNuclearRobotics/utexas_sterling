@@ -1,4 +1,8 @@
 """
+Size of a square on the calibration chessboard is 100mm
+"""
+
+"""
 TR-98 Zhang "A flexible technique for.."
 H - Homography
 Hx = x'
@@ -40,12 +44,95 @@ K = [
     0   0   1
 ]
 
+Understanding K (or A in Zhang's paper)
+
+I = 
+[
+1 0 0 
+0 1 0
+0 0 1
+]
+
+*
+
+[
+X
+Y
+1
+]
+
+[
+1 0 0 -> 1 * X + 0 * Y + 0 * 1 [X]
+0 1 0 -> 0 * X + 1 * Y + 0 * 1 [Y]
+0 0 1 -> 0 * X + 0 * Y + 1 * 1 [1]
+]
+
+[
+a 0 0 -> 1 * X + 0 * Y + 0 * 1 [aX]
+0 1 0 -> 0 * X + 1 * Y + 0 * 1 [Y]
+0 0 1 -> 0 * X + 0 * Y + 1 * 1 [1]
+]
+
+[
+a 0 0 -> a * X + 0 * Y + 0 * 1 [aX]
+0 b 0 -> 0 * X + b * Y + 0 * 1 [bY]
+0 0 1 -> 0 * X + 0 * Y + 1 * 1 [1]
+]
+
+GAMMA NEVER EVER MATTERS ON ANY REAL CAMERA, SO LET'S FORGET IT
+
+a = b = f -> focal length
+
+[fX fY 1]
+
+(u0, v0) -> Principal Point -> Center of the image coordinate system
+
+Well, where is u0, v0 in the image coordinates as represented on the computer?
+    That's at 0,0, the upper left pixel
+    So, we want to translate our image coordinates so u0, v0 is in the center.
+
+[
+a 0 u0  -> a * X + 0 * Y + u0 * 1 [aX + u0]
+0 b v0  -> 0 * X + b * Y + v0 * 1 [bY + v0]
+0 0 1   -> 0 * X + 0 * Y + 1  * 1 [1]
+]
+
 You can assume:
 fx = fy
 (u0, v0) is the center of the image
 gamma = 0
 
 SO, you really only need focal length
+
+So, if your homography is Identity, then it's picking pixels from.. the upper left-hand corner
+[
+1 0 u0
+0 1 v0
+0 0 1
+]
+
+This just moves the principal point to the correct location
+
+And what if we wanted to zoom in?
+
+Easy enough
+
+[
+f 0 u0
+0 f v0
+0 0 1
+]
+
+Will magnify by f -> focal length
+
+So, what's up with alpha & beta
+
+Picture the image pixels
+A = width of pixel
+B = height of pixel
+f = focal length
+alpha = f*A
+beta = f*B
 
 Camera Extrinsic Matrix <-- Projective, taking a 3D point down to 2D homogeneous coordinates
 [
@@ -61,6 +148,30 @@ R R R Ty
 R R R Tz
 0 0 0 1
 ]
+
+Applying a Rigid Transformation
+
+[
+R R R Tx -- (X * R + Y * R + Z * R + 1 * Tx)
+R R R Ty
+R R R Tz
+0 0 0 1
+] *
+
+[
+X
+Y
+Z
+W OR 1
+]
+
+[
+X
+Y
+Z
+1
+]
+
 
 Let's suppose that I'm projecting a 3D point into 2D
 
@@ -142,13 +253,21 @@ import os
 import torch
 import pickle
 
-from camera_intrinsics import CameraIntrinsics
+from cam_calibration import CameraIntrinsics
 
+def compute_model_chessboard(rows, cols):
+    model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
+    midpoint_row = rows / 2
+    midpoint_col = cols / 2
+    for row in range(0, rows):
+        for col in range(0, cols):
+            model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
+            model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
+    return model_chessboard
 
 class Homography:
     def __init__(self, homography_tensor):
         self.homography_tensor = homography_tensor
-
 
 class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
@@ -197,16 +316,6 @@ class HomographyFromChessboardImage(Homography):
 
         cv2.waitKey(0)  # Wait for a key press to close the window
         cv2.destroyAllWindows()
-
-    def compute_model_chessboard(self, rows, cols):
-        model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
-        midpoint_row = rows / 2
-        midpoint_col = cols / 2
-        for row in range(0, rows):
-            for col in range(0, cols):
-                model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
-                model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
-        return model_chessboard
 
     def cart_to_hom(self, points):
         row_of_ones = np.ones((1, points.shape[1]))
