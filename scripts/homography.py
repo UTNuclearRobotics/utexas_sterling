@@ -252,8 +252,10 @@ import numpy as np
 import os
 import torch
 import pickle
+import math
 
-from cam_calibration import CameraIntrinsics
+from camera_intrinsics import CameraIntrinsics
+from tqdm import tqdm
 
 def compute_model_chessboard(rows, cols):
     model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
@@ -272,6 +274,8 @@ class Homography:
 class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
         super().__init__(torch.eye(3))
+        self.image = image
+        self.chessboard_size = (cb_rows, cb_cols)
 
         # Get image chessboard corners, cartesian NX2
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -281,34 +285,35 @@ class HomographyFromChessboardImage(Homography):
         # Get model chessboard corners, cartesian NX2
         model_chessboard = self.compute_model_chessboard(cb_rows, cb_cols)
 
-        self.H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
+        H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
+        print(H)
         K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        self.H_calibrated = self.decompose_homography(self.H, K_inv)
 
-        ### These 2 images should be the same
-        # points_out = H @ self.cart_to_hom(model_chessboard.T)
-        # cart_pts_out = self.hom_to_cart(points_out)
-        # validate_pts = cart_pts_out.T.reshape(-1, 1, 2).astype(np.float32)
-        # self.draw_corner_image(image, (cb_rows, cb_cols), validate_pts, ret)
-        # self.draw_corner_image(image, (cb_rows, cb_cols), corners, ret)
+        # Assign global variables
+        self.H = H
+        self.RT = self.decompose_homography(H, K)
+        self.K = K
 
-    def get_homography(self):
-        """
-        Return the homography matrix from the chessboard image.
-        """
+        # Transform model chessboard points to image points
+        transformed_model_corners = self.transform_points(model_chessboard.T, H)
+        transformed_model_pts = transformed_model_corners.T.reshape(-1, 1, 2).astype(np.float32)
+        self.draw_corner_image(transformed_model_pts, ret)
+
+        # birds_eye_view = self.get_BEV_perspective_transform(model_chessboard, corners)
+        birds_eye_view = self.get_BEV(image, K, H)
+
+    def get_homography_matrix(self):
         return self.H
 
-    def get_calibrated_homography(self):
-        """
-        Return the calibrated homography matrix from the chessboard image.
-        """
-        return self.H_calibrated
+    def get_rotation_translation_matrix(self):
+        return self.RT
 
-    def draw_corner_image(self, image, chessboard_size, corners, ret):
+    def draw_corner_image(self, corners, ret):
+        image = self.image.copy()
         if ret:
             print("Chessboard corners found!")
             # Draw the corners on the image
-            cv2.drawChessboardCorners(image, chessboard_size, corners, ret)
+            cv2.drawChessboardCorners(image, self.chessboard_size, corners, ret)
             cv2.imshow("Chessboard Corners", image)
         else:
             cv2.imshow("Loaded Image", image)
@@ -318,65 +323,201 @@ class HomographyFromChessboardImage(Homography):
         cv2.destroyAllWindows()
 
     def cart_to_hom(self, points):
-        row_of_ones = np.ones((1, points.shape[1]))
-        return np.vstack((points, row_of_ones))
+        """Convert Cartesian coordinates to homogeneous coordinates."""
+        ones = np.ones((1, points.shape[1]))
+        return np.vstack((points, ones))
 
     def hom_to_cart(self, points):
-        w = points[-1]
-        cart_pts = points / w
-        return cart_pts[:-1]
+        """Convert homogeneous coordinates to Cartesian coordinates."""
+        points /= points[-1, :]
+        return points[:-1, :]
 
-    def decompose_homography(self, H, K_inv):
+    def transform_points(self, points, H):
+        """Transform points using the homography matrix."""
+        hom_points = self.cart_to_hom(points)
+        transformed_points = H @ hom_points
+        return self.hom_to_cart(transformed_points)
+
+    def decompose_homography(self, H, K):
         """
+        Decomposes a homography matrix H into a 4x4 transformation matrix RT
+        using OpenCV's decomposeHomographyMat and selecting the valid decomposition.
+
+        Args:
+            H (np.ndarray): 3x3 homography matrix.
+            K (np.ndarray): 3x3 intrinsic camera matrix.
+
         Returns:
-            RT: 4x4 transformation matrix.
+            np.ndarray: 4x4 transformation matrix RT combining rotation and translation.
         """
-        H = np.transpose(H)
-        h1 = H[0]
-        h2 = H[1]
-        h3 = H[2]
+        # Normalize the homography using the intrinsic matrix
+        K_inv = np.linalg.inv(K)
+        normalized_H = K_inv @ H
 
-        L = 1 / np.linalg.norm(np.dot(K_inv, h1))
+        # Decompose the homography matrix
+        num_decompositions, rotations, translations, normals = cv2.decomposeHomographyMat(normalized_H, K)
 
-        r1 = L * np.dot(K_inv, h1)
-        r2 = L * np.dot(K_inv, h2)
-        r3 = np.cross(r1, r2)
+        # Logic to select the correct decomposition
+        best_index = -1
+        max_z_translation = -np.inf  # Example criterion: largest positive translation in Z-axis
+        for i in range(num_decompositions):
+            # Ensure the plane normal points towards the camera (positive Z-axis)
+            normal_z = normals[i][2]
+            translation_z = translations[i][2]
 
-        T = L * np.dot(K_inv, h3)
+            if normal_z > 0 and translation_z > max_z_translation:
+                max_z_translation = translation_z
+                best_index = i
 
-        R = np.array([[r1], [r2], [r3]])
-        R = np.reshape(R, (3, 3))
-        U, S, V = np.linalg.svd(R, full_matrices=True)
+        if best_index == -1:
+            raise ValueError("No valid decomposition found.")
 
-        U = np.matrix(U)
-        V = np.matrix(V)
-        R = U * V
+        # Use the selected decomposition
+        R = rotations[best_index]
+        t = translations[best_index].flatten()
 
+        # Create the 4x4 transformation matrix
         RT = np.eye(4, dtype=np.float32)
         RT[:3, :3] = R
-        RT[:3, 3] = T.ravel()
+        RT[:3, 3] = t
+
         return RT
 
+    def get_BEV_perspective_transform(self, model_chessboard, corners, scale_factor=1000):
+        """
+        Generates a bird's-eye view of the chessboard in the image using the calibrated homography.
 
-"""class RobotDataAtTimestep:
-    def __init__(self, nTimesteps):
-        print("FILLER")
-        self.nTimesteps = nTimesteps
+        Args:
+            model_chessboard (np.ndarray): The model chessboard points (NX2) in real-world units.
+            corners (np.ndarray): The detected chessboard corners in the image (NX2).
+            scale_factor (float): The scale factor to convert from real-world units to pixels.
 
-    def getNTimesteps(self):
-        return self.nTimesteps
-    
-    def getImageAtTimestep(self, idx):
-        print("FILLER")
-        #return the image
-    
-    def getIMUAtTimestep(self, idx):
-        print("FILLER")
-        #return the IMU as a 4x4 matrix
-    
-    def getOdomAtTimestep(self, idx):
-        print("FILLER")
-        #return the Odom as a 4x4 matrix"""
+        Returns:
+            np.ndarray: The warped bird's-eye view image.
+        """
+        image = self.image.copy()
+
+        # Scale model chessboard points to desired output pixel size
+        model_chessboard_scaled = model_chessboard * scale_factor
+
+        # Compute the destination image size
+        min_x, min_y = np.min(model_chessboard_scaled, axis=0)
+        max_x, max_y = np.max(model_chessboard_scaled, axis=0)
+        width = int(max_x - min_x)
+        height = int(max_y - min_y)
+
+        # Adjust model points to have the origin at (0, 0)
+        model_chessboard_scaled[:, 0] -= min_x
+        model_chessboard_scaled[:, 1] -= min_y
+
+        # Select the four outer corners of the chessboard
+        cb_rows, cb_cols = self.chessboard_size
+        indices = [
+            0,  # Top-left corner
+            cb_cols - 1,  # Top-right corner
+            (cb_rows * cb_cols) - 1,  # Bottom-right corner
+            (cb_rows - 1) * cb_cols,  # Bottom-left corner
+        ]
+
+        # Prepare source (image) and destination (model) points
+        src_pts = corners[indices].astype(np.float32)
+        dst_pts = model_chessboard_scaled[indices].astype(np.float32)
+
+        # Compute the perspective transform matrix from image to model coordinates
+        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+
+        # Warp the image to obtain the bird's-eye view
+        birdseye_view = cv2.warpPerspective(image, M, (width, height))
+
+        return birdseye_view
+
+    def get_BEV(self, image, K, H):
+        """
+        Args:
+            image: The original image.
+            K: Camera intrinsic matrix.
+            H: Homography matrix from model chessboard to image chessboard.
+        """
+        # TODO: Somehow get the dimensions to transform into?
+        # Perform a translation to shift the image into frame to see the entire trapezoid
+        image = image.copy()
+        height, width = image.shape[:2]
+
+        # Define the corners of the original image
+        img_corners = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
+        print("Image corners:   ", img_corners)
+        transformed_corners = cv2.perspectiveTransform(np.array([img_corners]), K @ np.linalg.inv(H))[0]
+        print("Transformed image corners:   ", transformed_corners)
+
+        # Find the bounding box that contains all the transformed points
+        min_x = min(transformed_corners[:, 0])
+        max_x = max(transformed_corners[:, 0])
+        min_y = min(transformed_corners[:, 1])
+        max_y = max(transformed_corners[:, 1])
+
+        # Compute the width and height of the bounding box
+        new_width = int(max_x - min_x)
+        new_height = int(max_y - min_y)
+        print("X:   ", min_x)
+        print("Y:   ", min_y)
+
+        # Adjust the transformation matrix to account for the translation
+        translation_matrix = np.array([[1, 0, width], [0, 1, 0], [0, 0, 1]])
+
+        # Warp the image to obtain the bird's-eye view
+        birdseye_view = cv2.warpPerspective(image, translation_matrix @ K @ np.linalg.inv(H), (width * 2, height * 2))
+
+        self.plot_transformed_corners(transformed_corners)
+
+        # Display the result
+        cv2.imshow("BEV", birdseye_view)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    def plot_transformed_corners(self, transformed_corners):
+        # Find the bounding box that contains all the transformed points
+        min_x = min(transformed_corners[:, 0])
+        max_x = max(transformed_corners[:, 0])
+        min_y = min(transformed_corners[:, 1])
+        max_y = max(transformed_corners[:, 1])
+
+        # Compute the width and height of the bounding box
+        new_width = int(max_x - min_x)
+        new_height = int(max_y - min_y)
+
+        # Create a larger canvas to accommodate all the transformed points
+        canvas = np.zeros((new_height, new_width, 3), dtype=np.uint8)
+
+        # Translate the points to fit within the new canvas
+        translated_corners = transformed_corners - [min_x, min_y]
+
+        # Define the color and thickness for the circles and lines
+        color = (0, 255, 0)  # Green color
+        thickness = 2
+
+        # Draw circles at each transformed corner
+        for corner in translated_corners:
+            x, y = int(corner[0]), int(corner[1])
+            cv2.circle(canvas, (x, y), 5, color, thickness)
+
+        # Draw lines connecting the corners to form a polygon
+        num_corners = len(translated_corners)
+        for i in range(num_corners):
+            start_point = (int(translated_corners[i][0]), int(translated_corners[i][1]))
+            end_point = (
+                int(translated_corners[(i + 1) % num_corners][0]),
+                int(translated_corners[(i + 1) % num_corners][1]),
+            )
+            cv2.line(canvas, start_point, end_point, color, thickness)
+
+        # Print the height and width of the canvas
+        print(f"Canvas height: {canvas.shape[0]}")
+        print(f"Canvas width: {canvas.shape[1]}")
+
+        # Display the result
+        cv2.imshow("Image with Transformed Corners", canvas)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
 
 class RobotDataAtTimestep:
@@ -545,6 +686,39 @@ class FramePlusHistory:
         return history_images
 
 
+def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
+    """
+    Draws the corners of a patch on the original image using the given homography.
+
+    Args:
+        image: Original image (numpy array).
+        homography: Homography matrix mapping patch space to image space.
+        patch_size: Size of the patch (width, height).
+
+    Returns:
+        Image with patch corners drawn.
+    """
+    # Define the corners of the patch in the patch coordinate space
+    patch_corners = np.array(
+        [[0, 0, 1], [patch_size[0], 0, 1], [0, patch_size[0], 1], [patch_size[0], patch_size[0], 1]]
+    ).T  # Shape (3, 4)
+
+    # Transform the patch corners to the original image coordinate space
+    transformed_corners = homography @ patch_corners
+    transformed_corners /= transformed_corners[2, :]  # Normalize by the third row
+    transformed_corners = transformed_corners[:2, :].T.astype(int)  # Convert to (x, y) integers
+
+    # Draw the corners on the image
+    image_with_corners = image.copy()
+    for corner in transformed_corners:
+        cv2.circle(image_with_corners, tuple(corner), radius=5, color=(0, 0, 255), thickness=-1)
+
+    # Optionally, connect the corners to form a polygon
+    cv2.polylines(image_with_corners, [transformed_corners], isClosed=True, color=(0, 255, 0), thickness=2)
+
+    return image_with_corners
+
+
 def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=10):
     """
     Args:
@@ -555,11 +729,12 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
     Returns:
         patches: List of patches for each timestep.
     """
-    n_timesteps = robot_data.getNTimesteps()
+    n_timesteps = 500
+    # n_timesteps = robot_data.getNTimesteps()
     patches = []
 
     # Loops through entire dataset
-    for timestep in range(history_size, n_timesteps):
+    for timestep in tqdm(range(490, n_timesteps), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
 
@@ -569,28 +744,65 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         timestep_patches = []
 
         # Get current patch
-        # cur_patch = cv2.warpPerspective(cur_image, rt_to_calibrated_homography, (64, 64))
-        # timestep_patches.append(cur_patch)
+        cur_homography = rt_to_calibrated_homography[:3, [0, 1, 3]]
+        cur_patch = cv2.warpPerspective(cur_image, cur_homography, dsize=(128, 128))
+
+        # Draw the patch corners in the original image
+        # cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
+        cv2.imshow("Current Patch Corners", cur_patch)
+        cv2.waitKey(1)
+
+        timestep_patches.append(cur_patch)
 
         for past_hist in range(1, history_size):
             past_timestep = timestep - past_hist
 
             # Get past image
             past_image = robot_data.getImageAtTimestep(past_timestep)
+            cv2.imshow("Past image{past_hist}", past_image)
+            cv2.waitKey(5)
 
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
-            cur_to_past_rt = past_rt @ np.linalg.inv(cur_rt)
+            cur_to_past_rt = np.linalg.inv(past_rt) @ cur_rt
             cool_transform = cur_to_past_rt @ rt_to_calibrated_homography
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
-            print("Calibrated homography past matrix:   ", calibrated_hom_past)
+            # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
-            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(64, 64))
+            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(128, 128))
             timestep_patches.append(past_patch)
 
         patches.append(timestep_patches)
 
     return patches
+
+
+def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
+    # Determine the grid size if not provided
+    if grid_size is None:
+        num_patches = len(patches)
+        grid_cols = math.ceil(math.sqrt(num_patches))
+        grid_rows = math.ceil(num_patches / grid_cols)
+    else:
+        grid_rows, grid_cols = grid_size
+
+    # Get the dimensions of the patches (assuming all patches are the same size)
+    patch_height, patch_width, _ = patches[0].shape
+
+    # Create a blank canvas to hold the grid with gaps
+    grid_height = grid_rows * patch_height + (grid_rows - 1) * gap_size
+    grid_width = grid_cols * patch_width + (grid_cols - 1) * gap_size
+    canvas = np.full((grid_height, grid_width, 3), gap_color, dtype=np.uint8)
+
+    # Place each patch in the appropriate position on the canvas
+    for idx, patch in enumerate(patches):
+        row = idx // grid_cols
+        col = idx % grid_cols
+        start_y = row * (patch_height + gap_size)
+        start_x = col * (patch_width + gap_size)
+        canvas[start_y : start_y + patch_height, start_x : start_x + patch_width] = patch
+
+    return canvas
 
 
 if __name__ == "__main__":
@@ -609,14 +821,30 @@ if __name__ == "__main__":
     robot_data = RobotDataAtTimestep(
         os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
     )
-    vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
 
-    # Access the frames (history) for the current timestep
-    # print(f"Image history for timestep 15:")
-    # for i, img in enumerate(frame_history.frames):
-    #   print(f"Image {frame_history.start_frame-i}: {img}")
+    print(H_calibrated)
+    # vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
 
-    # if ret:
-    #     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
-    #     corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1),
-    #         criteria)
+    # Get the current image from robot_data
+"""
+    current_image = robot_data.getImageAtTimestep(5)
+    patch_images = stitch_patches_in_grid(vicreg_data[5])
+
+    #cv2.imshow("Original Image", current_image)
+    cv2.imshow("Patches Grid", patch_images)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    """
+
+# Show the current image side by side with the vicreg_data
+# show_images_separately(current_image, vicreg_data[5])
+
+# Access the frames (history) for the current timestep
+# print(f"Image history for timestep 15:")
+# for i, img in enumerate(frame_history.frames):
+#   print(f"Image {frame_history.start_frame-i}: {img}")
+
+# if ret:
+#     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.001)
+#     corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1),
+#         criteria)
