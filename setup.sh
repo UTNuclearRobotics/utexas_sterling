@@ -1,5 +1,4 @@
 sudo apt update
-sudo apt install python-is-python3
 
 # Install apt dependencies
 while read -r package; do
@@ -11,10 +10,10 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install Python dependencies
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
 # Install Python modules
-pip install -e .
+pip3 install -e .
 
 echo "Python dependencies installed and virtual environment set up."
 echo "To enter the virtual environment, run: venv/bin/activate"

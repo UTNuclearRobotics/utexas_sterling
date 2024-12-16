@@ -259,10 +259,10 @@ class ProcessRosbag:
         """
         if self.camera_info is not None:
             # Extract from topic if available
-            fx = self.camera_info.K[0]
-            fy = self.camera_info.K[4]
-            cx = self.camera_info.K[2]
-            cy = self.camera_info.K[5]
+            fx = self.camera_info.k[0]
+            fy = self.camera_info.k[4]
+            cx = self.camera_info.k[2]
+            cy = self.camera_info.k[5]
         else:
             # Default use config values
             cprint("Camera intrinsics not received. Using default values from config.", "yellow")
@@ -491,7 +491,7 @@ if __name__ == "__main__":
     cprint(
         f"Bag Path: {args.bag_path}\n"
         f"Config Path: {args.config_path}\n"
-        f"Save Path: {args.save_paXth}\n"
+        f"Save Path: {args.save_path}\n"
         f"Visualization: {args.visual}",
         "blue",
     )
