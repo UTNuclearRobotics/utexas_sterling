@@ -5,8 +5,6 @@ import os
 import torch
 import yaml
 
-from homography import *
-
 #   Squares on Justin's big chessboard are 100mm
 def prepare_object_points(grid_size, square_width = 100):
     """
