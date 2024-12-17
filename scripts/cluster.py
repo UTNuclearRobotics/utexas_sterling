@@ -209,7 +209,7 @@ class Cluster:
             print(images)
         
         # Plot clusters only for the best k
-        self.plot_clusters(representation_vectors, min_indices, k)
+        # self.plot_clusters(representation_vectors, min_indices, k)
 
         return all_cluster_image_indices
 
@@ -363,10 +363,10 @@ class Cluster:
         Visualizes the k-means clusters after performing dimensionality reduction
         using PCA.
         """
+        min_indices = min_indices.cpu().numpy()
         # Reduce the dimensionality of the representation vectors for visualization
         pca = PCA(n_components=2)  # Use PCA for dimensionality reduction
-        reduced_vectors = pca.fit_transform(representation_vectors.detach().numpy())  # Convert to numpy for PCA
-        
+        reduced_vectors = pca.fit_transform(representation_vectors.detach().cpu().numpy())  # Convert to numpy for PCA        
         # Set up the plot
         plt.figure(figsize=(8, 6))
 
@@ -377,7 +377,7 @@ class Cluster:
 
         # Plot centroids
         centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
-        reduced_centroids = pca.transform(centroids.detach().numpy())  # Reduce dimensionality of centroids
+        reduced_centroids = pca.transform(centroids.detach().cpu().numpy())  # Reduce dimensionality of centroids
         plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c='black', marker='x', label='Centroids')
 
         plt.title(f"K-means Clusters with k={k}")
@@ -404,7 +404,7 @@ if __name__ == "__main__":
         model_path=os.path.join(script_dir, "../models/vis_rep.pt"),
     )
 
-    #k_values = range(2, 10)
+    # k_values = range(2, 10)
     k_values = 4
     iterations = 200
 

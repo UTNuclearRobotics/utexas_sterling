@@ -474,6 +474,7 @@ class HomographyFromChessboardImage(Homography):
         # print("Image corners:   ", img_corners)
 
         # Compute the transformed corners
+        # K_inv * RRT
         inv_H = np.linalg.inv(H)
         transformation_matrix = K @ inv_H
         transformed_corners = cv2.perspectiveTransform(np.array([img_corners]), transformation_matrix)[0]
@@ -502,7 +503,8 @@ class HomographyFromChessboardImage(Homography):
         combined_matrix = translation_matrix @ transformation_matrix
         warped_image = cv2.warpPerspective(image, transformation_matrix, dsize=(new_width, new_height))
         # Print the warped image dimensions
-        warped_image = cv2.resize(warped_image, dsize=(1280, int(new_height * (1280 / new_width))))
+        warped_image = cv2.resize(warped_image, dsize=(width, int(new_height * (width / new_width))))
+        warped_image = cv2.resize(warped_image, (width, height))
         cv2.polylines(warped_image, [scaled_corners.astype(int)], isClosed=True, color=(0, 255, 0), thickness=2)
         
         # Display the result
