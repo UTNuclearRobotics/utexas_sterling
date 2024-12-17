@@ -258,6 +258,35 @@ from cam_calibration import CameraIntrinsics
 from tqdm import tqdm
 
 
+
+def cart_to_hom(points):
+    """Convert Cartesian coordinates to homogeneous coordinates."""
+    ones = np.ones((1, points.shape[1]))
+    return_value = np.vstack((points, ones))
+    return return_value
+
+def hom_to_cart(points):
+    """Convert homogeneous coordinates to Cartesian coordinates."""
+    points /= points[-1, :]
+    points = points[:-1, :]
+    return points
+
+
+def compute_model_chessboard(rows, cols, scalar_factor = 20, subtract_midpoint = False):
+    model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
+    midpoint_row = rows / 2
+    midpoint_col = cols / 2
+    for row in range(0, rows):
+        for col in range(0, cols):
+            if subtract_midpoint:
+                model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
+                model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
+            else:
+                model_chessboard[row * cols + col, 0] = (col + 0.5)
+                model_chessboard[row * cols + col, 1] = (row + 0.5)
+    model_chessboard = model_chessboard * scalar_factor
+    return model_chessboard
+
 class Homography:
     def __init__(self, homography_tensor):
         self.homography_tensor = homography_tensor
@@ -274,40 +303,41 @@ class HomographyFromChessboardImage(Homography):
         ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
         corners = corners.reshape(-1, 2)
 
-        # Get model chessboard corners, cartesian NX2
-        model_chessboard = self.compute_model_chessboard(cb_rows, cb_cols)
+        # Find widest image square, use that for the scalar on your model chessboard
+        # dsize should be the size in pixels of the BEV chessboard.
 
-        H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
-        K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
+        '''
+        If the goal is to get a BEV of the entire input image, you need to find 
+        '''
+
+        # Get model chessboard corners, cartesian NX2
+        model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
+
+        self.H, mask = cv2.findHomography(corners, model_chessboard, cv2.RANSAC)
+        self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
 
         # Assign global variables
-        self.H = H
-        self.K = K
-        self.RT = self.decompose_homography(H, K)
+        self.RT = self.decompose_homography(self.H, self.K)
 
         # # Transform model chessboard points to image points
-        # transformed_model_corners = self.transform_points(model_chessboard.T, H)
-        # transformed_model_pts = transformed_model_corners.T.reshape(-1, 1, 2).astype(np.float32)
+        transformed_model_corners = self.transform_points(model_chessboard.T, self.H)
+        transformed_model_corners = transformed_model_corners.T.reshape(-1, 2).astype(np.float32)
+        # print("transformed_model_corners:   ", transformed_model_corners)
+        # print("corners:   ", corners)
+        print("Diff:    ", transformed_model_corners - corners)
         # self.draw_corner_image(transformed_model_pts, ret)
 
         # self.plot_BEV_perspective_transform(model_chessboard, corners)
-        self.plot_BEV(image, K, H)
+        # self.plot_BEV(image, K, H)
+
+        self.transformed_model_corners = transformed_model_corners
+        self.corners = corners
 
     def get_homography_matrix(self):
         return self.H
 
     def get_rotation_translation_matrix(self):
         return self.RT
-
-    def compute_model_chessboard(self, rows, cols):
-        model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
-        midpoint_row = rows / 2
-        midpoint_col = cols / 2
-        for row in range(0, rows):
-            for col in range(0, cols):
-                model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
-                model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
-        return model_chessboard
 
     def draw_corner_image(self, corners, ret):
         image = self.image.copy()
@@ -323,21 +353,11 @@ class HomographyFromChessboardImage(Homography):
         cv2.waitKey(0)  # Wait for a key press to close the window
         cv2.destroyAllWindows()
 
-    def cart_to_hom(self, points):
-        """Convert Cartesian coordinates to homogeneous coordinates."""
-        ones = np.ones((1, points.shape[1]))
-        return np.vstack((points, ones))
-
-    def hom_to_cart(self, points):
-        """Convert homogeneous coordinates to Cartesian coordinates."""
-        points /= points[-1, :]
-        return points[:-1, :]
-
     def transform_points(self, points, H):
         """Transform points using the homography matrix."""
-        hom_points = self.cart_to_hom(points)
+        hom_points = cart_to_hom(points)
         transformed_points = H @ hom_points
-        return self.hom_to_cart(transformed_points)
+        return hom_to_cart(transformed_points)
 
     def decompose_homography(self, H, K):
         """
@@ -776,6 +796,28 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
 
     return canvas
 
+def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
+    """
+    Draw a list of points as circles on an image.
+    
+    Args:
+        image (numpy.ndarray): The input image (BGR format).
+        points (list of tuples): List of (x, y) coordinates to draw as circles.
+        color (tuple): Color of the circles in BGR format (default: green).
+        radius (int): Radius of the circles (default: 5 pixels).
+        thickness (int): Thickness of the circles (-1 for filled, >0 for border thickness).
+    
+    Returns:255
+        numpy.ndarray: The image with the points drawn.
+    """
+    # Make a copy of the image to avoid modifying the original
+    output_image = image.copy()
+    
+    # Iterate over the list of points and draw each as a circle
+    for point in points:
+        cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
+    
+    return output_image
 
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
@@ -787,12 +829,31 @@ if __name__ == "__main__":
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
 
     H = chessboard_homography.get_homography_matrix()
-    RT = chessboard_homography.get_rotation_translation_matrix()
-    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
+    renderTransformed = False
+    while True:
+        if renderTransformed:
+            rend_image = draw_points(image, chessboard_homography.transformed_model_corners, color=(0, 255, 255))
+        else:
+            rend_image = draw_points(image, chessboard_homography.corners, color=(255, 0, 0))
+        cv2.imshow("Chessboard", rend_image)
+        cur_patch = cv2.warpPerspective(image, H, dsize=(256, 256))
+        cv2.imshow("BEV", cur_patch)
+        cv2.waitKey(0)
+        renderTransformed = not renderTransformed
+    # RT = chessboard_homography.get_rotation_translation_matrix()
+    # K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
-    robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
-    )
+    # robot_data = RobotDataAtTimestep(
+    #     os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
+    # )
+
+    # for idx in range(0, robot_data.getNTimesteps()):
+    #     camera_image = robot_data.getImageAtTimestep(idx)
+    #     cur_patch = cv2.warpPerspective(camera_image, H, dsize=(128, 128))
+    #     cv2.imshow("camera_image", camera_image)
+    #     cv2.imshow("cur_patch", cur_patch)
+    #     cv2.waitKey(1)
+
     # vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
 
     # Get the current image from robot_data
