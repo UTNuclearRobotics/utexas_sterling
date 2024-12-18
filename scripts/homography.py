@@ -1,252 +1,3 @@
-"""
-Size of a square on the calibration chessboard is 100mm
-"""
-
-"""
-TR-98 Zhang "A flexible technique for.."
-H - Homography
-Hx = x'
-Where x is in frame 1, and x' is the point in frame 2, or the homography point.
-Often x is expressed as a "model point" for a frontal-parallel chessboard
-x' is as imaged in a real image
-
-How do I compute a homography?
-Direct Linear Transformation -> DLT
-
-[
-H1 H2 H3
-H4 H5 H6
-H7 H8 H9
-] *
-[
-X
-Y
-W
-] =
-[
-H1 * X + H2 * X + H3 * X,
-..Y
-..W
-]
-
-cv.getPerspectiveTransform does all of this for us
-
-Explicit representation of a calibrated homography
-
-Camera Calibration
-Intrinsic Parameters <-- Unique to the camera
-Extrinsic Parameters <-- Position and orientation of the camera (actually, transformation about the camera)
-
-Camera Intrinsic Matrix
-K = [
-    fx gamma u0
-    0   fy   v0
-    0   0   1
-]
-
-Understanding K (or A in Zhang's paper)
-
-I = 
-[
-1 0 0 
-0 1 0
-0 0 1
-]
-
-*
-
-[
-X
-Y
-1
-]
-
-[
-1 0 0 -> 1 * X + 0 * Y + 0 * 1 [X]
-0 1 0 -> 0 * X + 1 * Y + 0 * 1 [Y]
-0 0 1 -> 0 * X + 0 * Y + 1 * 1 [1]
-]
-
-[
-a 0 0 -> 1 * X + 0 * Y + 0 * 1 [aX]
-0 1 0 -> 0 * X + 1 * Y + 0 * 1 [Y]
-0 0 1 -> 0 * X + 0 * Y + 1 * 1 [1]
-]
-
-[
-a 0 0 -> a * X + 0 * Y + 0 * 1 [aX]
-0 b 0 -> 0 * X + b * Y + 0 * 1 [bY]
-0 0 1 -> 0 * X + 0 * Y + 1 * 1 [1]
-]
-
-GAMMA NEVER EVER MATTERS ON ANY REAL CAMERA, SO LET'S FORGET IT
-
-a = b = f -> focal length
-
-[fX fY 1]
-
-(u0, v0) -> Principal Point -> Center of the image coordinate system
-
-Well, where is u0, v0 in the image coordinates as represented on the computer?
-    That's at 0,0, the upper left pixel
-    So, we want to translate our image coordinates so u0, v0 is in the center.
-
-[
-a 0 u0  -> a * X + 0 * Y + u0 * 1 [aX + u0]
-0 b v0  -> 0 * X + b * Y + v0 * 1 [bY + v0]
-0 0 1   -> 0 * X + 0 * Y + 1  * 1 [1]
-]
-
-You can assume:
-fx = fy
-(u0, v0) is the center of the image
-gamma = 0
-
-SO, you really only need focal length
-
-So, if your homography is Identity, then it's picking pixels from.. the upper left-hand corner
-[
-1 0 u0
-0 1 v0
-0 0 1
-]
-
-This just moves the principal point to the correct location
-
-And what if we wanted to zoom in?
-
-Easy enough
-
-[
-f 0 u0
-0 f v0
-0 0 1
-]
-
-Will magnify by f -> focal length
-
-So, what's up with alpha & beta
-
-Picture the image pixels
-A = width of pixel
-B = height of pixel
-f = focal length
-alpha = f*A
-beta = f*B
-
-Camera Extrinsic Matrix <-- Projective, taking a 3D point down to 2D homogeneous coordinates
-[
-R1 R2 R3 Tx
-R1 R2 R3 Ty
-R1 R2 R3 Tz
-]           ^- T
-
-Rigid Transform about the camera
-[
-R R R Tx
-R R R Ty
-R R R Tz
-0 0 0 1
-]
-
-Applying a Rigid Transformation
-
-[
-R R R Tx -- (X * R + Y * R + Z * R + 1 * Tx)
-R R R Ty
-R R R Tz
-0 0 0 1
-] *
-
-[
-X
-Y
-Z
-W OR 1
-]
-
-[
-X
-Y
-Z
-1
-]
-
-
-Let's suppose that I'm projecting a 3D point into 2D
-
-X = [X, Y, Z, W] = (X/W, Y/W, Z/W)
-x = [X, Y, W] = (X/W, Y/W)
-
-<X, Y, W> ~= 2 * <X, Y, W> = We don't know W, but Z is a valid W
-<X, Y, 1> ~= <2X, 2Y, 2>
-<X/Z, Y/Z>
-
-Ideal Projection <-- Not subject to camera intrinsics
-R R R Tx
-R R R Ty
-R R R Tz
-]
-We took Z from 3D we made it W for 2D (and dropped the 3D W)
-
-Ideal Projection from a Rigid Transformation <-- Is the camera extrinsic matrix
-
-Calibrated Homography
-H_calibrated = K * [R R T]
-
-H <-- Computed from a chessboard
-H^-1 * H = [R1 R2 T]
-Rigid Transform =
-[R1 R2 R1xR2 T]
-
-So, if we want to move the chessboard around with the vehicle.
-
-Get
-
-Rigid transform in frame i
-Rigid transform from IMU data for i+1..n (up to 10, but not if the homography drifts off of the camera)
-
-Formula becomes
-RT_i <-- Homography to first frame, which just stays as computed from the initial homography chessboard
-BEVi = from chessboard
-BEVvideo_frame,0 <-- from chessboard
-BEVvideo_frame,i..(n) <-- from IMU
-
-RT_i^-1 * RT_imu ->> Turn this into R R T - H_ideal
-H = K * h_ideal
-
-
-class HomographyFromChessboard
-
-class HomographyTransformed
-    Use IMURTsByTimestamp to tranform homography into other video frames
-
-class ImageDataForTraining
-    BEV_ts,0 CUR_IMAGE * HomographyFromChessboard
-    BEV_ts - 1..n IMAGE_ts-1..n * HomographyTransformed_ts - 1..n
-
-    "Good" image for timestamp + n vicreg into past images (transformed by homography)
-    for each timestamp
-
-Training the representation input vector requires IMURTsByTimestamp, ImagesByTimestamp, HomographyFromChessboard
-    HomographyTransformed, and puts it into ImageDataForTraining
-
-How do we build a ground image for a bag? A BEV picture of the ground?
-
-Images -> BEV (with Rigid Transform)
-Use Rigid Transform to compute relative homographies onto a larger plane.
-    The resultant homography is not constrained to the model (0,0),(64,64) model, but lives in coordinates
-    on this larger plane
-
-Costmap is just that computation after applying the scoring function neural net
-
-Metric calibration
-5 images of chessboard from different views
-Cannot be coparallel
-
-
-"""
-
 import math
 import os
 import pickle
@@ -255,22 +6,9 @@ import cv2
 import numpy as np
 import torch
 from cam_calibration import CameraIntrinsics
+from homography_util import *
 from tqdm import tqdm
-
-
-
-def cart_to_hom(points):
-    """Convert Cartesian coordinates to homogeneous coordinates."""
-    ones = np.ones((1, points.shape[1]))
-    return_value = np.vstack((points, ones))
-    return return_value
-
-def hom_to_cart(points):
-    """Convert homogeneous coordinates to Cartesian coordinates."""
-    points /= points[-1, :]
-    points = points[:-1, :]
-    return points
-
+from utils import *
 
 def compute_model_chessboard(rows, cols, scalar_factor = 20, subtract_midpoint = False):
     model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
@@ -290,6 +28,19 @@ def compute_model_chessboard(rows, cols, scalar_factor = 20, subtract_midpoint =
 class Homography:
     def __init__(self, homography_tensor):
         self.homography_tensor = homography_tensor
+
+class FiddlyBEVHomography():
+    def __init__(self, in_cb_image, cb_rows, cb_cols):
+        self.in_cb_image = in_cb_image
+        self.cb_rows = cb_rows
+        self.cb_cols = cb_cols
+
+    def extract_chessboard_points(self):
+        # Get image chessboard corners, cartesian NX2
+        gray = cv2.cvtColor(self.in_cb_image, cv2.COLOR_BGR2GRAY)
+        ret, corners = cv2.findChessboardCorners(gray, (self.cb_cols, self.cb_rows), None)
+        corners = corners.reshape(-1, 2)
+
 
 
 class HomographyFromChessboardImage(Homography):
@@ -621,41 +372,6 @@ class RobotDataAtTimestep:
         return R
 
 
-"""
-Inertial frame "the tape x in the drone cage"
-Base link cur where the robot is
-Base link past where the robot was
-Base link to camera
-
-Inertial frame * base link * base link to camera -- Do some magic -- BEV image
-Inertial frame * base link past * base link to camera -- Do some magic -- BEV image in the past
-
-Transform from cur to past
-
-(Inertial frame * base link)^-1 <-- inverse * (Inertial frame * base link past) = cur_to_past
-Assume the inertial frame is identity
-base link^-1 * base link past = cur_to_past
-
-Assume that base link to camera is always the same..
-Meaning it was the same in the inertial frame
-And in the current frame
-And in the past frame
-
-Determining how the camera moved is now just cur_to_past
-The past orientation of the camera with respect to the homography is just
-cur_to_past * rt_to_calibrated_homography = cool_tranform
-Turn cool_tranform into a calibrated homography
-[   R1 R2 R3   T
-    0           1
-]
-
-[R1 R2 T] = calibrated_hom_past
-
-Turn it into something you can use to get the same BEV image patch
-
-At the current frame it is cv2.warpImage(cur_image, H)
-In the past frame it is cv2.warpImage(past_image, K * calibrated_hom_past)
-"""
 
 
 class FramePlusHistory:
@@ -831,8 +547,9 @@ if __name__ == "__main__":
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
 
     H = chessboard_homography.get_homography_matrix()
+    keepRunning = True
     renderTransformed = False
-    while True:
+    while keepRunning:
         if renderTransformed:
             rend_image = draw_points(image, chessboard_homography.transformed_model_corners, color=(0, 255, 255))
         else:
@@ -840,8 +557,11 @@ if __name__ == "__main__":
         cv2.imshow("Chessboard", rend_image)
         cur_patch = cv2.warpPerspective(image, H, dsize=(256, 256))
         cv2.imshow("BEV", cur_patch)
-        cv2.waitKey(0)
+        key = cv2.waitKey(0)
+        # print("Key: ", key)
         renderTransformed = not renderTransformed
+        if key == 113:  #Hitting 'q' quits the program
+            keepRunning = False
     # RT = chessboard_homography.get_rotation_translation_matrix()
     # K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
