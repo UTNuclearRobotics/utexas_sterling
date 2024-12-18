@@ -54,3 +54,15 @@ def fixedWarpPerspective(H, image):
     merged_image = cv2.merge((b_out, g_out, r_out))
     return cv2.warpPerspective(merged_image, H, (image_width * 2, image_height * 2), \
             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+
+def cart_to_hom(points):
+    """Convert Cartesian coordinates to homogeneous coordinates."""
+    ones = np.ones((1, points.shape[1]))
+    return_value = np.vstack((points, ones))
+    return return_value
+
+def hom_to_cart(points):
+    """Convert homogeneous coordinates to Cartesian coordinates."""
+    points /= points[-1, :]
+    points = points[:-1, :]
+    return points
