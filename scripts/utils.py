@@ -8,6 +8,20 @@ from termcolor import cprint
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
+def compute_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
+    model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
+    midpoint_row = rows / 2
+    midpoint_col = cols / 2
+    for row in range(0, rows):
+        for col in range(0, cols):
+            if center_at_zero:
+                model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
+                model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
+            else:
+                model_chessboard[row * cols + col, 0] = col
+                model_chessboard[row * cols + col, 1] = row
+    model_chessboard = model_chessboard * scalar_factor
+    return model_chessboard
 
 def load_dataset():
     dataset_dir = os.path.join(script_dir, "../datasets/")
