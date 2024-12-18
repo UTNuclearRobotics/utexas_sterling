@@ -1,16 +1,14 @@
 import os
 import pickle
 
+import matplotlib.pyplot as plt
 import torch
+from kneed import KneeLocator
 from PIL import Image
+from sklearn.decomposition import PCA
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
-from sklearn.metrics import silhouette_score
-import matplotlib.pyplot as plt
-from kneed import KneeLocator
-from sklearn.decomposition import PCA
-from matplotlib.patches import Ellipse
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -134,6 +132,12 @@ class Cluster:
         self.patches = patch1.to(device)
 
     def generate_clusters(self, k, iterations):
+        """
+        Generate clusters using K-means algorithm.
+        Args:
+            k (int): Number of clusters to generate.
+            iterations (int): Number of iterations for K-means.
+        """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
         row_sums = representation_vectors.sum(dim=1, keepdim=True)
@@ -144,17 +148,6 @@ class Cluster:
             distances = torch.cdist(representation_vectors, centroids)
             min_values, min_indices = torch.min(distances, dim=1)
             new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
-
-            """
-            Silhouette Score
-            Cohesion
-            """
-
-            shadow = sum(min_values).item()
-            # print("shadow:  ", shadow)
-            # distances = torch.cdist(representation_vectors, centroids)
-            # distances = torch.min(distances, dim=1)
-            # print("distances:   ", distances)
 
             if torch.allclose(centroids, new_centroids):
                 break
@@ -207,13 +200,16 @@ class Cluster:
         for index, images in enumerate(all_cluster_image_indices):
             print("CLUSTER: ", index)
             print(images)
-        
-        # Plot clusters only for the best k
-        # self.plot_clusters(representation_vectors, min_indices, k)
 
         return all_cluster_image_indices
 
     def iterate_generate_clusters(self, k_values, iterations):
+        """
+        Iterate over a range of k-values to find the best number of clusters.
+        Args:
+            k_values (range): Range of k-values to iterate over.
+            iterations (int): Number of iterations for K-means.
+        """
         representation_vectors = self.model.visual_encoder(self.patches)
         row_sums = representation_vectors.sum(dim=1, keepdim=True)
         representation_vectors = representation_vectors / row_sums
@@ -229,18 +225,16 @@ class Cluster:
         for k in k_values:
             # Initialize centroids using random samples
             centroids = representation_vectors[torch.randperm(representation_vectors.size(0))[:k]]
-            
+
             for _ in range(iterations):
                 # Compute the pairwise distance between points and centroids
                 distances = torch.cdist(representation_vectors, centroids)
-                
+
                 # Assign each point to the nearest centroid
                 min_values, min_indices = torch.min(distances, dim=1)
-                
+
                 # Efficient centroid update using the indices of assigned clusters
-                new_centroids = torch.stack(
-                    [representation_vectors[min_indices == i].mean(dim=0) for i in range(k)]
-                )
+                new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
 
                 # Break if centroids have not changed
                 if torch.allclose(centroids, new_centroids):
@@ -250,7 +244,7 @@ class Cluster:
 
             # WCSS Calculation
             closest_distances = torch.min(distances, dim=1)[0]  # Closest centroid distances for each point
-            wcss = torch.sum(closest_distances ** 2).item()  # Sum of squared distances
+            wcss = torch.sum(closest_distances**2).item()  # Sum of squared distances
             wcss_values.append((k, wcss))
 
             # Silhouette Score Calculation
@@ -332,10 +326,10 @@ class Cluster:
         return all_cluster_image_indices
 
     def plot_wcss(self, k, wcss):
-        kn = KneeLocator(k,wcss, curve='convex', direction='decreasing', interp_method ='polynomial')
+        kn = KneeLocator(k, wcss, curve="convex", direction="decreasing", interp_method="polynomial")
         plt.figure(figsize=(8, 6))
         plt.plot(k, wcss, marker="o", label="WCSS")
-        plt.vlines(kn.knee, plt.ylim()[0], plt.ylim()[1], linestyles='dashed')
+        plt.vlines(kn.knee, plt.ylim()[0], plt.ylim()[1], linestyles="dashed")
         plt.title("Elbow Method: WCSS vs Number of Clusters (k)")
         plt.xlabel("Number of Clusters (k)")
         plt.ylabel("WCSS")
@@ -347,16 +341,15 @@ class Cluster:
         plt.show()
 
     def plot_silhouette_scores(self, k, scores):
-        plt.plot(k, scores, label='Silhouette Score')
-        plt.xlabel('Number of Clusters (k)')
-        plt.ylabel('Silhouette Score')
-        plt.title('Silhouette Score vs. k-clusters')
+        plt.plot(k, scores, label="Silhouette Score")
+        plt.xlabel("Number of Clusters (k)")
+        plt.ylabel("Silhouette Score")
+        plt.title("Silhouette Score vs. k-clusters")
         plt.grid(True)
         # Save the plot to the specified directory
         plt.savefig(os.path.join(save_dir, "silhouette_score_vs_k.png"))
         plt.close()  # Close the plot to avoid memory overload
         plt.show()
-
 
     def plot_clusters(self, representation_vectors, min_indices, k):
         """
@@ -366,19 +359,19 @@ class Cluster:
         min_indices = min_indices.cpu().numpy()
         # Reduce the dimensionality of the representation vectors for visualization
         pca = PCA(n_components=2)  # Use PCA for dimensionality reduction
-        reduced_vectors = pca.fit_transform(representation_vectors.detach().cpu().numpy())  # Convert to numpy for PCA        
+        reduced_vectors = pca.fit_transform(representation_vectors.detach().cpu().numpy())  # Convert to numpy for PCA
         # Set up the plot
         plt.figure(figsize=(8, 6))
 
         # Plot each cluster with a different color
         for cluster_idx in range(k):
             cluster_points = reduced_vectors[min_indices == cluster_idx]
-            plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=f'Cluster {cluster_idx}', alpha=0.6)
+            plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=f"Cluster {cluster_idx}", alpha=0.6)
 
         # Plot centroids
         centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
         reduced_centroids = pca.transform(centroids.detach().cpu().numpy())  # Reduce dimensionality of centroids
-        plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c='black', marker='x', label='Centroids')
+        plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c="black", marker="x", label="Centroids")
 
         plt.title(f"K-means Clusters with k={k}")
         plt.xlabel("PCA Component 1")
@@ -404,8 +397,8 @@ if __name__ == "__main__":
         model_path=os.path.join(script_dir, "../models/vis_rep.pt"),
     )
 
-    # k_values = range(2, 10)
-    k_values = 4
+    k_values = range(2, 10)
+    # k_values = 4
     iterations = 200
 
     if isinstance(k_values, range):
@@ -430,7 +423,6 @@ if __name__ == "__main__":
 
     else:
         print("k_values is neither a range nor an integer")
-    
+
     # image = PatchRenderer.image_streaks(rendered_clusters)
     # image.save(os.path.join(save_dir, "cluster_grid.png"))
-
