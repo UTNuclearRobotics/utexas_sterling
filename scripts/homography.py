@@ -22,8 +22,8 @@ def compute_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False)
                 model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
                 model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
             else:
-                model_chessboard[row * cols + col, 0] = col + 0.5
-                model_chessboard[row * cols + col, 1] = row + 0.5
+                model_chessboard[row * cols + col, 0] = col
+                model_chessboard[row * cols + col, 1] = row
     model_chessboard = model_chessboard * scalar_factor
     return model_chessboard
 
@@ -61,7 +61,7 @@ class HomographyFromChessboardImage(Homography):
         self.pixel_width = self.corner_pixel_width()
 
         # Get model chessboard corners, cartesian NX2
-        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.pixel_width)
+        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.pixel_width, center_at_zero=False)
 
         self.H, mask = cv2.findHomography(self.corners, self.model_chessboard, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
@@ -173,7 +173,7 @@ class HomographyFromChessboardImage(Homography):
     def get_BEV_chessboard_region(self):
         image = self.image.copy()
         H = self.get_homography_image_to_model()
-        dimensions = (int(self.pixel_width * self.cb_cols), int(self.pixel_width * self.cb_rows))
+        dimensions = (int(self.pixel_width * (self.cb_cols - 1)), int(self.pixel_width * (self.cb_rows - 1)))
         warped_image = cv2.warpPerspective(image, H, dsize=dimensions)
 
         cv2.imshow("BEV", warped_image)
