@@ -66,3 +66,26 @@ def hom_to_cart(points):
     points /= points[-1, :]
     points = points[:-1, :]
     return points
+
+def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
+    """
+    Draw a list of points as circles on an image.
+    
+    Args:
+        image (numpy.ndarray): The input image (BGR format).
+        points (list of tuples): List of (x, y) coordinates to draw as circles.
+        color (tuple): Color of the circles in BGR format (default: green).
+        radius (int): Radius of the circles (default: 5 pixels).
+        thickness (int): Thickness of the circles (-1 for filled, >0 for border thickness).
+    
+    Returns:255
+        numpy.ndarray: The image with the points drawn.
+    """
+    # Make a copy of the image to avoid modifying the original
+    output_image = image.copy()
+    
+    # Iterate over the list of points and draw each as a circle
+    for point in points:
+        cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
+    
+    return output_image

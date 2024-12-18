@@ -1,3 +1,4 @@
+import argparse
 import math
 import os
 import pickle
@@ -10,26 +11,29 @@ from homography_util import *
 from tqdm import tqdm
 from utils import *
 
-def compute_model_chessboard(rows, cols, scalar_factor = 20, subtract_midpoint = False):
+
+def compute_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
     model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
     midpoint_row = rows / 2
     midpoint_col = cols / 2
     for row in range(0, rows):
         for col in range(0, cols):
-            if subtract_midpoint:
+            if center_at_zero:
                 model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
                 model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
             else:
-                model_chessboard[row * cols + col, 0] = (col + 0.5)
-                model_chessboard[row * cols + col, 1] = (row + 0.5)
+                model_chessboard[row * cols + col, 0] = col + 0.5
+                model_chessboard[row * cols + col, 1] = row + 0.5
     model_chessboard = model_chessboard * scalar_factor
     return model_chessboard
+
 
 class Homography:
     def __init__(self, homography_tensor):
         self.homography_tensor = homography_tensor
 
-class FiddlyBEVHomography():
+
+class FiddlyBEVHomography:
     def __init__(self, in_cb_image, cb_rows, cb_cols):
         self.in_cb_image = in_cb_image
         self.cb_rows = cb_rows
@@ -42,67 +46,78 @@ class FiddlyBEVHomography():
         corners = corners.reshape(-1, 2)
 
 
-
 class HomographyFromChessboardImage(Homography):
     def __init__(self, image, cb_rows, cb_cols):
         super().__init__(torch.eye(3))
         self.image = image
+        self.cb_rows = cb_rows
+        self.cb_cols = cb_cols
         self.chessboard_size = (cb_rows, cb_cols)
 
         # Get image chessboard corners, cartesian NX2
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
-        corners = corners.reshape(-1, 2)
-
-        # Find widest image square, use that for the scalar on your model chessboard
-        # dsize should be the size in pixels of the BEV chessboard.
-
-        '''
-        If the goal is to get a BEV of the entire input image, you need to find 
-        '''
+        self.corners = corners.reshape(-1, 2)
+        self.pixel_width = self.corner_pixel_width()
 
         # Get model chessboard corners, cartesian NX2
-        model_chessboard = compute_model_chessboard(cb_rows, cb_cols)
+        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.pixel_width)
 
-        self.H, mask = cv2.findHomography(corners, model_chessboard, cv2.RANSAC)
+        self.H, mask = cv2.findHomography(self.corners, self.model_chessboard, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-
-        # Assign global variables
         self.RT = self.decompose_homography(self.H, self.K)
 
-        # # Transform model chessboard points to image points
-        transformed_model_corners = self.transform_points(model_chessboard.T, self.H)
-        transformed_model_corners = transformed_model_corners.T.reshape(-1, 2).astype(np.float32)
+        # Transform model chessboard points to image points
+        self.transformed_model_corners = self.transform_points(
+            self.model_chessboard.T, self.get_homography_model_to_image()
+        )
+        self.transformed_model_corners = self.transformed_model_corners.T.reshape(-1, 2).astype(np.float32)
         # print("transformed_model_corners:   ", transformed_model_corners)
         # print("corners:   ", corners)
-        print("Diff:    ", transformed_model_corners - corners)
-        # self.draw_corner_image(transformed_model_pts, ret)
+        # print("Diff:    ", transformed_model_corners - corners)
 
-        # self.plot_BEV_perspective_transform(model_chessboard, corners)
-        # self.plot_BEV(image, K, H)
-
-        self.transformed_model_corners = transformed_model_corners
-        self.corners = corners
-
-    def get_homography_matrix(self):
+    def get_homography_image_to_model(self):
         return self.H
+
+    def get_homography_model_to_image(self):
+        return np.linalg.inv(self.H)
 
     def get_rotation_translation_matrix(self):
         return self.RT
 
-    def draw_corner_image(self, corners, ret):
-        image = self.image.copy()
-        if ret:
-            print("Chessboard corners found!")
-            # Draw the corners on the image
-            cv2.drawChessboardCorners(image, self.chessboard_size, corners, ret)
-            cv2.imshow("Chessboard Corners", image)
-        else:
-            cv2.imshow("Loaded Image", image)
-            print("Chessboard corners not found.")
+    def corner_pixel_width(self):
+        """Calculate the maximum distance between two consecutive corners in each row of the chessboard."""
+        # Sort corners by y value to group them by rows
+        sorted_corners = sorted(self.corners, key=lambda x: x[1])
 
-        cv2.waitKey(0)  # Wait for a key press to close the window
-        cv2.destroyAllWindows()
+        # Split sorted_corners into rows
+        interval = self.cb_cols
+        rows = [sorted_corners[i * interval : (i + 1) * interval] for i in range(len(sorted_corners) // interval)]
+
+        # Calculate distances between consecutive points in each row
+        max_distance = 0
+        for row in rows:
+            row = sorted(row, key=lambda x: x[0])
+            for i in range(len(row) - 1):
+                distance = np.linalg.norm(np.array(row[i]) - np.array(row[i + 1]))
+                max_distance = max(max_distance, distance)
+
+        return max_distance
+
+    def validate_homography(self):
+        keepRunning = True
+        renderTransformed = False
+        while keepRunning:
+            if renderTransformed:
+                rend_image = draw_points(self.image, self.transformed_model_corners, color=(0, 255, 255))
+            else:
+                rend_image = draw_points(self.image, self.corners, color=(255, 0, 0))
+            cv2.imshow("Chessboard", rend_image)
+            key = cv2.waitKey(0)
+            renderTransformed = not renderTransformed
+            if key == 113:  # Hitting 'q' quits the program
+                keepRunning = False
+        exit(0)
 
     def transform_points(self, points, H):
         """Transform points using the homography matrix."""
@@ -155,68 +170,19 @@ class HomographyFromChessboardImage(Homography):
 
         return RT
 
-    def plot_BEV_perspective_transform(self, model_chessboard, corners, scale_factor=100):
-        """
-        Generates a bird's-eye view of the chessboard in the image using the calibrated homography.
-
-        Args:
-            model_chessboard (np.ndarray): The model chessboard points (NX2) in real-world units.
-            corners (np.ndarray): The detected chessboard corners in the image (NX2).
-            scale_factor (float): The scale factor to convert from real-world units to pixels.
-
-        Returns:
-            np.ndarray: The warped bird's-eye view image.
-        """
+    def get_BEV_chessboard_region(self):
         image = self.image.copy()
+        H = self.get_homography_image_to_model()
+        dimensions = (int(self.pixel_width * self.cb_cols), int(self.pixel_width * self.cb_rows))
+        warped_image = cv2.warpPerspective(image, H, dsize=dimensions)
 
-        # Scale model chessboard points to desired output pixel size
-        model_chessboard_scaled = model_chessboard * scale_factor
-
-        # Compute the destination image size
-        min_x, min_y = np.min(model_chessboard_scaled, axis=0)
-        max_x, max_y = np.max(model_chessboard_scaled, axis=0)
-        width = int(max_x - min_x)
-        height = int(max_y - min_y)
-
-        # Adjust model points to have the origin at (0, 0)
-        model_chessboard_scaled[:, 0] -= min_x
-        model_chessboard_scaled[:, 1] -= min_y
-
-        # Select the four outer corners of the chessboard
-        cb_rows, cb_cols = self.chessboard_size
-        indices = [
-            0,  # Top-left corner
-            cb_cols - 1,  # Top-right corner
-            (cb_rows * cb_cols) - 1,  # Bottom-right corner
-            (cb_rows - 1) * cb_cols,  # Bottom-left corner
-        ]
-
-        # Prepare source (image) and destination (model) points
-        src_pts = corners[indices].astype(np.float32)
-        dst_pts = model_chessboard_scaled[indices].astype(np.float32)
-
-        # Compute the perspective transform matrix from image to model coordinates
-        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-
-        # Warp the image to obtain the bird's-eye view
-        birdseye_view = cv2.warpPerspective(image, M, (width, height))
-        print("Width:   ", width)
-        print("Height:   ", height)
-
-        # Display the result
-        cv2.imshow("BEV Perspective Transform", birdseye_view)
+        cv2.imshow("BEV", warped_image)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+        exit(0)
 
-    def plot_BEV(self, image, K, H):
-        """
-        Plots a bird's-eye view of the chessboard in the image
-        using the calibrated homography.
-        Args:
-            image: The original image.
-            K: Camera intrinsic matrix.
-            H: Homography matrix from model chessboard to image chessboard.
-        """
+    def plot_BEV_entire_image(self, image, K, H):
+        # TODO: Get BEV of entire image
         image = image.copy()
         height, width = image.shape[:2]
 
@@ -244,7 +210,7 @@ class HomographyFromChessboardImage(Homography):
 
         # Adjust the transformation matrix to account for translation
         translation_matrix = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]], dtype=np.float32)
-        
+
         # Scale the translated corners to the desired width
         translated_corners = cv2.perspectiveTransform(np.array([transformed_corners]), translation_matrix)[0]
         scale_factor = width / new_width
@@ -257,7 +223,7 @@ class HomographyFromChessboardImage(Homography):
         warped_image = cv2.resize(warped_image, dsize=(width, int(new_height * (width / new_width))))
         warped_image = cv2.resize(warped_image, (width, height))
         cv2.polylines(warped_image, [scaled_corners.astype(int)], isClosed=True, color=(0, 255, 0), thickness=2)
-        
+
         # Display the result
         cv2.imshow("Translated Corners", warped_image)
         cv2.waitKey(0)
@@ -370,8 +336,6 @@ class RobotDataAtTimestep:
         )
 
         return R
-
-
 
 
 class FramePlusHistory:
@@ -514,54 +478,31 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
 
     return canvas
 
-def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
-    """
-    Draw a list of points as circles on an image.
-    
-    Args:
-        image (numpy.ndarray): The input image (BGR format).
-        points (list of tuples): List of (x, y) coordinates to draw as circles.
-        color (tuple): Color of the circles in BGR format (default: green).
-        radius (int): Radius of the circles (default: 5 pixels).
-        thickness (int): Thickness of the circles (-1 for filled, >0 for border thickness).
-    
-    Returns:255
-        numpy.ndarray: The image with the points drawn.
-    """
-    # Make a copy of the image to avoid modifying the original
-    output_image = image.copy()
-    
-    # Iterate over the list of points and draw each as a circle
-    for point in points:
-        cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
-    
-    return output_image
 
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
-    image_dir = script_dir + "/homography/"
-    path_to_image = image_dir + "raw_image.jpg"
 
-    image = cv2.imread(path_to_image)
+    def parse_args():
+        parser = argparse.ArgumentParser(description="Homography")
+        parser.add_argument("--val", "-v", action="store_true", help="Run the validate homography")
+        return parser.parse_args()
+
+    args = parse_args()
+
+    # Load the image
+    image_dir = script_dir + "/homography/"
+    image_file = "raw_image.jpg"
+    image = cv2.imread(os.path.join(image_dir, image_file))
+
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
 
-    H = chessboard_homography.get_homography_matrix()
-    keepRunning = True
-    renderTransformed = False
-    while keepRunning:
-        if renderTransformed:
-            rend_image = draw_points(image, chessboard_homography.transformed_model_corners, color=(0, 255, 255))
-        else:
-            rend_image = draw_points(image, chessboard_homography.corners, color=(255, 0, 0))
-        cv2.imshow("Chessboard", rend_image)
-        cur_patch = cv2.warpPerspective(image, H, dsize=(256, 256))
-        cv2.imshow("BEV", cur_patch)
-        key = cv2.waitKey(0)
-        # print("Key: ", key)
-        renderTransformed = not renderTransformed
-        if key == 113:  #Hitting 'q' quits the program
-            keepRunning = False
+    if args.val:
+        chessboard_homography.validate_homography()
+    chessboard_homography.get_BEV_chessboard_region()
+
+    H = chessboard_homography.get_homography_image_to_model()
+
     # RT = chessboard_homography.get_rotation_translation_matrix()
     # K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
