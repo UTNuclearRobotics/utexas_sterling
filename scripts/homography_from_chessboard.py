@@ -74,7 +74,7 @@ class HomographyFromChessboardImage():
             [vx, vy, x0, y0] = cv2.fitLine(col, cv2.DIST_L2, 0, 0.01, 0.01)
             col_lines.append((vx, vy, x0, y0))
             slope = vy / vx
-            print(f"Column: y = {slope} * (x - {x0}) + {y0}")
+            # print(f"Column: y = {slope} * (x - {x0}) + {y0}")
 
         # Compute vanishing point for columns
         vanishing_point = compute_intersection(col_lines[0], col_lines[-1])

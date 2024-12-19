@@ -11,6 +11,8 @@ from homography_from_chessboard import HomographyFromChessboardImage
 from homography_util import *
 from tqdm import tqdm
 from utils import *
+from scipy.spatial.transform import Rotation as R
+
 
 class Homography:
     def __init__(self, homography_tensor):
@@ -28,6 +30,7 @@ class FiddlyBEVHomography:
         gray = cv2.cvtColor(self.in_cb_image, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, (self.cb_cols, self.cb_rows), None)
         corners = corners.reshape(-1, 2)
+
 
 class RobotDataAtTimestep:
     def __init__(self, file_path):
@@ -52,49 +55,32 @@ class RobotDataAtTimestep:
         img_data = self.data["image"][idx]["data"]
         return cv2.imdecode(img_data, cv2.IMREAD_COLOR)
 
-        if 0 <= idx < self.nTimesteps:
-            image_data = self.data["image"][idx]
-            if isinstance(image_data, dict):
-                # Handle the dictionary (e.g., extract the 'data' field)
-                image_data = image_data.get("data", None)  # Adjust based on actual structure
-                if image_data is None:
-                    raise TypeError("No 'data' field found in the image dictionary.")
-            return torch.tensor(image_data, dtype=torch.float32)
-        else:
-            raise IndexError("Index out of range for timesteps.")
-
     def getIMUAtTimestep(self, idx):
         """Return the IMU data as a 4x4 matrix at the given timestep index."""
         if 0 <= idx < self.nTimesteps:
             imu_data = self.data["imu"][idx]
 
             # Extract relevant data from the dictionary
-            orientation = imu_data["orientation"]  # Should be a 4-element vector
-            angular_velocity = imu_data["angular_velocity"]  # Should be a 3-element vector
-            linear_acceleration = imu_data["linear_acceleration"]  # Should be a 3-element vector
+            orientation = np.array(imu_data["orientation"], dtype=np.float32)  # Should be a 4-element vector
+            angular_velocity = np.array(imu_data["angular_velocity"], dtype=np.float32)  # Should be a 3-element vector
+            linear_acceleration = np.array(
+                imu_data["linear_acceleration"], dtype=np.float32
+            )  # Should be a 3-element vector
 
-            # Convert to tensors
-            orientation_tensor = torch.tensor(orientation, dtype=torch.float32)  # 4 elements
-            angular_velocity_tensor = torch.tensor(angular_velocity, dtype=torch.float32)  # 3 elements
-            linear_acceleration_tensor = torch.tensor(linear_acceleration, dtype=torch.float32)  # 3 elements
+            # Pad the angular velocity and linear acceleration arrays with zeros to make them 4-element arrays
+            angular_velocity = np.pad(angular_velocity, (0, 1), mode="constant")
+            linear_acceleration = np.pad(linear_acceleration, (0, 1), mode="constant")
 
-            # Pad the angular velocity and linear acceleration tensors with zeros to make them 4-element tensors
-            angular_velocity_tensor = torch.cat([angular_velocity_tensor, torch.zeros(1, dtype=torch.float32)])
-            linear_acceleration_tensor = torch.cat([linear_acceleration_tensor, torch.zeros(1, dtype=torch.float32)])
-
-            # Combine the tensors into a 4x4 matrix (by stacking them row-wise)
-            imu_matrix = torch.stack(
+            # Combine the arrays into a 4x4 matrix (by stacking them row-wise)
+            imu_matrix = np.vstack(
                 [
-                    orientation_tensor,
-                    angular_velocity_tensor,
-                    linear_acceleration_tensor,
-                    torch.zeros(4, dtype=torch.float32),
-                ],
-                dim=0,
+                    orientation,
+                    angular_velocity,
+                    linear_acceleration,
+                    np.zeros(4, dtype=np.float32),
+                ]
             )
-
             return imu_matrix
-
         else:
             raise IndexError("Index out of range for timesteps.")
 
@@ -114,26 +100,10 @@ class RobotDataAtTimestep:
             transformation_matrix[:3, 3] = position
 
             # Convert quaternion to rotation matrix and set it
-            rotation_matrix = self.quaternion_to_rotation_matrix(quaternion)
+            rotation_matrix = R.from_quat(quaternion).as_matrix()
             transformation_matrix[:3, :3] = rotation_matrix
 
             return transformation_matrix
-
-    def quaternion_to_rotation_matrix(self, quaternion):
-        """Convert a quaternion to a 3x3 rotation matrix using PyTorch."""
-        qx, qy, qz, qw = quaternion
-
-        # Compute the rotation matrix using the quaternion
-        R = torch.tensor(
-            [
-                [1 - 2 * (qy**2 + qz**2), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy)],
-                [2 * (qx * qy + qw * qz), 1 - 2 * (qx**2 + qz**2), 2 * (qy * qz - qw * qx)],
-                [2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx**2 + qy**2)],
-            ],
-            dtype=torch.float32,
-        )
-
-        return R
 
 
 class FramePlusHistory:
@@ -191,22 +161,21 @@ def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
     return image_with_corners
 
 
-def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=10):
+def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 128)):
     """
     Args:
         K: Camera intrinsic matrix.
-        rt_to_calibrated_homography: Homography from the chessboard image.
+        RT: Rotation and translation matrix.
         robot_data: Instance of RobotDataAtTimestep.
         history_size: Number of timesteps to consider in the past.
     Returns:
         patches: List of patches for each timestep.
     """
-    n_timesteps = 500
-    # n_timesteps = robot_data.getNTimesteps()
+    n_timesteps = robot_data.getNTimesteps()
     patches = []
 
     # Loops through entire dataset
-    for timestep in tqdm(range(490, n_timesteps), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(history_size, history_size * 2), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
 
@@ -216,13 +185,13 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
         timestep_patches = []
 
         # Get current patch
-        cur_homography = rt_to_calibrated_homography[:3, [0, 1, 3]]
-        cur_patch = cv2.warpPerspective(cur_image, cur_homography, dsize=(128, 128))
+        cur_homography = RT[:3, [0, 1, 3]]
+        cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
 
         # Draw the patch corners in the original image
         # cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
-        cv2.imshow("Current Patch Corners", cur_patch)
-        cv2.waitKey(1)
+        # cv2.imshow("Current Patch Corners", cur_patch)
+        # cv2.waitKey(1)
 
         timestep_patches.append(cur_patch)
 
@@ -231,13 +200,13 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
 
             # Get past image
             past_image = robot_data.getImageAtTimestep(past_timestep)
-            cv2.imshow("Past image{past_hist}", past_image)
-            cv2.waitKey(5)
+            # cv2.imshow("Past image{past_hist}", past_image)
+            # cv2.waitKey(5)
 
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
             cur_to_past_rt = np.linalg.inv(past_rt) @ cur_rt
-            cool_transform = cur_to_past_rt @ rt_to_calibrated_homography
+            cool_transform = cur_to_past_rt @ RT
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
             # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
@@ -252,7 +221,7 @@ def ComputeVicRegData(K, rt_to_calibrated_homography, robot_data, history_size=1
 def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
     # Determine the grid size if not provided
     if grid_size is None:
-        num_patches = len(patches)
+        num_patches = len(patches) - 1  # Exclude the first patch for the grid
         grid_cols = math.ceil(math.sqrt(num_patches))
         grid_rows = math.ceil(num_patches / grid_cols)
     else:
@@ -262,14 +231,17 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
     patch_height, patch_width, _ = patches[0].shape
 
     # Create a blank canvas to hold the grid with gaps
-    grid_height = grid_rows * patch_height + (grid_rows - 1) * gap_size
-    grid_width = grid_cols * patch_width + (grid_cols - 1) * gap_size
+    grid_height = (grid_rows + 1) * patch_height + grid_rows * gap_size  # +1 for the first patch row
+    grid_width = max(grid_cols * patch_width + (grid_cols - 1) * gap_size, patch_width)
     canvas = np.full((grid_height, grid_width, 3), gap_color, dtype=np.uint8)
 
-    # Place each patch in the appropriate position on the canvas
-    for idx, patch in enumerate(patches):
-        row = idx // grid_cols
-        col = idx % grid_cols
+    # Place the first patch on its own row
+    canvas[:patch_height, :patch_width] = patches[0]
+
+    # Place the remaining patches in the grid
+    for idx, patch in enumerate(patches[1:], start=1):
+        row = (idx - 1) // grid_cols + 1  # +1 to account for the first patch row
+        col = (idx - 1) % grid_cols
         start_y = row * (patch_height + gap_size)
         start_x = col * (patch_width + gap_size)
         canvas[start_y : start_y + patch_height, start_x : start_x + patch_width] = patch
@@ -277,11 +249,32 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
     return canvas
 
 
+def visualize_pkl(robot_data, H, patch_size=(128, 128)):
+    """
+    Playsback the pickle file and shows the camera image and
+    the patch image at each timestep.
+    Args:
+        robot_data: Instance of RobotDataAtTimestep.
+        H: Homography matrix.
+    """
+    for idx in range(0, robot_data.getNTimesteps()):
+        camera_image = robot_data.getImageAtTimestep(idx)
+        cur_patch = cv2.warpPerspective(camera_image, H, dsize=patch_size)
+        cv2.imshow("camera_image", camera_image)
+        cv2.imshow("cur_patch", cur_patch)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+    exit(0)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Homography")
-    parser.add_argument("--val", "-v", action="store_true", help="Show plots to validate homography")
-    parser.add_argument("--bev", action="store_true", help="Show plot of BEV image of the chessboard region")
-    parser.add_argument("--bev_full", action="store_true", help="Show plot of the BEV of the whole image")
+    parser.add_argument("-val", action="store_true", help="Show plots to validate homography")
+    parser.add_argument("-bev", action="store_true", help="Show plot of BEV image of the chessboard region")
+    parser.add_argument("-bev_full", action="store_true", help="Show plot of the BEV of the whole image")
+    parser.add_argument(
+        "-vis_pkl", action="store_true", help="Show video feed and extracted terrain patch from pickle file"
+    )
     return parser.parse_args()
 
 
@@ -296,6 +289,18 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
+    H = chessboard_homography.get_homography_image_to_model()
+    RT = chessboard_homography.get_rotation_translation_matrix()
+    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
+
+    robot_data = RobotDataAtTimestep(
+        os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
+    )
+
+    output_dimensions = (
+        int(chessboard_homography.cb_tile_width * (chessboard_homography.cb_cols - 1)),
+        int(chessboard_homography.cb_tile_width * (chessboard_homography.cb_rows - 1)),
+    )
 
     match args:
         case _ if args.val:
@@ -303,36 +308,21 @@ if __name__ == "__main__":
         case _ if args.bev:
             chessboard_homography.plot_BEV_chessboard()
         case _ if args.bev_full:
+            # TODO: Implement this case
             chessboard_homography.plot_BEV_full()
+        case _ if args.vis_pkl:
+            visualize_pkl(robot_data, H)
 
-    H = chessboard_homography.get_homography_image_to_model()
-
-    # RT = chessboard_homography.get_rotation_translation_matrix()
-    # K, _ = CameraIntrinsics().get_camera_calibration_matrix()
-
-    # robot_data = RobotDataAtTimestep(
-    #     os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
-    # )
-
-    # for idx in range(0, robot_data.getNTimesteps()):
-    #     camera_image = robot_data.getImageAtTimestep(idx)
-    #     cur_patch = cv2.warpPerspective(camera_image, H, dsize=(128, 128))
-    #     cv2.imshow("camera_image", camera_image)
-    #     cv2.imshow("cur_patch", cur_patch)
-    #     cv2.waitKey(1)
-
-    # vicreg_data = ComputeVicRegData(K, H_calibrated, robot_data, 10)
+    vicreg_data = ComputeVicRegData(H, K, RT, robot_data, 10, output_dimensions)
 
     # Get the current image from robot_data
-"""
-    current_image = robot_data.getImageAtTimestep(5)
-    patch_images = stitch_patches_in_grid(vicreg_data[5])
+    current_image = robot_data.getImageAtTimestep(0)
+    patch_images = stitch_patches_in_grid(vicreg_data[0])
 
-    #cv2.imshow("Original Image", current_image)
+    cv2.imshow("Original Image", current_image)
     cv2.imshow("Patches Grid", patch_images)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-    """
 
 # Show the current image side by side with the vicreg_data
 # show_images_separately(current_image, vicreg_data[5])
