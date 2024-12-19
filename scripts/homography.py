@@ -58,10 +58,10 @@ class HomographyFromChessboardImage(Homography):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
         self.corners = corners.reshape(-1, 2)
-        self.pixel_width = self.corner_pixel_width()
+        self.cb_tile_width, vanishing_point = self.chessboard_tile_width()
 
         # Get model chessboard corners, cartesian NX2
-        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.pixel_width, center_at_zero=False)
+        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=False)
 
         self.H, mask = cv2.findHomography(self.corners, self.model_chessboard, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
@@ -75,7 +75,12 @@ class HomographyFromChessboardImage(Homography):
         # print("transformed_model_corners:   ", transformed_model_corners)
         # print("corners:   ", corners)
         # print("Diff:    ", transformed_model_corners - corners)
-
+        
+        # TODO: Scale the chessboard corners to get BEV of entire image
+        # Vanishing point?
+        # Use camera intrinsics?
+        self.scaled_corners = self.corners
+        
     def get_homography_image_to_model(self):
         return self.H
 
@@ -85,7 +90,7 @@ class HomographyFromChessboardImage(Homography):
     def get_rotation_translation_matrix(self):
         return self.RT
 
-    def corner_pixel_width(self):
+    def chessboard_tile_width(self):
         """Calculate the maximum distance between two consecutive corners in each row of the chessboard."""
         # Sort corners by y value to group them by rows
         sorted_corners = sorted(self.corners, key=lambda x: x[1])
@@ -95,26 +100,47 @@ class HomographyFromChessboardImage(Homography):
         rows = [sorted_corners[i * interval : (i + 1) * interval] for i in range(len(sorted_corners) // interval)]
 
         # Calculate distances between consecutive points in each row
-        max_distance = 0
+        cb_tile_width = 0
         for row in rows:
-            row = sorted(row, key=lambda x: x[0])
+            row.sort(key=lambda x: x[0])
             for i in range(len(row) - 1):
                 distance = np.linalg.norm(np.array(row[i]) - np.array(row[i + 1]))
-                max_distance = max(max_distance, distance)
+                cb_tile_width = max(cb_tile_width, distance)
 
-        return max_distance
+        # Fit lines to columns
+        columns = list(zip(*rows))
+        col_lines = []
+        for col in columns:
+            col = np.array(col)
+            [vx, vy, x0, y0] = cv2.fitLine(col, cv2.DIST_L2, 0, 0.01, 0.01)
+            col_lines.append((vx, vy, x0, y0))
+            slope = vy / vx
+            print(f"Column: y = {slope} * (x - {x0}) + {y0}")
+
+        # Compute vanishing point for columns
+        vanishing_point = compute_intersection(col_lines[0], col_lines[-1])
+
+        return cb_tile_width, vanishing_point
 
     def validate_homography(self):
         keepRunning = True
-        renderTransformed = False
+        counter = 0
+        cv2.namedWindow("Chessboard")
+
         while keepRunning:
-            if renderTransformed:
-                rend_image = draw_points(self.image, self.transformed_model_corners, color=(0, 255, 255))
-            else:
-                rend_image = draw_points(self.image, self.corners, color=(255, 0, 0))
+            match counter % 3:
+                case 0:
+                    rend_image = draw_points(self.image, self.corners, color=(255, 0, 0))
+                    cv2.setWindowTitle("Chessboard", "Original corners")
+                case 1:
+                    rend_image = draw_points(self.image, self.transformed_model_corners, color=(0, 255, 0))
+                    cv2.setWindowTitle("Chessboard", "Transformed model corners")
+                case 2:
+                    rend_image = draw_points(self.image, self.scaled_corners, color=(0, 0, 255))
+                    cv2.setWindowTitle("Chessboard", "Scaled corners")
+            counter += 1
             cv2.imshow("Chessboard", rend_image)
             key = cv2.waitKey(0)
-            renderTransformed = not renderTransformed
             if key == 113:  # Hitting 'q' quits the program
                 keepRunning = False
         exit(0)
@@ -170,10 +196,10 @@ class HomographyFromChessboardImage(Homography):
 
         return RT
 
-    def get_BEV_chessboard_region(self):
+    def plot_BEV_chessboard(self):
         image = self.image.copy()
         H = self.get_homography_image_to_model()
-        dimensions = (int(self.pixel_width * (self.cb_cols - 1)), int(self.pixel_width * (self.cb_rows - 1)))
+        dimensions = (int(self.cb_tile_width * (self.cb_cols - 1)), int(self.cb_tile_width * (self.cb_rows - 1)))
         warped_image = cv2.warpPerspective(image, H, dsize=dimensions)
 
         cv2.imshow("BEV", warped_image)
@@ -181,7 +207,7 @@ class HomographyFromChessboardImage(Homography):
         cv2.destroyAllWindows()
         exit(0)
 
-    def plot_BEV_entire_image(self, image, K, H):
+    def plot_BEV_full(self, image, K, H):
         # TODO: Get BEV of entire image
         image = image.copy()
         height, width = image.shape[:2]
@@ -479,15 +505,17 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
     return canvas
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Homography")
+    parser.add_argument("--val", "-v", action="store_true", help="Show plots to validate homography")
+    parser.add_argument("--bev", action="store_true", help="Show plot of BEV image of the chessboard region")
+    parser.add_argument("--bev_full", action="store_true", help="Show plot of the BEV of the whole image")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
-
-    def parse_args():
-        parser = argparse.ArgumentParser(description="Homography")
-        parser.add_argument("--val", "-v", action="store_true", help="Run the validate homography")
-        return parser.parse_args()
-
     args = parse_args()
 
     # Load the image
@@ -497,9 +525,13 @@ if __name__ == "__main__":
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
 
-    if args.val:
-        chessboard_homography.validate_homography()
-    chessboard_homography.get_BEV_chessboard_region()
+    match args:
+        case _ if args.val:
+            chessboard_homography.validate_homography()
+        case _ if args.bev:
+            chessboard_homography.plot_BEV_chessboard()
+        case _ if args.bev_full:
+            chessboard_homography.plot_BEV_full()
 
     H = chessboard_homography.get_homography_image_to_model()
 
