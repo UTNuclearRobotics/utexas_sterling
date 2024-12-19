@@ -103,3 +103,23 @@ def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
         cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
     
     return output_image
+
+# Function to compute intersection of two lines
+def compute_intersection(line1, line2):
+    vx1, vy1, x01, y01 = line1
+    vx2, vy2, x02, y02 = line2
+
+    a1 = vy1
+    b1 = -vx1
+    c1 = vy1 * x01 - vx1 * y01
+
+    a2 = vy2
+    b2 = -vx2
+    c2 = vy2 * x02 - vx2 * y02
+
+    D = a1 * b2 - a2 * b1
+    if D == 0:
+        return None  # Lines are parallel
+    x = (b1 * c2 - b2 * c1) / D
+    y = (c1 * a2 - c2 * a1) / D
+    return np.array([x, y])

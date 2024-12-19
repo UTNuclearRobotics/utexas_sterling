@@ -29,7 +29,6 @@ class FiddlyBEVHomography:
         ret, corners = cv2.findChessboardCorners(gray, (self.cb_cols, self.cb_rows), None)
         corners = corners.reshape(-1, 2)
 
-
 class RobotDataAtTimestep:
     def __init__(self, file_path):
         # Load the .pkl file
@@ -278,15 +277,17 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
     return canvas
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Homography")
+    parser.add_argument("--val", "-v", action="store_true", help="Show plots to validate homography")
+    parser.add_argument("--bev", action="store_true", help="Show plot of BEV image of the chessboard region")
+    parser.add_argument("--bev_full", action="store_true", help="Show plot of the BEV of the whole image")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
-
-    def parse_args():
-        parser = argparse.ArgumentParser(description="Homography")
-        parser.add_argument("--val", "-v", action="store_true", help="Run the validate homography")
-        return parser.parse_args()
-
     args = parse_args()
 
     # Load the image
@@ -296,9 +297,13 @@ if __name__ == "__main__":
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
 
-    if args.val:
-        chessboard_homography.validate_homography()
-    chessboard_homography.get_BEV_chessboard_region()
+    match args:
+        case _ if args.val:
+            chessboard_homography.validate_homography()
+        case _ if args.bev:
+            chessboard_homography.plot_BEV_chessboard()
+        case _ if args.bev_full:
+            chessboard_homography.plot_BEV_full()
 
     H = chessboard_homography.get_homography_image_to_model()
 

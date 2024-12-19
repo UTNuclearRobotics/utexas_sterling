@@ -139,7 +139,7 @@ class MetricCalibration:
 
         print(camera_matrix.shape, " ", objpoints.shape, " ", imgpoints.shape)
 
-def render3DPoints(in_pts):
+# def render3DPoints(in_pts):
         
 
 
