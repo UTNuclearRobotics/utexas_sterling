@@ -106,28 +106,6 @@ class RobotDataAtTimestep:
             return transformation_matrix
 
 
-class FramePlusHistory:
-    def __init__(self, robot_data, start_frame, history_size=10):
-        self.robot_data = robot_data  # Instance of RobotDataAtTimestep
-        self.start_frame = start_frame  # The frame at the current timestep
-        self.history_size = history_size  # The size of the history
-        self.frames = self.getImagesHistory(start_frame)
-
-    def getImagesHistory(self, idx):
-        """Return the image at the given timestep along with images from previous `history_size` timesteps."""
-        # Ensure the history does not go out of bounds (e.g., at the start of the dataset)
-        start_idx = max(0, idx - self.history_size)
-        end_idx = idx
-
-        # Collect the images from the history
-        history_images = []
-        for i in range(end_idx - 1, start_idx - 1, -1):
-            image = self.robot_data.getImageAtTimestep(i)
-            history_images.append(image)
-
-        return history_images
-
-
 def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
     """
     Draws the corners of a patch on the original image using the given homography.
@@ -163,11 +141,15 @@ def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
 
 def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 128)):
     """
+    Preprocesses the robot data to compute multiple viewpoints 
+    of the same patch for each timestep.
     Args:
+        H: Homography matrix.
         K: Camera intrinsic matrix.
         RT: Rotation and translation matrix.
         robot_data: Instance of RobotDataAtTimestep.
         history_size: Number of timesteps to consider in the past.
+        patch_size: Size of the patch (width, height).
     Returns:
         patches: List of patches for each timestep.
     """
@@ -178,9 +160,6 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
     for timestep in tqdm(range(history_size, history_size * 2), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
-
-        # Get past patches from current frame
-        # frame_history = FramePlusHistory(robot_data, start_frame=timestep, history_size=history_size).frames
 
         timestep_patches = []
 
@@ -195,6 +174,7 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
 
         timestep_patches.append(cur_patch)
 
+        # Return the image at the given timestep along with images from previous `history_size` timesteps
         for past_hist in range(1, history_size):
             past_timestep = timestep - past_hist
 
@@ -206,11 +186,11 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
             cur_to_past_rt = np.linalg.inv(past_rt) @ cur_rt
-            cool_transform = cur_to_past_rt @ RT
+            cool_transform = cur_to_past_rt * RT
             calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
             # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
-            past_patch = cv2.warpPerspective(past_image, K @ calibrated_hom_past, dsize=(128, 128))
+            past_patch = cv2.warpPerspective(past_image, K * calibrated_hom_past, dsize=patch_size)
             timestep_patches.append(past_patch)
 
         patches.append(timestep_patches)
@@ -313,11 +293,13 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    vicreg_data = ComputeVicRegData(H, K, RT, robot_data, 10, output_dimensions)
+    history_size = 10
+    vicreg_data = ComputeVicRegData(H, K, RT, robot_data, history_size, patch_size=(128, 128))
 
     # Get the current image from robot_data
-    current_image = robot_data.getImageAtTimestep(0)
-    patch_images = stitch_patches_in_grid(vicreg_data[0])
+    index = 0
+    current_image = robot_data.getImageAtTimestep(index + history_size)
+    patch_images = stitch_patches_in_grid(vicreg_data[index])
 
     cv2.imshow("Original Image", current_image)
     cv2.imshow("Patches Grid", patch_images)
