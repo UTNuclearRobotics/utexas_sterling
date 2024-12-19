@@ -30,8 +30,6 @@ class FiddlyBEVHomography:
         corners = corners.reshape(-1, 2)
 
 
-
-
 class RobotDataAtTimestep:
     def __init__(self, file_path):
         # Load the .pkl file

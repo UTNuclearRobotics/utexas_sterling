@@ -138,6 +138,8 @@ class MetricCalibration:
         #     print(homography)
 
         print(camera_matrix.shape, " ", objpoints.shape, " ", imgpoints.shape)
+
+def render3DPoints(in_pts):
         
 
 
