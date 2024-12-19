@@ -2,8 +2,14 @@ import cv2 as cv
 import glob
 import numpy as np
 import os
+import time
 import torch
 import yaml
+
+from homography_from_chessboard import HomographyFromChessboardImage
+from utils import *
+
+from point_cloud_viewer import PointCloudViewer
 
 #   Squares on Justin's big chessboard are 100mm
 def prepare_object_points(grid_size, square_width = 100):
@@ -52,32 +58,6 @@ def find_image_points(grid_size, objp, image_path_pattern):
 
     #cv.destroyAllWindows()
 
-class CameraIntrinsics:
-    def __init__(self, \
-        config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "homography", "camera_config.yaml")):
-        # Load the configuration from the YAML file
-        with open(config_path, "r") as file:
-            config = yaml.safe_load(file)
-            self.CAMERA_INTRINSICS = config["camera_intrinsics"]
-            # self.CAMERA_IMU_TRANSFORM = config["camera_imu_transform"]
-
-    def get_camera_calibration_matrix(self):
-        """
-        Get camera intrinsics and its inverse as a tensors.
-        Returns:
-            K: Camera intrinsic matrix.
-            K_inv: Inverse of the camera intrinsic matrix.
-        """
-
-        fx = self.CAMERA_INTRINSICS["fx"]
-        fy = self.CAMERA_INTRINSICS["fy"]
-        cx = self.CAMERA_INTRINSICS["cx"]
-        cy = self.CAMERA_INTRINSICS["cy"]
-
-        K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
-        K_inv = np.linalg.inv(K)
-        return K, K_inv
-
 class CameraCalibration:
     def __init__(self, image_path_pattern, grid_size=(8, 6)):
         objp = prepare_object_points(grid_size)
@@ -122,22 +102,43 @@ class CameraCalibration:
         return mean_error / len(self.objpoints)
     
 class MetricCalibration:
-    def __init__(self, camera_matrix, image_path_pattern):
-        grid_size=(8, 6)
-        objp = prepare_object_points(grid_size)
-        objpoints, imgpoints_list = \
-            find_image_points(grid_size, objp, image_path_pattern)
-        camera_matrix = torch.tensor(camera_matrix)
-        objpoints = torch.tensor(objpoints)
-        imgpoints = torch.tensor(imgpoints_list)
-        imgpoints = imgpoints.squeeze(-2)
+    def __init__(self, camera_intrinsic_matrix, cb_rows, cb_cols, image_path_pattern):
+        grid_size = (cb_rows, cb_cols)
+        print("MetricCalibration()")
+        print(" Loading Images: ", image_path_pattern)
+        images = glob.glob(image_path_pattern)
+        criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
+        model_chessboard = compute_model_chessboard(cb_rows, cb_cols, 0, center_at_zero=True)
 
-        # for image_cb in imgpoints_list:self.
-        #     H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
-        #     homography = HomographyFromChessboardImage(image_cb, 8, 6)
-        #     print(homography)
+        corner_list = []
+        h_list = []
+        for fname in images:
+            img = cv.imread(fname)
+            gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+            ret, corners = cv.findChessboardCorners(gray, grid_size, None)
 
-        print(camera_matrix.shape, " ", objpoints.shape, " ", imgpoints.shape)
+            if ret:
+                corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+                H, mask = cv2.findHomography(corners2, model_chessboard, cv2.RANSAC)
+                corner_list.append(corners2)
+                h_list.append(H)
+                print("GOOD")
+            else:
+                print("BAD")
+        # grid_size=(8, 6)
+        # objp = prepare_object_points(grid_size)
+        # objpoints, imgpoints_list = \
+        #     find_image_points(grid_size, objp, image_path_pattern)
+        # camera_intrinsic_matrix = torch.tensor(camera_intrinsic_matrix)
+        # imgpoints = torch.tensor(imgpoints_list)
+        # imgpoints = imgpoints.squeeze(-2)
+
+        # # for image_cb in imgpoints_list:self.
+        # #     H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
+        # #     homography = HomographyFromChessboardImage(image_cb, 8, 6)
+        # #     print(homography)
+
+        # print(camera_matrix.shape, " ", objpoints.shape, " ", imgpoints.shape)
 
 # def render3DPoints(in_pts):
         
@@ -156,4 +157,14 @@ if __name__ == "__main__":
     #print("Translation vectors:\n", results["translation_vectors"])
     print("Mean error:\n", calibration_values["mean_error"])
 
-    metric_calibration = MetricCalibration(calibration_values["camera_matrix"], image_path_pattern)
+    metric_calibration = MetricCalibration(calibration_values["camera_matrix"], 8, 6, image_path_pattern)
+
+    # viewer = PointCloudViewer()
+    # n_boards = 1
+    # n_pts = 1000
+    # initial_points = torch.rand((n_boards, n_pts, 3)) * 2.0 - 1.0  # Points in [-1,1]^3
+    # viewer.set_points(initial_points)  
+    # while viewer.main_loop_iteration():
+    #     # Here you can add additional processing if needed
+    #     # For example, updating points dynamically
+    #     time.sleep(0.016)  # Approximately 60 FPS

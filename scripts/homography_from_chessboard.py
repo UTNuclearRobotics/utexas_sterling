@@ -1,11 +1,12 @@
 import cv2
 import numpy as np
 
-from cam_calibration import CameraIntrinsics
+from camera_intrinsics import CameraIntrinsics
+from homography_util import *
 from utils import *
 
 class HomographyFromChessboardImage():
-    def __init__(self, image, cb_rows, cb_cols):
+    def __init__(self, image, cb_rows, cb_cols, center_at_zero=False):
         # super().__init__(torch.eye(3))
         self.image = image
         self.cb_rows = cb_rows
@@ -19,11 +20,11 @@ class HomographyFromChessboardImage():
         self.cb_tile_width, vanishing_point = self.chessboard_tile_width()
 
         # Get model chessboard corners, cartesian NX2
-        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=False)
+        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=center_at_zero)
 
         self.H, mask = cv2.findHomography(self.corners, self.model_chessboard, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        self.RT = self.decompose_homography(self.H, self.K)
+        self.RT = decompose_homography(self.H, self.K)
 
         # Transform model chessboard points to image points
         self.transformed_model_corners = self.transform_points(
@@ -108,51 +109,6 @@ class HomographyFromChessboardImage():
         hom_points = cart_to_hom(points)
         transformed_points = H @ hom_points
         return hom_to_cart(transformed_points)
-
-    def decompose_homography(self, H, K):
-        """
-        Decomposes a homography matrix H into a 4x4 transformation matrix RT
-        using OpenCV's decomposeHomographyMat and selecting the valid decomposition.
-
-        Args:
-            H (np.ndarray): 3x3 homography matrix.
-            K (np.ndarray): 3x3 intrinsic camera matrix.
-
-        Returns:
-            np.ndarray: 4x4 transformation matrix RT combining rotation and translation.
-        """
-        # Normalize the homography using the intrinsic matrix
-        K_inv = np.linalg.inv(K)
-        normalized_H = K_inv @ H
-
-        # Decompose the homography matrix
-        num_decompositions, rotations, translations, normals = cv2.decomposeHomographyMat(normalized_H, K)
-
-        # Logic to select the correct decomposition
-        best_index = -1
-        max_z_translation = -np.inf  # Example criterion: largest positive translation in Z-axis
-        for i in range(num_decompositions):
-            # Ensure the plane normal points towards the camera (positive Z-axis)
-            normal_z = normals[i][2]
-            translation_z = translations[i][2]
-
-            if normal_z > 0 and translation_z > max_z_translation:
-                max_z_translation = translation_z
-                best_index = i
-
-        if best_index == -1:
-            raise ValueError("No valid decomposition found.")
-
-        # Use the selected decomposition
-        R = rotations[best_index]
-        t = translations[best_index].flatten()
-
-        # Create the 4x4 transformation matrix
-        RT = np.eye(4, dtype=np.float32)
-        RT[:3, :3] = R
-        RT[:3, 3] = t
-
-        return RT
 
     def plot_BEV_chessboard(self):
         image = self.image.copy()

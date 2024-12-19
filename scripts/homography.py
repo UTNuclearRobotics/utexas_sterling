@@ -6,7 +6,7 @@ import pickle
 import cv2
 import numpy as np
 import torch
-from cam_calibration import CameraIntrinsics
+from camera_intrinsics import CameraIntrinsics
 from homography_from_chessboard import HomographyFromChessboardImage
 from homography_util import *
 from tqdm import tqdm
