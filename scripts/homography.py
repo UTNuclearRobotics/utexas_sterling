@@ -7,26 +7,10 @@ import cv2
 import numpy as np
 import torch
 from cam_calibration import CameraIntrinsics
+from homography_from_chessboard import HomographyFromChessboardImage
 from homography_util import *
 from tqdm import tqdm
 from utils import *
-
-
-def compute_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
-    model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
-    midpoint_row = rows / 2
-    midpoint_col = cols / 2
-    for row in range(0, rows):
-        for col in range(0, cols):
-            if center_at_zero:
-                model_chessboard[row * cols + col, 0] = (col + 0.5) - midpoint_col
-                model_chessboard[row * cols + col, 1] = (row + 0.5) - midpoint_row
-            else:
-                model_chessboard[row * cols + col, 0] = col
-                model_chessboard[row * cols + col, 1] = row
-    model_chessboard = model_chessboard * scalar_factor
-    return model_chessboard
-
 
 class Homography:
     def __init__(self, homography_tensor):
