@@ -5,8 +5,9 @@ from camera_intrinsics import CameraIntrinsics
 from homography_utils import *
 from utils import *
 
-class HomographyFromChessboardImage():
-    def __init__(self, image, cb_rows, cb_cols, center_at_zero=False):
+
+class HomographyFromChessboardImage:
+    def __init__(self, image, cb_rows, cb_cols):
         # super().__init__(torch.eye(3))
         self.image = image
         self.cb_rows = cb_rows
@@ -17,37 +18,63 @@ class HomographyFromChessboardImage():
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
         self.corners = corners.reshape(-1, 2)
-        self.cb_tile_width = self.chessboard_tile_width()
+        self.cb_tile_width = int(self.chessboard_tile_width())
 
         # Get model chessboard corners, cartesian NX2
-        self.model_chessboard = compute_2d_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=center_at_zero)
-        self.model_chessboard_3d = compute_3d_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=center_at_zero)
+        model_chessboard_2d = compute_model_chessboard_2d(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=False)
 
-        self.H, mask = cv2.findHomography(self.corners, self.model_chessboard, cv2.RANSAC)
+        self.H, mask = cv2.findHomography(self.corners, model_chessboard_2d, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
         self.RT = decompose_homography(self.H, self.K)
 
-        # Transform model chessboard points to image points
-        self.transformed_model_corners = self.transform_points(
-            self.model_chessboard.T, self.get_homography_model_to_image()
-        )
-        self.transformed_model_corners = self.transformed_model_corners.T.reshape(-1, 2).astype(np.float32)
-        # print("transformed_model_corners:   ", transformed_model_corners)
+        self.validate_chessboard_2d(model_chessboard_2d)
+
+        # Transform model chessboard 3D points to image points
+        model_chessboard_3d = compute_model_chessboard_3d(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=False)
+        self.validate_chessboard_3d(model_chessboard_3d)
+
+    def validate_chessboard_2d(self, model_chessboard_2d):
+        H = self.get_homography_model_to_image()
+        # Transform model chessboard 2D points to image points
+        self.transformed_model_chessboard_2d = self.transform_points(model_chessboard_2d.T, H)
+        self.transformed_model_chessboard_2d = self.transformed_model_chessboard_2d.T.reshape(-1, 2).astype(np.float32)
+        # print("transformed_model_chessboard_2d:   ", transformed_model_chessboard_2d)
         # print("corners:   ", corners)
-        # print("Diff:    ", transformed_model_corners - corners)
-        
-        # TODO: Scale the chessboard corners to get BEV of entire image
-        # Use camera intrinsics?
-        self.scaled_corners = self.corners
-        
+        # print("Diff:    ", transformed_model_chessboard_2d - corners)
+
+    def validate_chessboard_3d(self, model_chessboard_3d):
+        RT = self.get_rigid_transform()
+        K = self.get_camera_intrinsics()
+        # print("RT:   ", RT)
+        # print("K:   ", K)
+        print("model_chessboard_3d:   ", model_chessboard_3d)
+
+        # Apply the rigid transformation
+        transformed_model_chessboard_3d = (RT @ model_chessboard_3d.T).T
+        print("applied rigid transform:   ", transformed_model_chessboard_3d)
+
+        # Project the 3D points onto the 2D image plane
+        projected_points_hom = (K @ transformed_model_chessboard_3d[:, :3].T).T
+        print("projected_points_hom:   ", projected_points_hom)
+
+        # Convert from homogeneous to Cartesian coordinates
+        projected_points_2D = projected_points_hom[:, :2] / projected_points_hom[:, 2, np.newaxis]
+        # projected_points_2D = hom_to_cart(projected_points_hom.T).T
+        print("projected_points_2D:   ", projected_points_2D)
+
+        self.transformed_model_chessboard_3d = projected_points_2D
+
     def get_homography_image_to_model(self):
         return self.H
 
     def get_homography_model_to_image(self):
         return np.linalg.inv(self.H)
 
-    def get_rotation_translation_matrix(self):
+    def get_rigid_transform(self):
         return self.RT
+
+    def get_camera_intrinsics(self):
+        return self.K
 
     def chessboard_tile_width(self):
         """Calculate the maximum distance between two consecutive corners in each row of the chessboard."""
@@ -79,11 +106,11 @@ class HomographyFromChessboardImage():
                     rend_image = draw_points(self.image, self.corners, color=(255, 0, 0))
                     cv2.setWindowTitle("Chessboard", "Original corners")
                 case 1:
-                    rend_image = draw_points(self.image, self.transformed_model_corners, color=(0, 255, 0))
-                    cv2.setWindowTitle("Chessboard", "Transformed model corners")
+                    rend_image = draw_points(self.image, self.transformed_model_chessboard_2d, color=(0, 255, 0))
+                    cv2.setWindowTitle("Chessboard", "Transformed 2D model chessboard corners")
                 case 2:
-                    rend_image = draw_points(self.image, self.scaled_corners, color=(0, 0, 255))
-                    cv2.setWindowTitle("Chessboard", "Scaled corners")
+                    rend_image = draw_points(self.image, self.transformed_model_chessboard_3d, color=(0, 0, 255))
+                    cv2.setWindowTitle("Chessboard", "Transformed 3D model chessboard corners")
             counter += 1
             cv2.imshow("Chessboard", rend_image)
             key = cv2.waitKey(0)
@@ -109,6 +136,7 @@ class HomographyFromChessboardImage():
         exit(0)
 
     def plot_BEV_full(self, image, K, H):
+        return
         # TODO: Get BEV of entire image
         image = image.copy()
         height, width = image.shape[:2]

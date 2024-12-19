@@ -108,7 +108,7 @@ class MetricCalibration:
         print(" Loading Images: ", image_path_pattern)
         images = glob.glob(image_path_pattern)
         criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
-        model_chessboard = compute_2d_model_chessboard(cb_rows, cb_cols, 0, center_at_zero=True)
+        model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 0, center_at_zero=True)
 
         corner_list = []
         h_list = []

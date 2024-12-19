@@ -213,7 +213,7 @@ if __name__ == "__main__":
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
     H = chessboard_homography.get_homography_image_to_model()
-    RT = chessboard_homography.get_rotation_translation_matrix()
+    RT = chessboard_homography.get_rigid_transform()
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(

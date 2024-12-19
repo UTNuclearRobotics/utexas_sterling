@@ -8,7 +8,7 @@ from termcolor import cprint
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-def compute_2d_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
+def compute_model_chessboard_2d(rows, cols, scalar_factor=20, center_at_zero=False):
     model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
     midpoint_row = rows / 2
     midpoint_col = cols / 2
@@ -23,12 +23,12 @@ def compute_2d_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=Fal
     model_chessboard = model_chessboard * scalar_factor
     return model_chessboard
 
-def compute_3d_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
+def compute_model_chessboard_3d(rows, cols, scalar_factor=20, center_at_zero=False):
     """
     Generate 3D coordinates of the chessboard corners.
     Since chessboard lies on the plane z=0, augment the 2D points with 0 z-coordinate.
     """
-    model_chessboard = compute_2d_model_chessboard(rows, cols, scalar_factor, center_at_zero)
+    model_chessboard = compute_model_chessboard_2d(rows, cols, scalar_factor, center_at_zero)
     # Convert to 3D points by adding a z-coordinate of 0
     model_chessboard_3D = np.hstack((model_chessboard, np.zeros((model_chessboard.shape[0], 1))))
     # Add homogeneous coordinate
