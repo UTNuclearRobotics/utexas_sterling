@@ -18,7 +18,23 @@ class Homography:
     def __init__(self, homography_tensor):
         self.homography_tensor = homography_tensor
 
+'''
+Find homography to chessboard
+Get rigid transform to chessboard
+Transform a 3D version of the model chessboard such that its projection lies
+    on top of that of the imaged chessboard
 
+    1) Find rigid transform, as per decompose_...
+    2) Make a 3D version of your model chessboard (x, y, 0, 1)
+    3) Transform the 3D chessboard as per the rigid transform from the decomposition.
+    4) Project the 3D chessboard to 2D as per K [Identity Projection]
+    5) If correct, the 2D projected points will lie on top of each other
+        (image, as per homography, as per 3D transform)
+    6) Transform a second model chessboard such that it takes up as much of the image as possible
+        Rotation and translation relative to the RT from the homography decomposition.
+        Keep it co-planar, you want to SCALE, ROTATE, and TRANSLATE IN 2D
+    7) What's the best way to do this? Use a numerical optimizer to find those terms. Argmax such that..
+'''
 class FiddlyBEVHomography:
     def __init__(self, in_cb_image, cb_rows, cb_cols):
         self.in_cb_image = in_cb_image
