@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 from camera_intrinsics import CameraIntrinsics
-from homography_util import *
+from homography_utils import *
 from utils import *
 
 class HomographyFromChessboardImage():
@@ -17,10 +17,11 @@ class HomographyFromChessboardImage():
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
         self.corners = corners.reshape(-1, 2)
-        self.cb_tile_width, vanishing_point = self.chessboard_tile_width()
+        self.cb_tile_width = self.chessboard_tile_width()
 
         # Get model chessboard corners, cartesian NX2
-        self.model_chessboard = compute_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=center_at_zero)
+        self.model_chessboard = compute_2d_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=center_at_zero)
+        self.model_chessboard_3d = compute_3d_model_chessboard(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=center_at_zero)
 
         self.H, mask = cv2.findHomography(self.corners, self.model_chessboard, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
@@ -36,7 +37,6 @@ class HomographyFromChessboardImage():
         # print("Diff:    ", transformed_model_corners - corners)
         
         # TODO: Scale the chessboard corners to get BEV of entire image
-        # Vanishing point?
         # Use camera intrinsics?
         self.scaled_corners = self.corners
         
@@ -66,20 +66,7 @@ class HomographyFromChessboardImage():
                 distance = np.linalg.norm(np.array(row[i]) - np.array(row[i + 1]))
                 cb_tile_width = max(cb_tile_width, distance)
 
-        # Fit lines to columns
-        columns = list(zip(*rows))
-        col_lines = []
-        for col in columns:
-            col = np.array(col)
-            [vx, vy, x0, y0] = cv2.fitLine(col, cv2.DIST_L2, 0, 0.01, 0.01)
-            col_lines.append((vx, vy, x0, y0))
-            slope = vy / vx
-            # print(f"Column: y = {slope} * (x - {x0}) + {y0}")
-
-        # Compute vanishing point for columns
-        vanishing_point = compute_intersection(col_lines[0], col_lines[-1])
-
-        return cb_tile_width, vanishing_point
+        return cb_tile_width
 
     def validate_homography(self):
         keepRunning = True

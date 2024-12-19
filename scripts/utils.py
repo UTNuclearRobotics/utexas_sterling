@@ -8,7 +8,7 @@ from termcolor import cprint
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-def compute_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
+def compute_2d_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
     model_chessboard = np.zeros((rows * cols, 2), dtype=np.float32)
     midpoint_row = rows / 2
     midpoint_col = cols / 2
@@ -22,6 +22,18 @@ def compute_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False)
                 model_chessboard[row * cols + col, 1] = row
     model_chessboard = model_chessboard * scalar_factor
     return model_chessboard
+
+def compute_3d_model_chessboard(rows, cols, scalar_factor=20, center_at_zero=False):
+    """
+    Generate 3D coordinates of the chessboard corners.
+    Since chessboard lies on the plane z=0, augment the 2D points with 0 z-coordinate.
+    """
+    model_chessboard = compute_2d_model_chessboard(rows, cols, scalar_factor, center_at_zero)
+    # Convert to 3D points by adding a z-coordinate of 0
+    model_chessboard_3D = np.hstack((model_chessboard, np.zeros((model_chessboard.shape[0], 1))))
+    # Add homogeneous coordinate
+    model_chessboard_3D_hom = np.hstack((model_chessboard_3D, np.ones((model_chessboard_3D.shape[0], 1))))
+    return model_chessboard_3D_hom
 
 def load_dataset():
     dataset_dir = os.path.join(script_dir, "../datasets/")
@@ -103,23 +115,3 @@ def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
         cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
     
     return output_image
-
-# Function to compute intersection of two lines
-def compute_intersection(line1, line2):
-    vx1, vy1, x01, y01 = line1
-    vx2, vy2, x02, y02 = line2
-
-    a1 = vy1
-    b1 = -vx1
-    c1 = vy1 * x01 - vx1 * y01
-
-    a2 = vy2
-    b2 = -vx2
-    c2 = vy2 * x02 - vx2 * y02
-
-    D = a1 * b2 - a2 * b1
-    if D == 0:
-        return None  # Lines are parallel
-    x = (b1 * c2 - b2 * c1) / D
-    y = (c1 * a2 - c2 * a1) / D
-    return np.array([x, y])
