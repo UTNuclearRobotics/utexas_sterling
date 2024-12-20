@@ -102,16 +102,19 @@ class CameraCalibration:
         return mean_error / len(self.objpoints)
     
 class MetricCalibration:
-    def __init__(self, camera_intrinsic_matrix, cb_rows, cb_cols, image_path_pattern):
+    def __init__(self, K, cb_rows, cb_cols, image_path_pattern):
         grid_size = (cb_rows, cb_cols)
         print("MetricCalibration()")
         print(" Loading Images: ", image_path_pattern)
         images = glob.glob(image_path_pattern)
         criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
-        model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 0, center_at_zero=True)
+        model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 1, center_at_zero=True)
+
+        K_inv = np.linalg.inv(K)
 
         corner_list = []
         h_list = []
+        h_euc_list = []
         for fname in images:
             img = cv.imread(fname)
             gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
@@ -119,12 +122,14 @@ class MetricCalibration:
 
             if ret:
                 corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-                H, mask = cv2.findHomography(corners2, model_chessboard, cv2.RANSAC)
+                H, mask = cv2.findHomography(model_chessboard, corners2, cv2.RANSAC)
                 corner_list.append(corners2)
                 h_list.append(H)
                 print("GOOD")
             else:
                 print("BAD")
+        
+
         # grid_size=(8, 6)
         # objp = prepare_object_points(grid_size)
         # objpoints, imgpoints_list = \

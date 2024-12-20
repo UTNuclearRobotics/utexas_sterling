@@ -212,7 +212,7 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    H = chessboard_homography.get_homography_image_to_model()
+    H = np.linalg.inv(chessboard_homography.H)  #get_homography_image_to_model()
     RT = chessboard_homography.get_rigid_transform()
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 

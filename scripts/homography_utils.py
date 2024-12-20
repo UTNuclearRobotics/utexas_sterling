@@ -1,5 +1,22 @@
 import cv2
 import numpy as np
+from scipy.spatial.transform import Rotation as R
+
+def rotation_matrix_to_euler_angles_scipy(R_matrix, order='xyz', degrees=True):
+    """
+    Convert a rotation matrix to Euler angles using SciPy.
+
+    Args:
+        R_matrix (numpy.ndarray): A 3x3 rotation matrix.
+        order (str): The order of axes for Euler angles (default 'xyz').
+        degrees (bool): Whether to return angles in degrees (default True).
+
+    Returns:
+        numpy.ndarray: Euler angles.
+    """
+    rotation = R.from_matrix(R_matrix)
+    euler_angles = rotation.as_euler(order, degrees=degrees)
+    return euler_angles
 
 def decompose_homography(H, K):
     """
@@ -27,6 +44,8 @@ def decompose_homography(H, K):
         # Ensure the plane normal points towards the camera (positive Z-axis)
         normal_z = normals[i][2]
         translation_z = translations[i][2]
+        # print("normal_z:    ", normal_z)
+        # print("translation_z:    ", translation_z)
 
         if normal_z > 0 and translation_z > max_z_translation:
             max_z_translation = translation_z
@@ -38,6 +57,9 @@ def decompose_homography(H, K):
     # Use the selected decomposition
     R = rotations[best_index]
     t = translations[best_index].flatten()
+
+    angs = rotation_matrix_to_euler_angles_scipy(R)
+    print("angs:    ", angs)
 
     # Create the 4x4 transformation matrix
     RT = np.eye(4, dtype=np.float32)
