@@ -66,4 +66,4 @@ def decompose_homography(H, K):
     RT[:3, :3] = R
     RT[:3, 3] = t
 
-    return RT
+    return np.linalg.inv(RT)

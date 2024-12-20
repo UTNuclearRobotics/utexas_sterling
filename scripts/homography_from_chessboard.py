@@ -60,8 +60,8 @@ class HomographyFromChessboardImage:
         print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d)
 
 
-        # # Project the 3D points onto the 2D image plane
-        # projected_points_hom = (K @ transformed_model_chessboard_3d[:, :3].T).T
+        # # # Project the 3D points onto the 2D image plane
+        # projected_points_hom = (K @ self.transformed_model_chessboard_3d[:, :3].T).T
         # print("projected_points_hom:   ", projected_points_hom)
 
         # # Convert from homogeneous to Cartesian coordinates
@@ -115,7 +115,9 @@ class HomographyFromChessboardImage:
                     rend_image = draw_points(self.image, self.transformed_model_chessboard_2d, color=(0, 255, 0))
                     cv2.setWindowTitle("Chessboard", "Transformed 2D model chessboard corners")
                 case 2:
-                    print("case 2:")
+                    # print("case 2:")
+                    rend_image = draw_points(self.image, self.model_cb_3d_to_2d.T, color=(0, 255, 0))
+                    cv2.setWindowTitle("Chessboard", "Transformed 3D model chessboard corners")
                     # viewer = PointCloudViewer()
                     # point_cloud_tensor = torch.tensor(self.transformed_model_chessboard_3d).transpose(0,1)
                     # point_cloud_tensor = point_cloud_tensor / point_cloud_tensor[-1]
