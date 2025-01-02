@@ -50,11 +50,12 @@ class HomographyFromChessboardImage:
         print("model_chessboard_3d:   ", model_chessboard_3d)
 
         # Apply the rigid transformation
-        self.transformed_model_chessboard_3d = RT @ model_chessboard_3d.T
-        print("applied rigid transform:   ", self.transformed_model_chessboard_3d)
+        self.IEK = (K @ RT[:3] @ model_chessboard_3d.T)
+        #self.transformed_model_chessboard_3d = (RT @ model_chessboard_3d.T)
+        #print("applied rigid transform:   ", self.transformed_model_chessboard_3d)
         ideal_camera = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
-        P = K @ ideal_camera
-        self.model_cb_3d_to_2d = hom_to_cart(P @ self.transformed_model_chessboard_3d)
+        #P = K @ ideal_camera
+        self.model_cb_3d_to_2d = hom_to_cart(self.IEK)
         print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d)
 
     def get_rigid_transform(self):
