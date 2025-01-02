@@ -1,10 +1,8 @@
 import cv2
 import numpy as np
-import time
 
 from camera_intrinsics import CameraIntrinsics
 from homography_utils import *
-from point_cloud_viewer import PointCloudViewer
 from utils import *
 
 
@@ -52,30 +50,12 @@ class HomographyFromChessboardImage:
         print("model_chessboard_3d:   ", model_chessboard_3d)
 
         # Apply the rigid transformation
-        self.transformed_model_chessboard_3d = (RT @ model_chessboard_3d.T)
+        self.transformed_model_chessboard_3d = RT @ model_chessboard_3d.T
         print("applied rigid transform:   ", self.transformed_model_chessboard_3d)
         ideal_camera = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
         P = K @ ideal_camera
         self.model_cb_3d_to_2d = hom_to_cart(P @ self.transformed_model_chessboard_3d)
         print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d)
-
-
-        # # # Project the 3D points onto the 2D image plane
-        # projected_points_hom = (K @ self.transformed_model_chessboard_3d[:, :3].T).T
-        # print("projected_points_hom:   ", projected_points_hom)
-
-        # # Convert from homogeneous to Cartesian coordinates
-        # projected_points_2D = projected_points_hom[:, :2] / projected_points_hom[:, 2, np.newaxis]
-        # # projected_points_2D = hom_to_cart(projected_points_hom.T).T
-        # print("projected_points_2D:   ", projected_points_2D)
-
-        # self.transformed_model_chessboard_3d = projected_points_2D
-
-    # def get_homography_image_to_model(self):
-    #     return self.H
-
-    # def get_homography_model_to_image(self):
-    #     return np.linalg.inv(self.H)
 
     def get_rigid_transform(self):
         return self.RT
@@ -115,22 +95,8 @@ class HomographyFromChessboardImage:
                     rend_image = draw_points(self.image, self.transformed_model_chessboard_2d, color=(0, 255, 0))
                     cv2.setWindowTitle("Chessboard", "Transformed 2D model chessboard corners")
                 case 2:
-                    # print("case 2:")
-                    rend_image = draw_points(self.image, self.model_cb_3d_to_2d.T, color=(0, 255, 0))
+                    rend_image = draw_points(self.image, self.model_cb_3d_to_2d.T, color=(0, 0, 255))
                     cv2.setWindowTitle("Chessboard", "Transformed 3D model chessboard corners")
-                    # viewer = PointCloudViewer()
-                    # point_cloud_tensor = torch.tensor(self.transformed_model_chessboard_3d).transpose(0,1)
-                    # point_cloud_tensor = point_cloud_tensor / point_cloud_tensor[-1]
-                    # point_cloud_tensor = point_cloud_tensor[:3].unsqueeze(0)
-                    # point_cloud_tensor = point_cloud_tensor.permute(0,2,1)
-                    # print("point_cloud_tensor:  ", point_cloud_tensor)
-                    # print(point_cloud_tensor.shape)
-                    # viewer.set_points(point_cloud_tensor)
-                    # while True:
-                    #     viewer.main_loop_iteration()
-                    #     time.sleep(0.016)
-                    # rend_image = draw_points(self.image, self.transformed_model_chessboard_3d, color=(0, 0, 255))
-                    # cv2.setWindowTitle("Chessboard", "Transformed 3D model chessboard corners")
             counter += 1
             cv2.imshow("Chessboard", rend_image)
             key = cv2.waitKey(0)
@@ -146,9 +112,12 @@ class HomographyFromChessboardImage:
 
     def plot_BEV_chessboard(self):
         image = self.image.copy()
-        H = self.get_homography_image_to_model()
+        model_chessboard_2d_centered = compute_model_chessboard_2d(
+            self.cb_rows, self.cb_cols, self.cb_tile_width, center_at_zero=False
+        )
+        H, mask = cv2.findHomography(model_chessboard_2d_centered, self.corners, cv2.RANSAC)
         dimensions = (int(self.cb_tile_width * (self.cb_cols - 1)), int(self.cb_tile_width * (self.cb_rows - 1)))
-        warped_image = cv2.warpPerspective(image, H, dsize=dimensions)
+        warped_image = cv2.warpPerspective(image, np.linalg.inv(H), dsize=dimensions)
 
         cv2.imshow("BEV", warped_image)
         cv2.waitKey(0)
