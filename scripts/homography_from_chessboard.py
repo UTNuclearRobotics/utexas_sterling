@@ -4,6 +4,7 @@ import numpy as np
 from camera_intrinsics import CameraIntrinsics
 from homography_utils import *
 from utils import *
+from scipy.optimize import minimize
 
 
 class HomographyFromChessboardImage:
@@ -114,22 +115,85 @@ class HomographyFromChessboardImage:
 
     def plot_BEV_full(self):
         """
-        Optimize a new 3d rectangle (4 corners) to fit full image, maximum possible seen
-        Non-linear optimizer in Python
-        Functions to pass:
-        - generate a rectangle in 3D, centered at 0, rotated a little
-        - x1, y1, and theta to take up as much of the image as possible
+        Notes:
+            Optimize a new 3d rectangle (4 corners) to fit full image, maximum possible seen
+            Non-linear optimizer in Python
+            Functions to pass:
+            - generate a rectangle in 3D, centered at 0, rotated a little
+            - x1, y1, and theta to take up as much of the image as possible
         """
-        model_rec_3d_hom = compute_model_rectangle_3d_hom(0, 50)
+
+        def objective(params, RT, K, image):
+            """
+            params: [theta, scalar]
+            Returns the absolute difference between the rectangle's projected width
+            and image_width.
+            """
+            theta, scalar = params
+            image_height, image_width = image.shape[:2]
+
+            # 1) Build your 3D rectangle (homogeneous). You may need to pass theta in:
+            model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar)
+
+            # 2) Apply RT & K
+            model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
+
+            # 3) Convert to 2D
+            model_rect_3d_to_2d = hom_to_cart(model_rect_3d_applied_RT)
+
+            # Check bounds
+            # xs, ys = model_rect_3d_to_2d[:, 0], model_rect_3d_to_2d[:, 1]
+            # if np.any(xs < 0) or np.any(xs > image_width) or np.any(ys < 0) or np.any(ys > image_height):
+            # # Return large penalty if out of frame
+            #     return 1e6
+
+            # 4) Measure width of bottom edge
+            bottom_points = model_rect_3d_to_2d.T[-2:]  # last two corners
+            width = np.linalg.norm(bottom_points[0] - bottom_points[1])
+
+            # Return difference from desired image width
+            return abs(width - image_width)
+
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
 
-        # Apply the rigid transformation
-        model_rec_3d_applied_RT = K @ RT[:3] @ model_rec_3d_hom.T
-        model_rect_3d_to_2d = hom_to_cart(model_rec_3d_applied_RT)
+        result = minimize(
+            objective,
+            x0=(0.0, 50.0),  # [theta, scalar]
+            args=(RT, K, self.image),
+            method="Nelder-Mead",
+        )
+        theta, scalar = result.x
+        print(f"Theta: {theta}, Scalar: {scalar}")
 
-        rend_image = draw_points(self.image, model_rect_3d_to_2d.T, color=(255, 255, 0))
-        cv2.imshow("Chessboard", rend_image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # Show optimized rectangle corners on image
+        model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar)
+        model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
+        model_rect_3d_to_2d = hom_to_cart(model_rect_3d_applied_RT)
+
+        # Make top left or model rectangle (0,0) so you can view it in warp perspective
+        model_rect_2d = model_rect_3d_hom[:, :2]
+        model_rect_2d -= model_rect_2d.min(axis=0)
+
+        # Warp the image
+        H, mask = cv2.findHomography(model_rect_2d, model_rect_3d_to_2d.T, cv2.RANSAC)
+        image_height, image_width = self.image.shape[:2]
+        warped_image = cv2.warpPerspective(self.image, np.linalg.inv(H), dsize=(image_width, image_height))
+
+        keepRunning = True
+        counter = 0
+        cv2.namedWindow("Full BEV")
+        while keepRunning:
+            match counter % 2:
+                case 0:
+                    rend_image = draw_points(self.image, model_rect_3d_to_2d.T, color=(255, 255, 0))
+                    cv2.setWindowTitle("Full BEV", "Rectangle corners")
+                case 1:
+                    rend_image = warped_image
+                    cv2.setWindowTitle("Full BEV", "Warped perspective")
+            counter += 1
+            cv2.imshow("Full BEV", rend_image)
+            key = cv2.waitKey(0)
+            if key == 113:  # Hitting 'q' quits the program
+                keepRunning = False
         exit(0)
