@@ -35,6 +35,35 @@ def compute_model_chessboard_3d(rows, cols, scalar_factor=20, center_at_zero=Fal
     model_chessboard_3D_hom = np.hstack((model_chessboard_3D, np.ones((model_chessboard_3D.shape[0], 1))))
     return model_chessboard_3D_hom
 
+def compute_model_rectangle_3d_hom(theta=0, scalar_factor=1, center_at_zero=True):
+    """
+    Generate 3D coordinates of the rectangle corners.
+    Since rectangle lies on the plane z=0, augment the 2D points with 0 z-coordinate.
+    """
+    # Create 2D rectangle centered at 0
+    model_rectangle_2d = np.array([[0, 0], [4, 0], [4, 2], [0, 2]], dtype=np.float32)
+    if center_at_zero:
+        model_rectangle_2d[:, 0] -= np.mean(model_rectangle_2d[:, 0])
+        model_rectangle_2d[:, 1] -= np.mean(model_rectangle_2d[:, 1])
+        
+    # Rotate the rectangle around Z by theta
+    rot = np.array([
+        [np.cos(theta), -np.sin(theta)],
+        [np.sin(theta),  np.cos(theta)]
+    ])
+    model_rectangle_2d = model_rectangle_2d @ rot.T
+    
+    # Scale the rectangle by scalar_factor
+    model_rectangle_2d = model_rectangle_2d * scalar_factor
+    
+    # Convert to 3D points by adding a z-coordinate of 0
+    model_rectangle_3d = np.hstack((model_rectangle_2d, np.zeros((model_rectangle_2d.shape[0], 1))))
+    
+    # Add homogeneous coordinate
+    model_rectangle_3d_hom = np.hstack((model_rectangle_3d, np.ones((model_rectangle_3d.shape[0], 1))))
+
+    return model_rectangle_3d_hom
+
 def load_dataset():
     dataset_dir = os.path.join(script_dir, "../datasets/")
     dataset_file = "nrg_ahg_courtyard.pkl"

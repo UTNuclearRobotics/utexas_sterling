@@ -231,7 +231,6 @@ if __name__ == "__main__":
         case _ if args.bev:
             chessboard_homography.plot_BEV_chessboard()
         case _ if args.bev_full:
-            # TODO: Implement this case
             chessboard_homography.plot_BEV_full()
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)

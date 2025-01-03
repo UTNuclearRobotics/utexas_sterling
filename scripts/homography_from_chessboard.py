@@ -41,17 +41,9 @@ class HomographyFromChessboardImage:
     def validate_chessboard_3d(self, model_chessboard_3d):
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
-        
-        print("RT:   ", RT)
-        print("K:   ", K)
-        #print("model_chessboard_3d:   ", model_chessboard_3d)
-
-        # Apply the rigid transformation
-        self.IEK = (K @ RT[:3] @ model_chessboard_3d.T)
+        self.IEK = K @ RT[:3] @ model_chessboard_3d.T
         self.model_cb_3d_to_2d = hom_to_cart(self.IEK)
-        #print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d.reshape(-1,2))
         return self.model_cb_3d_to_2d
-
 
     def get_rigid_transform(self):
         return self.RT
@@ -120,52 +112,24 @@ class HomographyFromChessboardImage:
         cv2.destroyAllWindows()
         exit(0)
 
-    def plot_BEV_full(self, image, K, H):
-        return
-        # TODO: Get BEV of entire image
-        image = image.copy()
-        height, width = image.shape[:2]
+    def plot_BEV_full(self):
+        """
+        Optimize a new 3d rectangle (4 corners) to fit full image, maximum possible seen
+        Non-linear optimizer in Python
+        Functions to pass:
+        - generate a rectangle in 3D, centered at 0, rotated a little
+        - x1, y1, and theta to take up as much of the image as possible
+        """
+        model_rec_3d_hom = compute_model_rectangle_3d_hom(0, 50)
+        RT = self.get_rigid_transform()
+        K = self.get_camera_intrinsics()
 
-        # Define the corners of the original image
-        img_corners = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
-        # print("Image corners:   ", img_corners)
+        # Apply the rigid transformation
+        model_rec_3d_applied_RT = K @ RT[:3] @ model_rec_3d_hom.T
+        model_rect_3d_to_2d = hom_to_cart(model_rec_3d_applied_RT)
 
-        # Compute the transformed corners
-        # K_inv * RRT
-        inv_H = np.linalg.inv(H)
-        transformation_matrix = K @ inv_H
-        transformed_corners = cv2.perspectiveTransform(np.array([img_corners]), transformation_matrix)[0]
-        # print("Transformed image corners:   ", transformed_corners)
-
-        # Calculate the bounding box of the transformed corners
-        min_x = np.min(transformed_corners[:, 0])
-        max_x = np.max(transformed_corners[:, 0])
-        min_y = np.min(transformed_corners[:, 1])
-        max_y = np.max(transformed_corners[:, 1])
-        # print("Translated image corners:   ", translated_corners)
-
-        # Compute new dimensions
-        new_width = int(np.ceil(max_x - min_x))
-        new_height = int(np.ceil(max_y - min_y))
-
-        # Adjust the transformation matrix to account for translation
-        translation_matrix = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]], dtype=np.float32)
-
-        # Scale the translated corners to the desired width
-        translated_corners = cv2.perspectiveTransform(np.array([transformed_corners]), translation_matrix)[0]
-        scale_factor = width / new_width
-        scaled_corners = translated_corners * scale_factor
-
-        # Warp the image to get BEV
-        combined_matrix = translation_matrix @ transformation_matrix
-        warped_image = cv2.warpPerspective(image, transformation_matrix, dsize=(new_width, new_height))
-        # Print the warped image dimensions
-        warped_image = cv2.resize(warped_image, dsize=(width, int(new_height * (width / new_width))))
-        warped_image = cv2.resize(warped_image, (width, height))
-        cv2.polylines(warped_image, [scaled_corners.astype(int)], isClosed=True, color=(0, 255, 0), thickness=2)
-
-        # Display the result
-        cv2.imshow("Translated Corners", warped_image)
+        rend_image = draw_points(self.image, model_rect_3d_to_2d.T, color=(255, 255, 0))
+        cv2.imshow("Chessboard", rend_image)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         exit(0)
