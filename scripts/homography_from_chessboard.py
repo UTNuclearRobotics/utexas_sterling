@@ -29,9 +29,11 @@ class HomographyFromChessboardImage:
 
         self.validate_chessboard_2d(model_chessboard_2d)
 
+        print(self.corners)
+
         # Transform model chessboard 3D points to image points
         model_chessboard_3d = compute_model_chessboard_3d(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=True)
-        self.validate_chessboard_3d(model_chessboard_3d)
+        self.validate_chessboard_3d(model_chessboard_3d)        
 
     def validate_chessboard_2d(self, model_chessboard_2d):
         # H = self.get_homography_model_to_image()
@@ -45,6 +47,8 @@ class HomographyFromChessboardImage:
     def validate_chessboard_3d(self, model_chessboard_3d):
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
+
+        print(RT)
         print("RT:   ", RT)
         print("K:   ", K)
         print("model_chessboard_3d:   ", model_chessboard_3d)
@@ -57,6 +61,8 @@ class HomographyFromChessboardImage:
         #P = K @ ideal_camera
         self.model_cb_3d_to_2d = hom_to_cart(self.IEK)
         print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d)
+        return self.model_cb_3d_to_2d
+
 
     def get_rigid_transform(self):
         return self.RT

@@ -30,40 +30,27 @@ def decompose_homography(H, K):
     Returns:
         np.ndarray: 4x4 transformation matrix RT combining rotation and translation.
     """
-    # Normalize the homography using the intrinsic matrix
+
+    H = H.T
     K_inv = np.linalg.inv(K)
-    normalized_H = K_inv @ H
 
-    # Decompose the homography matrix
-    num_decompositions, rotations, translations, normals = cv2.decomposeHomographyMat(normalized_H, K)
+    # Normalize the first column of H to extract the scaling factor
+    L = 1 / np.linalg.norm(np.dot(K_inv, H[0]))
 
-    # Logic to select the correct decomposition
-    best_index = -1
-    max_z_translation = -np.inf  # Example criterion: largest positive translation in Z-axis
-    for i in range(num_decompositions):
-        # Ensure the plane normal points towards the camera (positive Z-axis)
-        normal_z = normals[i][2]
-        translation_z = translations[i][2]
-        # print("normal_z:    ", normal_z)
-        # print("translation_z:    ", translation_z)
+    h1 = H[0]
+    h2 = H[1]
+    h3 = H[2]
 
-        if normal_z > 0 and translation_z > max_z_translation:
-            max_z_translation = translation_z
-            best_index = i
+    # Compute the rotation vectors
+    r1 = L * np.dot(K_inv, H[0])
+    r2 = L * np.dot(K_inv, H[1])
+    r3 = np.cross(r1, r2)
 
-    if best_index == -1:
-        raise ValueError("No valid decomposition found.")
+    # Compute the translation vector
+    T = L * np.dot(K_inv, H[2]).reshape(3, 1)
 
-    # Use the selected decomposition
-    R = rotations[best_index]
-    t = translations[best_index].flatten()
+    # Combine rotation and translation into a single transformation matrix
+    R = np.stack((r1, r2, r3), axis=1)
+    RT = np.hstack((R, T))
 
-    angs = rotation_matrix_to_euler_angles_scipy(R)
-    print("angs:    ", angs)
-
-    # Create the 4x4 transformation matrix
-    RT = np.eye(4, dtype=np.float32)
-    RT[:3, :3] = R
-    RT[:3, 3] = t
-
-    return np.linalg.inv(RT)
+    return RT
