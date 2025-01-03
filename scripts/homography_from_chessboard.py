@@ -29,38 +29,27 @@ class HomographyFromChessboardImage:
 
         self.validate_chessboard_2d(model_chessboard_2d)
 
-        print(self.corners)
-
         # Transform model chessboard 3D points to image points
         model_chessboard_3d = compute_model_chessboard_3d(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=True)
-        self.validate_chessboard_3d(model_chessboard_3d)        
+        self.validate_chessboard_3d(model_chessboard_3d)
 
     def validate_chessboard_2d(self, model_chessboard_2d):
-        # H = self.get_homography_model_to_image()
         # Transform model chessboard 2D points to image points
         self.transformed_model_chessboard_2d = self.transform_points(model_chessboard_2d.T, self.H)
         self.transformed_model_chessboard_2d = self.transformed_model_chessboard_2d.T.reshape(-1, 2).astype(np.float32)
-        # print("transformed_model_chessboard_2d:   ", transformed_model_chessboard_2d)
-        # print("corners:   ", corners)
-        # print("Diff:    ", transformed_model_chessboard_2d - corners)
 
     def validate_chessboard_3d(self, model_chessboard_3d):
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
-
-        print(RT)
+        
         print("RT:   ", RT)
         print("K:   ", K)
-        print("model_chessboard_3d:   ", model_chessboard_3d)
+        #print("model_chessboard_3d:   ", model_chessboard_3d)
 
         # Apply the rigid transformation
         self.IEK = (K @ RT[:3] @ model_chessboard_3d.T)
-        #self.transformed_model_chessboard_3d = (RT @ model_chessboard_3d.T)
-        #print("applied rigid transform:   ", self.transformed_model_chessboard_3d)
-        ideal_camera = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
-        #P = K @ ideal_camera
         self.model_cb_3d_to_2d = hom_to_cart(self.IEK)
-        print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d)
+        #print("self.model_cb_3d_to_2d:  ", self.model_cb_3d_to_2d.reshape(-1,2))
         return self.model_cb_3d_to_2d
 
 
