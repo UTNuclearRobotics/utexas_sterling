@@ -100,7 +100,7 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
     #    RT = np.vstack([RT, np.array([0, 0, 0, 1])])
 
     plane_normal = np.array([0,0,1])
-    plane_distance = -0.1
+    plane_distance = 0.1
 
     # Loops through entire dataset
     for timestep in tqdm(range(start, start+ history_size), desc="Processing patches at timesteps"):
@@ -126,17 +126,33 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
 
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
-            print(past_rt)
+            #print(cur_rt)
+            #print(past_rt)
 
-            #1) Computer relative rotation and translation from past -> current
-            R_rel = cur_rt[:3, :3] @ past_rt[:3, :3].T
+            """
+
+            #1) Compute relative rotation and translation from past -> current
+            R_rel = cur_rt[:3, :3] @ past_rt[:3, :3]
             T_rel = cur_rt[:3, 3] - R_rel @ past_rt[:3, 3]
 
-            #2) Past -> current homography for the plan
-            H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
+            """
 
-            #3) Combine wiht your original H (cur -> patch)
+            #1) Compute relative rotation and translation from current -> past
+            R_rel = past_rt[:3, :3] @ cur_rt[:3, :3]
+            T_rel = past_rt[:3, 3] - R_rel @ cur_rt[:3, 3]
+
+
+            #TO DO: Need to incorporate metric calibration for scaling. 
+            #Dividing by 560 leads to patches on previous images, just not the same as current patch
+
+            T_test = T_rel / 560
+
+            #2) Past -> current homography for the plane
+            H_past2cur = compute_homography_from_rt(K, R_rel, T_test, plane_normal, plane_distance)
+
+            #3) Combine with your original H (cur -> patch)
             H_past2patch = H @ H_past2cur
+            print(H_past2patch)
 
             past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
             timestep_patches.append(past_patch)
@@ -223,7 +239,7 @@ if __name__ == "__main__":
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_ahg_courtyard_2/panther_ahg_courtyard_2.pkl")
+        os.path.join(script_dir, "../bags/panther_ahg_courtyard_0/panther_ahg_courtyard_0.pkl")
     )
 
     output_dimensions = (
@@ -241,7 +257,7 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 10
+    index = 100
     history_size = 10
     vicreg_data = ComputeVicRegData(H, K, RT, robot_data, history_size, patch_size=(128, 128), start = index)
 
