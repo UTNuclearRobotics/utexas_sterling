@@ -64,6 +64,30 @@ def compute_model_rectangle_3d_hom(theta=0, scalar_factor_x=1.0, scalar_factor_y
 
     return model_rectangle_3d_hom
 
+
+def compute_homography_from_rt(K, R, T, plane_normal, plane_distance):
+    """
+    Compute homography matrix from camera parameters.
+
+    Args:
+        K: Intrinsic matrix of the current camera.
+        K_prime: Intrinsic matrix of the past camera (assume identical if same camera).
+        R: Rotation matrix between current and past camera frames.
+        T: Translation vector between current and past camera frames.
+        plane_normal: Normal vector of the plane in world coordinates.
+        plane_distance: Distance of the plane from the camera origin.
+
+    Returns:
+        Homography matrix H.
+    """
+    # Compute the plane-induced term: T * plane_normal^T / plane_distance
+    plane_term = np.outer(T, plane_normal) / plane_distance
+
+    # Compute the full homography matrix
+    H = K @ (R - plane_term) @ np.linalg.inv(K)
+    return H
+
+
 def load_dataset():
     dataset_dir = os.path.join(script_dir, "../datasets/")
     dataset_file = "nrg_ahg_courtyard.pkl"

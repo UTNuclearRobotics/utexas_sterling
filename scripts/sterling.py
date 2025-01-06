@@ -46,9 +46,6 @@ class FiddlyBEVHomography:
         corners = corners.reshape(-1, 2)
 
 
-
-
-
 def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
     """
     Draws the corners of a patch on the original image using the given homography.
@@ -82,7 +79,7 @@ def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
     return image_with_corners
 
 
-def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 128)):
+def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 128), start=0):
     """
     Preprocesses the robot data to compute multiple viewpoints 
     of the same patch for each timestep.
@@ -98,24 +95,27 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
     """
     n_timesteps = robot_data.getNTimesteps()
     patches = []
+    
+    #if RT.shape == (3,4):
+    #    RT = np.vstack([RT, np.array([0, 0, 0, 1])])
+
+    plane_normal = np.array([0,0,1])
+    plane_distance = -0.1
 
     # Loops through entire dataset
-    for timestep in tqdm(range(history_size, history_size * 2), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(start, start+ history_size), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
-
         timestep_patches = []
 
         # Get current patch
-        cur_homography = RT[:3, [0, 1, 3]]
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
+        timestep_patches.append(cur_patch)
 
         # Draw the patch corners in the original image
-        # cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
-        # cv2.imshow("Current Patch Corners", cur_patch)
-        # cv2.waitKey(1)
-
-        timestep_patches.append(cur_patch)
+        #cur_image_with_corners = draw_patch_corners_on_image(cur_image, np.linalg.inv(cur_homography))
+        #cv2.imshow("Current Patch Corners", cur_patch)
+        #cv2.waitKey(1)
 
         # Return the image at the given timestep along with images from previous `history_size` timesteps
         for past_hist in range(1, history_size):
@@ -123,18 +123,24 @@ def ComputeVicRegData(H, K, RT, robot_data, history_size=10, patch_size=(128, 12
 
             # Get past image
             past_image = robot_data.getImageAtTimestep(past_timestep)
-            # cv2.imshow("Past image{past_hist}", past_image)
-            # cv2.waitKey(5)
 
             # Get homography from past image
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
-            cur_to_past_rt = np.linalg.inv(past_rt) @ cur_rt
-            cool_transform = cur_to_past_rt * RT
-            calibrated_hom_past = cool_transform[:3, [0, 1, 3]]
-            # print("Calibrated homography past matrix:   ", calibrated_hom_past)
+            print(past_rt)
 
-            past_patch = cv2.warpPerspective(past_image, K * calibrated_hom_past, dsize=patch_size)
+            #1) Computer relative rotation and translation from past -> current
+            R_rel = cur_rt[:3, :3] @ past_rt[:3, :3].T
+            T_rel = cur_rt[:3, 3] - R_rel @ past_rt[:3, 3]
+
+            #2) Past -> current homography for the plan
+            H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
+
+            #3) Combine wiht your original H (cur -> patch)
+            H_past2patch = H @ H_past2cur
+
+            past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
             timestep_patches.append(past_patch)
+            # print("Calibrated homography past matrix:   ", calibrated_hom_past)
 
         patches.append(timestep_patches)
 
@@ -217,7 +223,7 @@ if __name__ == "__main__":
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_ahg_courtyard_1/panther_ahg_courtyard_1.pkl")
+        os.path.join(script_dir, "../bags/panther_ahg_courtyard_2/panther_ahg_courtyard_2.pkl")
     )
 
     output_dimensions = (
@@ -235,13 +241,13 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
+    index = 10
     history_size = 10
-    vicreg_data = ComputeVicRegData(H, K, RT, robot_data, history_size, patch_size=(128, 128))
+    vicreg_data = ComputeVicRegData(H, K, RT, robot_data, history_size, patch_size=(128, 128), start = index)
 
     # Get the current image from robot_data
-    index = 0
     current_image = robot_data.getImageAtTimestep(index + history_size)
-    patch_images = stitch_patches_in_grid(vicreg_data[index])
+    patch_images = stitch_patches_in_grid(vicreg_data[0])
 
     cv2.imshow("Original Image", current_image)
     cv2.imshow("Patches Grid", patch_images)

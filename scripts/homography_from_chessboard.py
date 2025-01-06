@@ -174,7 +174,7 @@ class HomographyFromChessboardImage:
         model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
         # Align rectangle with the bottom of the image
-        #model_rect_2d[1] -= model_rect_2d[1].max() - (self.image.shape[0] - 1)
+        model_rect_2d[1] -= model_rect_2d[1].max() - (self.image.shape[0] - 1)
 
         # Adjust rectangle for warp perspective
         src_points = model_rect_2d.T[:, :2]
