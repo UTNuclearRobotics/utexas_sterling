@@ -4,7 +4,7 @@ import numpy as np
 from camera_intrinsics import CameraIntrinsics
 from homography_utils import *
 from utils import *
-from scipy.optimize import minimize
+from scipy.optimize import minimize, differential_evolution
 
 
 class HomographyFromChessboardImage:
@@ -125,53 +125,53 @@ class HomographyFromChessboardImage:
 
         def objective(params, RT, K, image):
             """
-            params: [theta, scalar]
-            Returns the absolute difference between the rectangle's projected width
-            and image_width.
+            Objective function to minimize the black space and maximize the fit.
             """
-            theta, scalar = params
+            theta, scalar_x, scalar_y = params
             image_height, image_width = image.shape[:2]
 
-            # 1) Build your 3D rectangle (homogeneous). You may need to pass theta in:
-            model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar)
+            # Build the 3D rectangle
+            model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar_x, scalar_y)
 
-            # 2) Apply RT & K
+            # Apply transformations
             model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
 
-            # 3) Convert to 2D
-            model_rect_3d_to_2d = hom_to_cart(model_rect_3d_applied_RT)
+            # Convert to 2D
+            model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
             # Check bounds
-            # xs, ys = model_rect_3d_to_2d[:, 0], model_rect_3d_to_2d[:, 1]
-            # if np.any(xs < 0) or np.any(xs > image_width) or np.any(ys < 0) or np.any(ys > image_height):
-            # # Return large penalty if out of frame
-            #     return 1e6
+            xs, ys = model_rect_2d[0], model_rect_2d[1]
+            if np.any(xs < 0) or np.any(xs > image_width) or np.any(ys < 0) or np.any(ys > image_height):
+                return 1e6  # Large penalty if out of bounds
 
-            # 4) Measure width of bottom edge
-            bottom_points = model_rect_3d_to_2d.T[-2:]  # last two corners
-            width = np.linalg.norm(bottom_points[0] - bottom_points[1])
+            # Measure the coverage area
+            rect_width = np.ptp(xs)
+            rect_height = np.ptp(ys)
 
-            # Return difference from desired image width
-            return abs(width - image_width)
+            # Maximize coverage
+            coverage = rect_width * rect_height
+            return -coverage  # Negate to maximize coverage
 
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
 
+        # Optimization
         result = minimize(
             objective,
-            x0=(0.0, 50.0),  # [theta, scalar]
+            x0=(0.0, 50.0, 50.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
             args=(RT, K, self.image),
-            method="Nelder-Mead",
+            method="Nelder-Mead"
         )
-        theta, scalar = result.x
-        print(f"Theta: {theta}, Scalar: {scalar}")
 
-        # Show optimized rectangle corners on image
-        model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar)
+        theta, scalar_x, scalar_y = result.x
+        print(f"Optimized Theta: {theta}, Scalar X: {scalar_x}, Scalar Y: {scalar_y}")
+
+        # Compute optimized rectangle
+        model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar_x, scalar_y)
         model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
         model_rect_3d_to_2d = hom_to_cart(model_rect_3d_applied_RT)
 
-        # Make top left or model rectangle (0,0) so you can view it in warp perspective
+        # Adjust rectangle for warp perspective
         model_rect_2d = model_rect_3d_hom[:, :2]
         model_rect_2d -= model_rect_2d.min(axis=0)
 
@@ -180,6 +180,13 @@ class HomographyFromChessboardImage:
         image_height, image_width = self.image.shape[:2]
         warped_image = cv2.warpPerspective(self.image, np.linalg.inv(H), dsize=(image_width, image_height))
 
+        # Remove black areas from the warped image
+        mask = np.all(warped_image != [0, 0, 0], axis=-1).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        x, y, w, h = cv2.boundingRect(contours[0])
+        cropped_image = warped_image[y:y+h, x:x+w]
+        
+        # Visualization
         keepRunning = True
         counter = 0
         cv2.namedWindow("Full BEV")
@@ -189,11 +196,11 @@ class HomographyFromChessboardImage:
                     rend_image = draw_points(self.image, model_rect_3d_to_2d.T, color=(255, 255, 0))
                     cv2.setWindowTitle("Full BEV", "Rectangle corners")
                 case 1:
-                    rend_image = warped_image
+                    rend_image = cropped_image
                     cv2.setWindowTitle("Full BEV", "Warped perspective")
             counter += 1
             cv2.imshow("Full BEV", rend_image)
             key = cv2.waitKey(0)
-            if key == 113:  # Hitting 'q' quits the program
+            if key == 113:  # Press 'q' to quit
                 keepRunning = False
-        exit(0)
+        cv2.destroyAllWindows()

@@ -37,10 +37,6 @@ def decompose_homography(H, K):
     # Normalize the first column of H to extract the scaling factor
     L = 1 / np.linalg.norm(np.dot(K_inv, H[0]))
 
-    h1 = H[0]
-    h2 = H[1]
-    h3 = H[2]
-
     # Compute the rotation vectors
     r1 = L * np.dot(K_inv, H[0])
     r2 = L * np.dot(K_inv, H[1])
