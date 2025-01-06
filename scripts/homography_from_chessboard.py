@@ -125,12 +125,12 @@ class HomographyFromChessboardImage:
 
         def objective(params, RT, K, image):
             """
-            Objective function to minimize the black space and maximize the fit.
+            Objective function to minimize black space while maximizing fit.
             """
             theta, scalar_x, scalar_y = params
             image_height, image_width = image.shape[:2]
 
-            # Build the 3D rectangle
+            # Generate the 3D rectangle
             model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar_x, scalar_y)
 
             # Apply transformations
@@ -139,23 +139,25 @@ class HomographyFromChessboardImage:
             # Convert to 2D
             model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
-            # Check bounds
+            # Extract bounds
             xs, ys = model_rect_2d[0], model_rect_2d[1]
+
+            # Penalize out-of-bounds or black regions
             if np.any(xs < 0) or np.any(xs > image_width) or np.any(ys < 0) or np.any(ys > image_height):
                 return 1e6  # Large penalty if out of bounds
 
-            # Measure the coverage area
-            rect_width = np.ptp(xs)
-            rect_height = np.ptp(ys)
+            # Calculate rectangle area and intersection with image bounds
+            rect_area = np.ptp(xs) * np.ptp(ys)
+            coverage = rect_area / (image_width * image_height)
 
-            # Maximize coverage
-            coverage = rect_width * rect_height
-            return -coverage  # Negate to maximize coverage
+            # Penalize for area outside of the bounds of the image
+            black_space_penalty = 1 - coverage
+            return black_space_penalty
 
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
 
-        # Optimization
+        # Optimize parameters
         result = minimize(
             objective,
             x0=(0.0, 50.0, 50.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
@@ -166,26 +168,27 @@ class HomographyFromChessboardImage:
         theta, scalar_x, scalar_y = result.x
         print(f"Optimized Theta: {theta}, Scalar X: {scalar_x}, Scalar Y: {scalar_y}")
 
-        # Compute optimized rectangle
+        # Generate optimized 3D rectangle
         model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar_x, scalar_y)
         model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
-        model_rect_3d_to_2d = hom_to_cart(model_rect_3d_applied_RT)
+        model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
+
+        # Align rectangle with the bottom of the image
+        #model_rect_2d[1] -= model_rect_2d[1].max() - (self.image.shape[0] - 1)
 
         # Adjust rectangle for warp perspective
-        model_rect_2d = model_rect_3d_hom[:, :2]
-        model_rect_2d -= model_rect_2d.min(axis=0)
+        src_points = model_rect_2d.T[:, :2]
 
-        # Warp the image
-        H, mask = cv2.findHomography(model_rect_2d, model_rect_3d_to_2d.T, cv2.RANSAC)
-        image_height, image_width = self.image.shape[:2]
-        warped_image = cv2.warpPerspective(self.image, np.linalg.inv(H), dsize=(image_width, image_height))
+        # Define destination points aligned with the bottom
+        dst_points = np.array([
+            [0, 0],
+            [self.image.shape[1] - 1, 0],
+            [self.image.shape[1] - 1, self.image.shape[0] - 1],
+            [0, self.image.shape[0] - 1]
+        ], dtype=np.float32)
 
-        # Remove black areas from the warped image
-        mask = np.all(warped_image != [0, 0, 0], axis=-1).astype(np.uint8) * 255
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        x, y, w, h = cv2.boundingRect(contours[0])
-        cropped_image = warped_image[y:y+h, x:x+w]
-        
+        H, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC)
+        warped_image = cv2.warpPerspective(self.image, H, (self.image.shape[1], self.image.shape[0]))
         # Visualization
         keepRunning = True
         counter = 0
@@ -193,10 +196,10 @@ class HomographyFromChessboardImage:
         while keepRunning:
             match counter % 2:
                 case 0:
-                    rend_image = draw_points(self.image, model_rect_3d_to_2d.T, color=(255, 255, 0))
+                    rend_image = draw_points(self.image, model_rect_2d.T, color=(255, 255, 0))
                     cv2.setWindowTitle("Full BEV", "Rectangle corners")
                 case 1:
-                    rend_image = cropped_image
+                    rend_image = warped_image
                     cv2.setWindowTitle("Full BEV", "Warped perspective")
             counter += 1
             cv2.imshow("Full BEV", rend_image)
