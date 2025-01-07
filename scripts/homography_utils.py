@@ -31,22 +31,31 @@ def decompose_homography(H, K):
         np.ndarray: 4x4 transformation matrix RT combining rotation and translation.
     """
 
-    H = H.T
+    # Normalize homography by intrinsic matrix
     K_inv = np.linalg.inv(K)
+    H_normalized = K_inv @ H
 
-    # Normalize the first column of H to extract the scaling factor
-    L = 1 / np.linalg.norm(np.dot(K_inv, H[0]))
+    # Extract column vectors
+    h1 = H_normalized[:, 0]
+    h2 = H_normalized[:, 1]
+    h3 = H_normalized[:, 2]
 
-    # Compute the rotation vectors
-    r1 = L * np.dot(K_inv, H[0])
-    r2 = L * np.dot(K_inv, H[1])
-    r3 = np.cross(r1, r2)
+    # Compute scale factor (magnitude of h1)
+    scale = np.linalg.norm(h1)
 
-    # Compute the translation vector
-    T = L * np.dot(K_inv, H[2]).reshape(3, 1)
+    # Normalize to get rotation and translation
+    r1 = h1 / scale
+    r2 = h2 / scale
+    r3 = np.cross(r1, r2)  # Ensure orthonormality
 
-    # Combine rotation and translation into a single transformation matrix
-    R = np.stack((r1, r2, r3), axis=1)
-    RT = np.hstack((R, T))
+    R = np.column_stack((r1, r2, r3))
+    T = h3 / scale
 
-    return RT
+    # Compute plane normal and distance
+    plane_normal = np.cross(r1, r2)
+    plane_distance = 1 / scale
+
+    # Combine R and T into a single RT matrix
+    RT = np.column_stack((R, T))
+
+    return RT, plane_normal, plane_distance

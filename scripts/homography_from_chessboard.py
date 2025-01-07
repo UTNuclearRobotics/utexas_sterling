@@ -26,7 +26,7 @@ class HomographyFromChessboardImage:
 
         self.H, mask = cv2.findHomography(model_chessboard_2d, self.corners, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
-        self.RT = decompose_homography(self.H, self.K)
+        self.RT, self.plane_normal, self.plane_distance = decompose_homography(self.H, self.K)
 
         self.validate_chessboard_2d(model_chessboard_2d)
 
@@ -51,6 +51,12 @@ class HomographyFromChessboardImage:
 
     def get_camera_intrinsics(self):
         return self.K
+    
+    def get_plane_norm(self):
+        return self.plane_normal
+    
+    def get_plane_dist(self):
+        return self.plane_distance
 
     def chessboard_tile_width(self):
         """Calculate the maximum distance between two consecutive corners in each row of the chessboard."""
