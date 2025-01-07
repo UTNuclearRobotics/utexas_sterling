@@ -119,6 +119,59 @@ class HomographyFromChessboardImage:
         cv2.destroyAllWindows()
         exit(0)
 
+    import numpy as np
+
+    def quadrilateral_area(self, points: np.ndarray) -> float:
+        """
+        Computes the area of a quadrilateral from four vertices (A, B, C, D).
+        
+        Parameters
+        ----------
+        points : np.ndarray
+            - Shape (4, 2) for 2D points: [[Ax, Ay], [Bx, By], [Cx, Cy], [Dx, Dy]].
+            - Shape (4, 3) for 3D points: [[Ax, Ay, Az], [Bx, By, Bz], ...].
+            
+        Returns
+        -------
+        float
+            The area of the quadrilateral.
+            
+        Notes
+        -----
+        - For 2D, we assume the points are in a consistent order around the shape 
+        (e.g., A->B->C->D->A) and the quadrilateral is non-self-intersecting.
+        - For 3D, we assume the four points are coplanar. We subdivide into 
+        triangles (A,B,C) and (A,C,D) and sum the areas.
+        - If your quadrilateral is self-intersecting, or if 3D points are not 
+        coplanar, you may get incorrect or unexpected results.
+        """
+
+        # 2D case: Shoelace formula
+        if points.shape == (4, 2):
+            x = points[:, 0]
+            y = points[:, 1]
+            # Shoelace sums
+            # area = 1/2 * abs( x0*y1 + x1*y2 + x2*y3 + x3*y0
+            #                 - (y0*x1 + y1*x2 + y2*x3 + y3*x0 ) )
+            area = 0.5 * abs(
+                x[0]*y[1] + x[1]*y[2] + x[2]*y[3] + x[3]*y[0]
+                - (y[0]*x[1] + y[1]*x[2] + y[2]*x[3] + y[3]*x[0])
+            )
+            return area
+
+        # 3D case: Subdivide into two triangles, use cross products
+        elif points.shape == (4, 3):
+            A, B, C, D = points  # Unpack the rows for clarity
+            # Triangle ABC area
+            area_ABC = 0.5 * np.linalg.norm(np.cross(B - A, C - A))
+            # Triangle ACD area
+            area_ACD = 0.5 * np.linalg.norm(np.cross(C - A, D - A))
+            return area_ABC + area_ACD
+
+        else:
+            raise ValueError("Input must have shape (4,2) or (4,3).")
+
+
     def plot_BEV_full(self):
         """
         Notes:
@@ -133,6 +186,7 @@ class HomographyFromChessboardImage:
             """
             Objective function to minimize black space while maximizing fit.
             """
+            retVal = 0.0
             theta, x1, y1, x2, y2 = params
             image_height, image_width = image.shape[:2]
 
@@ -145,22 +199,33 @@ class HomographyFromChessboardImage:
             # Convert to 2D
             model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
+            print("plot_BEV_full:   image.shape[:2]")
+            print(image.shape[:2])
+            print("plot_BEV_full:   model_rect_2d")
+            print(model_rect_2d.T)
+
             # Extract bounds
             xs, ys = model_rect_2d[0], model_rect_2d[1]
+            image_area = image_width * image_height
 
             # Penalize out-of-bounds or black regions
             if np.any(xs < 0) or np.any(xs > image_width) or np.any(ys < 0) or np.any(ys > image_height):
-                return 1e6  # Large penalty if out of bounds
+                retVal = image_area  # Large penalty if out of bounds
 
-            # Calculate rectangle area and intersection with image bounds
-            rect_area = np.ptp(xs) * np.ptp(ys)
-            coverage = rect_area / (image_width * image_height)
+            else:
+                # # Calculate rectangle area and intersection with image bounds
+                # rect_area = np.ptp(xs) * np.ptp(ys)
+                rect_area = self.quadrilateral_area(model_rect_2d.T)
+                # coverage = rect_area / image_area
 
-            print(xs, ys)
+                # print(xs, ys)
 
-            # Penalize for area outside of the bounds of the image
-            black_space_penalty = 1 - coverage
-            return black_space_penalty
+                # Penalize for area outside of the bounds of the image
+                retVal = image_area - rect_area
+                print("image_area:  ", image_area)
+                print("rect_area:  ", rect_area)
+            print("retVal:  ", retVal)
+            return retVal
 
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
@@ -170,11 +235,17 @@ class HomographyFromChessboardImage:
             objective,
             x0=(0.0, 50.0, 50.0, 50.0, 50.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
             args=(RT, K, self.image),
-            method="Nelder-Mead"
+            method="Nelder-Mead",
+            options={
+                'maxiter': 10000000,  # increase the iteration limit
+                'gtol': 1e-11
+            }
         )
 
         theta, x1, y1, x2, y2 = result.x
         print(f"Optimized Theta: {theta}, x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}")
+        print("result.message:  ", result.message)
+        # print("Gradient:    ", np.linalg.norm(result.jac))
 
         # Generate optimized 3D rectangle
         model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
@@ -205,7 +276,7 @@ class HomographyFromChessboardImage:
         while keepRunning:
             match counter % 2:
                 case 0:
-                    rend_image = draw_points(self.image, model_rect_2d.T, color=(255, 255, 0))
+                    rend_image = draw_points(self.image, model_rect_2d.T, color=(255, 0, 255))
                     cv2.setWindowTitle("Full BEV", "Rectangle corners")
                 case 1:
                     rend_image = warped_image

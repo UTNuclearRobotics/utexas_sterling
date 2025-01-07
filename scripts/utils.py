@@ -40,14 +40,34 @@ def compute_model_rectangle_3d_hom(theta=0, x1=1.0, y1=1.0, x2=1.0, y2=1.0, cent
     Generate 3D coordinates of the rectangle corners with separate scaling for x and y coordinates.
     """
     # Create 2D rectangle centered at 0
-    model_rectangle_2d = np.array([[0, 0],
-                                   [4, 0],
-                                   [4, 2],
-                                   [0, 2]], dtype=np.float32)
+    if x1 > 0:
+        x1 = -x1
+    else:
+        x1 = x1
 
-    if center_at_zero:
-        model_rectangle_2d[:, 0] -= np.mean(model_rectangle_2d[:, 0])
-        model_rectangle_2d[:, 1] -= np.mean(model_rectangle_2d[:, 1])
+    if y1 > 0:
+        y1 = -y1
+    else:
+        y1 = y1
+
+    if x2 < 0:
+        x2 = -x2
+    else:
+        x2 = x2
+
+    if y2 < 0:
+        y2 = -y2
+    else:
+        y2 = y2
+
+    model_rectangle_2d = np.array([[x1, y1],
+                                   [x1, y2],
+                                   [x2, y2],
+                                   [x2, y1]], dtype=np.float32)
+
+    # if center_at_zero:
+    #     model_rectangle_2d[:, 0] -= np.mean(model_rectangle_2d[:, 0])
+    #     model_rectangle_2d[:, 1] -= np.mean(model_rectangle_2d[:, 1])
 
     # Apply rotation around Z by theta
     rot = np.array([
@@ -56,12 +76,12 @@ def compute_model_rectangle_3d_hom(theta=0, x1=1.0, y1=1.0, x2=1.0, y2=1.0, cent
     ])
     model_rectangle_2d = model_rectangle_2d @ rot.T
 
-    # Scale the rectangle with separate factors for x and y
-    model_rectangle_2d[[0,3], 0] *= x1 #left points of rectangle
-    model_rectangle_2d[[0,1], 1] *= y1 #bottom points of rectangle
+    # # Scale the rectangle with separate factors for x and y
+    # model_rectangle_2d[[0,3], 0] *= x1 #left points of rectangle
+    # model_rectangle_2d[[0,1], 1] *= y1 #bottom points of rectangle
 
-    model_rectangle_2d[[1,2], 0] *= x2 #right points of rectangle
-    model_rectangle_2d[[2,3], 1] *= y2 #top points of rectangle
+    # model_rectangle_2d[[1,2], 0] *= x2 #right points of rectangle
+    # model_rectangle_2d[[2,3], 1] *= y2 #top points of rectangle
 
     # Convert to 3D points by adding a z-coordinate of 0
     model_rectangle_3d = np.hstack((model_rectangle_2d, np.zeros((model_rectangle_2d.shape[0], 1))))
