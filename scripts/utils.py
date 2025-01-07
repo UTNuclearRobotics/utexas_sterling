@@ -35,12 +35,16 @@ def compute_model_chessboard_3d(rows, cols, scalar_factor=20, center_at_zero=Fal
     model_chessboard_3D_hom = np.hstack((model_chessboard_3D, np.ones((model_chessboard_3D.shape[0], 1))))
     return model_chessboard_3D_hom
 
-def compute_model_rectangle_3d_hom(theta=0, scalar_factor_x=1.0, scalar_factor_y=1.0, center_at_zero=True):
+def compute_model_rectangle_3d_hom(theta=0, x1=1.0, y1=1.0, x2=1.0, y2=1.0, center_at_zero=True):
     """
     Generate 3D coordinates of the rectangle corners with separate scaling for x and y coordinates.
     """
     # Create 2D rectangle centered at 0
-    model_rectangle_2d = np.array([[0, 0], [4, 0], [4, 2], [0, 2]], dtype=np.float32)
+    model_rectangle_2d = np.array([[0, 0],
+                                   [4, 0],
+                                   [4, 2],
+                                   [0, 2]], dtype=np.float32)
+
     if center_at_zero:
         model_rectangle_2d[:, 0] -= np.mean(model_rectangle_2d[:, 0])
         model_rectangle_2d[:, 1] -= np.mean(model_rectangle_2d[:, 1])
@@ -53,8 +57,11 @@ def compute_model_rectangle_3d_hom(theta=0, scalar_factor_x=1.0, scalar_factor_y
     model_rectangle_2d = model_rectangle_2d @ rot.T
 
     # Scale the rectangle with separate factors for x and y
-    model_rectangle_2d[:, 0] *= scalar_factor_x
-    model_rectangle_2d[:, 1] *= scalar_factor_y
+    model_rectangle_2d[[0,3], 0] *= x1 #left points of rectangle
+    model_rectangle_2d[[0,1], 1] *= y1 #bottom points of rectangle
+
+    model_rectangle_2d[[1,2], 0] *= x2 #right points of rectangle
+    model_rectangle_2d[[2,3], 1] *= y2 #top points of rectangle
 
     # Convert to 3D points by adding a z-coordinate of 0
     model_rectangle_3d = np.hstack((model_rectangle_2d, np.zeros((model_rectangle_2d.shape[0], 1))))
@@ -81,6 +88,7 @@ def compute_homography_from_rt(K, R, T, plane_normal, plane_distance):
         Homography matrix H.
     """
     # Compute the plane-induced term: T * plane_normal^T / plane_distance
+    
     plane_term = np.outer(T, plane_normal) / plane_distance
 
     # Compute the full homography matrix

@@ -133,11 +133,11 @@ class HomographyFromChessboardImage:
             """
             Objective function to minimize black space while maximizing fit.
             """
-            theta, scalar_x, scalar_y = params
+            theta, x1, y1, x2, y2 = params
             image_height, image_width = image.shape[:2]
 
             # Generate the 3D rectangle
-            model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar_x, scalar_y)
+            model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
 
             # Apply transformations
             model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
@@ -156,6 +156,8 @@ class HomographyFromChessboardImage:
             rect_area = np.ptp(xs) * np.ptp(ys)
             coverage = rect_area / (image_width * image_height)
 
+            print(xs, ys)
+
             # Penalize for area outside of the bounds of the image
             black_space_penalty = 1 - coverage
             return black_space_penalty
@@ -166,16 +168,17 @@ class HomographyFromChessboardImage:
         # Optimize parameters
         result = minimize(
             objective,
-            x0=(0.0, 50.0, 50.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
+            x0=(0.0, 50.0, 50.0, 50.0, 50.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
             args=(RT, K, self.image),
             method="Nelder-Mead"
         )
 
-        theta, scalar_x, scalar_y = result.x
-        print(f"Optimized Theta: {theta}, Scalar X: {scalar_x}, Scalar Y: {scalar_y}")
+        theta, x1, y1, x2, y2 = result.x
+        print(f"Optimized Theta: {theta}, x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}")
 
         # Generate optimized 3D rectangle
-        model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, scalar_x, scalar_y)
+        model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
+        print(model_rect_3d_hom)
         model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
         model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
@@ -213,3 +216,4 @@ class HomographyFromChessboardImage:
             if key == 113:  # Press 'q' to quit
                 keepRunning = False
         cv2.destroyAllWindows()
+

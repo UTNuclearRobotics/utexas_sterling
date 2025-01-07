@@ -58,25 +58,26 @@ def draw_patch_corners_on_image(image, homography, patch_size=(128, 128)):
     Returns:
         Image with patch corners drawn.
     """
-    # Define the corners of the patch in the patch coordinate space
-    patch_corners = np.array(
-        [[0, 0, 1], [patch_size[0], 0, 1], [0, patch_size[0], 1], [patch_size[0], patch_size[0], 1]]
-    ).T  # Shape (3, 4)
 
-    # Transform the patch corners to the original image coordinate space
-    transformed_corners = homography @ patch_corners
-    transformed_corners /= transformed_corners[2, :]  # Normalize by the third row
-    transformed_corners = transformed_corners[:2, :].T.astype(int)  # Convert to (x, y) integers
+    # Copy current image for visualization
+    image_with_patches = image.copy()
+    
+    # Define patch corners in homogeneous coordinates
+    patch_corners = np.array([
+        [0, patch_size[0], patch_size[0], 0],  # x-coordinates
+        [0, 0, patch_size[1], patch_size[1]],  # y-coordinates
+        [1, 1, 1, 1]                           # homogeneous coordinates
+    ])
 
-    # Draw the corners on the image
-    image_with_corners = image.copy()
-    for corner in transformed_corners:
-        cv2.circle(image_with_corners, tuple(corner), radius=5, color=(0, 0, 255), thickness=-1)
+    # --- Draw the Current Patch ---
+    H_inv = np.linalg.inv(homography)  # Inverse homography for current patch
+    corners = H_inv @ patch_corners
+    corners /= corners[2]  # Normalize to (x, y) coordinates
+    pts = corners[:2].T.astype(np.int32)  # Convert to integer pixel coordinates
 
-    # Optionally, connect the corners to form a polygon
-    cv2.polylines(image_with_corners, [transformed_corners], isClosed=True, color=(0, 255, 0), thickness=2)
+    cv2.polylines(image_with_patches, [pts], isClosed=True, color=(0, 255, 0), thickness=3)  # Green for current patch
 
-    return image_with_corners
+    return image_with_patches
 
 
 def ComputeVicRegData(H, K, RT, plane_normal, plane_distance, robot_data, history_size=10, patch_size=(128, 128), start=0):
@@ -93,16 +94,27 @@ def ComputeVicRegData(H, K, RT, plane_normal, plane_distance, robot_data, histor
     Returns:
         patches: List of patches for each timestep.
     """
+
     n_timesteps = robot_data.getNTimesteps()
+    if start >= n_timesteps:
+        raise ValueError(f"Invalid cur_timestep: {start}. Must be less than {n_timesteps}.")
+
     patches = []
-    
-    #if RT.shape == (3,4):
-    #    RT = np.vstack([RT, np.array([0, 0, 0, 1])])
+    x_offset = 0.2413
+    y_offset = 0.0
+    z_offset = 0.1
+
+    T_camera_base = np.array([-x_offset, -y_offset, -z_offset])
 
     for timestep in tqdm(range(start, start + history_size), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
+        past_image_test = robot_data.getImageAtTimestep(start - history_size)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         timestep_patches = []
+
+        # Adjust the current translation for the camera offset
+        R_cur = cur_rt[:3, :3]
+        T_cur = cur_rt[:3, 3] - T_camera_base
 
         # Get current patch
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
@@ -116,7 +128,7 @@ def ComputeVicRegData(H, K, RT, plane_normal, plane_distance, robot_data, histor
         ])
 
         # Copy current image for visualization
-        cur_image_with_patches = cur_image.copy()
+        cur_image_with_patches = past_image_test.copy()
 
         # --- Draw the Current Patch ---
         H_inv = np.linalg.inv(H)  # Inverse homography for current patch
@@ -135,20 +147,18 @@ def ComputeVicRegData(H, K, RT, plane_normal, plane_distance, robot_data, histor
             past_image = robot_data.getImageAtTimestep(past_timestep)
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
 
-            # Compute relative rotation and translation (current -> past)
-            R_cur = cur_rt[:3, :3]
-            T_cur = cur_rt[:3, 3]
+            # Compute relative rotation and translation
             R_past = past_rt[:3, :3]
-            T_past = past_rt[:3, 3]
+            T_past = past_rt[:3, 3] - T_camera_base
 
-            # Correctly compute relative rotation and translation
-            R_rel = R_past.T @ R_cur  # Current to past rotation
-            T_rel = R_past.T @ (T_cur - T_past)  # Current to past translation
+            #R_rel = R_past.T @ R_cur  # Current to past rotation
+            #T_rel = R_past.T @ (T_cur - T_past)  # Current to past translation
+
+            R_rel = R_cur.T @ R_past  # Past to current rotation
+            T_rel = R_cur.T @ (T_past - T_cur) # Past to current translation
 
             # Scale translation using plane distance
             T_test = T_rel / plane_distance
-
-            print(T_test)
 
             # Compute homography for past -> current -> patch
             H_past2cur = compute_homography_from_rt(K, R_rel, T_test, plane_normal, plane_distance)
@@ -271,8 +281,8 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 300
-    history_size = 10
+    index = 100
+    history_size = 5
     vicreg_data = ComputeVicRegData(H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128, 128), start = index)
 
     # Get the current image from robot_data
