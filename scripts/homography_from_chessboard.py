@@ -189,7 +189,6 @@ class HomographyFromChessboardImage:
         else:
             raise ValueError("Input must have shape (4,2) or (4,3).")
 
-<<<<<<< HEAD
 
     def submit(self):
         print("OK")
@@ -240,8 +239,6 @@ class HomographyFromChessboardImage:
             cv2.imshow("Full BEV", rend_image)
             cv2.waitKey(1)
 
-=======
->>>>>>> bc422d10ea0bffafaf3ee72ce9b1c57692727519
     def plot_BEV_full(self):
         """
         Notes:
@@ -260,14 +257,9 @@ class HomographyFromChessboardImage:
             image_height, image_width = image.shape[:2]
 
             # Generate the 3D rectangle
-<<<<<<< HEAD
-            model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
-            model_rect_3d_applied_RT = K @ RT @ model_rect_3d_hom.T
-=======
             model_rect_3d_hom = compute_model_rectangle_3d_hom(
                 theta, x1, y1, x2, y2)
             model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
->>>>>>> bc422d10ea0bffafaf3ee72ce9b1c57692727519
             model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
             image_corners = np.array(
