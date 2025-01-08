@@ -282,7 +282,7 @@ if __name__ == "__main__":
             visualize_pkl(robot_data, H)
 
     index = 100
-    history_size = 5
+    history_size = 10
     vicreg_data = ComputeVicRegData(H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128, 128), start = index)
 
     # Get the current image from robot_data
