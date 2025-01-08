@@ -186,46 +186,34 @@ class HomographyFromChessboardImage:
             """
             Objective function to minimize black space while maximizing fit.
             """
-            retVal = 0.0
             theta, x1, y1, x2, y2 = params
             image_height, image_width = image.shape[:2]
 
             # Generate the 3D rectangle
             model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
-
-            # Apply transformations
             model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
-
-            # Convert to 2D
             model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
-            print("plot_BEV_full:   image.shape[:2]")
-            print(image.shape[:2])
-            print("plot_BEV_full:   model_rect_2d")
-            print(model_rect_2d.T)
+            image_corners = np.array([[0, 0], [image_width - 1, 0], [image_width - 1, image_height - 1], [0, image_height-1]])
+            distances = np.linalg.norm(model_rect_2d.T - image_corners, axis=1)
 
-            # Extract bounds
-            xs, ys = model_rect_2d[0], model_rect_2d[1]
-            image_area = image_width * image_height
+            # Extract the top corners (smallest y values in image coordinates)
+            top_corners_y = np.sort(model_rect_2d[1])[:2]  # Smallest two y-values (top corners)
+            
+            # Add penalty for top corners' y-values
+            y_penalty = np.mean(top_corners_y)  # Minimize average of top corners' y-values
 
-            # Penalize out-of-bounds or black regions
-            if np.any(xs < 0) or np.any(xs > image_width) or np.any(ys < 0) or np.any(ys > image_height):
-                retVal = image_area  # Large penalty if out of bounds
+            # Add penalty for corners being outside the image frame
+            x_coords, y_coords = model_rect_2d[0], model_rect_2d[1]
+            x_outside_penalty = np.sum(np.maximum(0, -x_coords)) + np.sum(np.maximum(0, x_coords - image_width))
+            y_outside_penalty = np.sum(np.maximum(0, -y_coords)) + np.sum(np.maximum(0, y_coords - image_height))
+            outside_penalty = x_outside_penalty + y_outside_penalty
+            
+            # Balance the penalty with the main distance cost
+            alpha = 2.0  # Weight for the penalty term (tune this as needed)
+            beta = 10.0  # Weight for the outside penalty
 
-            else:
-                # # Calculate rectangle area and intersection with image bounds
-                # rect_area = np.ptp(xs) * np.ptp(ys)
-                rect_area = self.quadrilateral_area(model_rect_2d.T)
-                # coverage = rect_area / image_area
-
-                # print(xs, ys)
-
-                # Penalize for area outside of the bounds of the image
-                retVal = image_area - rect_area
-                print("image_area:  ", image_area)
-                print("rect_area:  ", rect_area)
-            print("retVal:  ", retVal)
-            return retVal
+            return np.sum(distances) + alpha * y_penalty + beta * outside_penalty
 
         RT = self.get_rigid_transform()
         K = self.get_camera_intrinsics()
@@ -233,25 +221,24 @@ class HomographyFromChessboardImage:
         # Optimize parameters
         result = minimize(
             objective,
-            x0=(0.0, 50.0, 50.0, 50.0, 50.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
+            x0=(0.0, -100.0, -100.0, 100.0, 100.0),  # Initial guesses for [theta, scalar_factor_x, scalar_factor_y]
             args=(RT, K, self.image),
             method="Nelder-Mead",
             options={
-                'maxiter': 10000000,  # increase the iteration limit
+                'maxiter': 1e6,  # increase the iteration limit
                 'gtol': 1e-11
             }
         )
 
         theta, x1, y1, x2, y2 = result.x
         print(f"Optimized Theta: {theta}, x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}")
-        print("result.message:  ", result.message)
         # print("Gradient:    ", np.linalg.norm(result.jac))
 
         # Generate optimized 3D rectangle
         model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
-        print(model_rect_3d_hom)
         model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
         model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
+        #print(model_rect_2d.T)
 
         # Align rectangle with the bottom of the image
         model_rect_2d[1] -= model_rect_2d[1].max() - (self.image.shape[0] - 1)

@@ -61,9 +61,9 @@ def compute_model_rectangle_3d_hom(theta=0, x1=1.0, y1=1.0, x2=1.0, y2=1.0, cent
         y2 = y2
 
     model_rectangle_2d = np.array([[x1, y1],
-                                   [x1, y2],
+                                   [x2, y1],
                                    [x2, y2],
-                                   [x2, y1]], dtype=np.float32)
+                                   [x1, y2]], dtype=np.float32)
 
     # if center_at_zero:
     #     model_rectangle_2d[:, 0] -= np.mean(model_rectangle_2d[:, 0])
@@ -75,13 +75,6 @@ def compute_model_rectangle_3d_hom(theta=0, x1=1.0, y1=1.0, x2=1.0, y2=1.0, cent
         [np.sin(theta),  np.cos(theta)]
     ])
     model_rectangle_2d = model_rectangle_2d @ rot.T
-
-    # # Scale the rectangle with separate factors for x and y
-    # model_rectangle_2d[[0,3], 0] *= x1 #left points of rectangle
-    # model_rectangle_2d[[0,1], 1] *= y1 #bottom points of rectangle
-
-    # model_rectangle_2d[[1,2], 0] *= x2 #right points of rectangle
-    # model_rectangle_2d[[2,3], 1] *= y2 #top points of rectangle
 
     # Convert to 3D points by adding a z-coordinate of 0
     model_rectangle_3d = np.hstack((model_rectangle_2d, np.zeros((model_rectangle_2d.shape[0], 1))))
