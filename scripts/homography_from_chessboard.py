@@ -5,6 +5,7 @@ from camera_intrinsics import CameraIntrinsics
 from homography_utils import *
 from utils import *
 from scipy.optimize import minimize, differential_evolution
+import tkinter as tk
 
 
 class HomographyFromChessboardImage:
@@ -172,6 +173,55 @@ class HomographyFromChessboardImage:
             raise ValueError("Input must have shape (4,2) or (4,3).")
 
 
+    def submit(self):
+        print("OK")
+        self.theta = float(self.entries[0].get())
+        self.x0 = float(self.entries[1].get())
+        self.x1 = float(self.entries[2].get())
+        self.y0 = float(self.entries[3].get())
+        self.y1 = float(self.entries[4].get())
+        for i, field in enumerate(self.fields):
+            print(field, ": ", self.entries[i].get())
+
+    def BEVEditor(self):
+        root = tk.Tk()
+        root.title("BEV Editor")
+        self.fields = ["Theta", "x0", "x1", "y0", "y1"]
+        self.entries = []
+        for i, field in enumerate(self.fields):
+            label = tk.Label(root, text=field)
+            label.grid(row=i, column=0, padx=10, pady=5, sticky="e")
+            entry = tk.Entry(root)
+            entry.grid(row=i, column=1, padx=10, pady=5)
+            self.entries.append(entry)
+        submit_button = tk.Button(root, text="Submit", command=lambda: self.submit())
+        submit_button.grid(row=len(self.fields), column=0, padx=10, pady=10)
+        self.entries[0].delete(0, tk.END)
+        self.entries[0].insert(0, "0.0")
+        self.entries[1].delete(0, tk.END)
+        self.entries[1].insert(0, "-10.0")
+        self.entries[2].delete(0, tk.END)
+        self.entries[2].insert(0, "10.0")
+        self.entries[3].delete(0, tk.END)
+        self.entries[3].insert(0, "-10.0")
+        self.entries[4].delete(0, tk.END)
+        self.entries[4].insert(0, "10.0")
+        self.submit()
+
+        while True:
+            root.update_idletasks()  # Update "idle" tasks (like geometry management)
+            root.update()
+
+            RT = self.get_rigid_transform()
+            print("RT:  ", RT)
+            K = self.get_camera_intrinsics()
+            model_rect_3d_hom = compute_model_rectangle_3d_hom(self.theta, self.x0, self.y0, self.x1, self.y1)
+            model_rect_3d_applied_RT = K @ RT @ model_rect_3d_hom.T
+            model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
+            rend_image = draw_points(self.image, model_rect_2d.T, color=(255, 0, 255))
+            cv2.imshow("Full BEV", rend_image)
+            cv2.waitKey(1)
+
     def plot_BEV_full(self):
         """
         Notes:
@@ -191,7 +241,7 @@ class HomographyFromChessboardImage:
 
             # Generate the 3D rectangle
             model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
-            model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
+            model_rect_3d_applied_RT = K @ RT @ model_rect_3d_hom.T
             model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
             image_corners = np.array([[0, 0], [image_width - 1, 0], [image_width - 1, image_height - 1], [0, image_height-1]])
