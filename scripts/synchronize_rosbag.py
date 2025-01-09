@@ -16,14 +16,16 @@ import pickle
 import cv2
 import numpy as np
 import rosbag2_py
-import yaml
 from nav_msgs.msg import Odometry
 from rclpy.serialization import deserialize_message
-from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
 from termcolor import cprint
 from tqdm import tqdm
 from collections import deque
+
+# ROS2 topics
+ODOMETRY_TOPIC = "/panther/odometry/filtered"
+IMU_TOPIC = "/panther/imu/data"
 
 
 class SynchronizeRosbag:
@@ -74,7 +76,8 @@ class SynchronizeRosbag:
             time_diff_odom = abs(odom_time - avg_time)
 
             # Synchronize if all time differences are within the threshold
-            if time_diff_image < 0.05 and time_diff_imu < 0.05 and time_diff_odom < 0.05:
+            threshhold = 0.05
+            if time_diff_image < threshhold and time_diff_imu < threshhold and time_diff_odom < threshhold:
                 img_msg = self.image_msgs.popleft()
                 imu_msg = self.imu_msgs.popleft()
                 odom_msg = self.odom_msgs.popleft()
@@ -179,11 +182,13 @@ class SynchronizeRosbag:
                         msg = deserialize_message(msg, CameraInfo)
                         self.camera_info = msg
                     case "nav_msgs/msg/Odometry":
-                        msg = deserialize_message(msg, Odometry)
-                        self.odom_callback(msg)
+                        if topic == ODOMETRY_TOPIC:
+                            msg = deserialize_message(msg, Odometry)
+                            self.odom_callback(msg)
                     case "sensor_msgs/msg/Imu":
-                        msg = deserialize_message(msg, Imu)
-                        self.imu_callback(msg)
+                        if topic == IMU_TOPIC:
+                            msg = deserialize_message(msg, Imu)
+                            self.imu_callback(msg)
 
                 pbar.update(1)
 
