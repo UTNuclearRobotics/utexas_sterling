@@ -175,10 +175,10 @@ if __name__ == "__main__":
     plane_distance = chessboard_homography.get_plane_dist()
 
     bag_name = "panther_ahg_courtyard_0"
-    robot_data = RobotDataAtTimestep(os.path.join(script_dir, f"../bags/${bag_name}/${bag_name}.pkl"))
+    robot_data = RobotDataAtTimestep(os.path.join(script_dir, f"../bags/{bag_name}/{bag_name}.pkl"))
 
     # Load or compute vicreg data
-    vicreg_data_path = os.path.join(script_dir, f"../bags/${bag_name}/vicreg_data.pkl")
+    vicreg_data_path = os.path.join(script_dir, f"../bags/{bag_name}/vicreg_data.pkl")
     if os.path.exists(vicreg_data_path):
         # --- DELETE THE .PKL IF YOU WANT TO RECALCULATE VICREG DATA ---
         with open(vicreg_data_path, "rb") as f:

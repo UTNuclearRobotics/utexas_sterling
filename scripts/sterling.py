@@ -223,6 +223,7 @@ if __name__ == "__main__":
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
+
 # Show the current image side by side with the vicreg_data
 # show_images_separately(current_image, vicreg_data[5])
 
