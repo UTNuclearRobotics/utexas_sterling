@@ -120,61 +120,6 @@ class HomographyFromChessboardImage:
         cv2.destroyAllWindows()
         exit(0)
 
-    import numpy as np
-
-    def quadrilateral_area(self, points: np.ndarray) -> float:
-        """
-        Computes the area of a quadrilateral from four vertices (A, B, C, D).
-
-        Parameters
-        ----------
-        points : np.ndarray
-            - Shape (4, 2) for 2D points: [[Ax, Ay], [Bx, By], [Cx, Cy], [Dx, Dy]].
-            - Shape (4, 3) for 3D points: [[Ax, Ay, Az], [Bx, By, Bz], ...].
-
-        Returns
-        -------
-        float
-            The area of the quadrilateral.
-
-        Notes
-        -----
-        - For 2D, we assume the points are in a consistent order around the shape
-        (e.g., A->B->C->D->A) and the quadrilateral is non-self-intersecting.
-        - For 3D, we assume the four points are coplanar. We subdivide into
-        triangles (A,B,C) and (A,C,D) and sum the areas.
-        - If your quadrilateral is self-intersecting, or if 3D points are not
-        coplanar, you may get incorrect or unexpected results.
-        """
-
-        # 2D case: Shoelace formula
-        if points.shape == (4, 2):
-            x = points[:, 0]
-            y = points[:, 1]
-            # Shoelace sums
-            # area = 1/2 * abs( x0*y1 + x1*y2 + x2*y3 + x3*y0
-            #                 - (y0*x1 + y1*x2 + y2*x3 + y3*x0 ) )
-            area = 0.5 * abs(
-                x[0] * y[1]
-                + x[1] * y[2]
-                + x[2] * y[3]
-                + x[3] * y[0]
-                - (y[0] * x[1] + y[1] * x[2] + y[2] * x[3] + y[3] * x[0])
-            )
-            return area
-
-        # 3D case: Subdivide into two triangles, use cross products
-        elif points.shape == (4, 3):
-            A, B, C, D = points  # Unpack the rows for clarity
-            # Triangle ABC area
-            area_ABC = 0.5 * np.linalg.norm(np.cross(B - A, C - A))
-            # Triangle ACD area
-            area_ACD = 0.5 * np.linalg.norm(np.cross(C - A, D - A))
-            return area_ABC + area_ACD
-
-        else:
-            raise ValueError("Input must have shape (4,2) or (4,3).")
-
     def submit(self):
         print("OK")
         self.theta = float(self.entries[0].get())
