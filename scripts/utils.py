@@ -5,6 +5,7 @@ import pickle
 
 import torch
 from termcolor import cprint
+from scipy.optimize import minimize
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -195,3 +196,109 @@ def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
         cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
     
     return output_image
+
+def optimize_rectangle_parameters(image, RT, K):
+    """
+    Optimizes the parameters of the rectangle (theta, x1, y1, x2, y2) to fit the image.
+    Returns:
+        Optimized parameters (theta, x1, y1, x2, y2)
+    """
+
+    def objective(params, RT, K, image):
+        """
+        Objective function to minimize black space while maximizing fit.
+        """
+        theta, x1, y1, x2, y2 = params
+        image_height, image_width = image.shape[:2]
+
+        # Generate the 3D rectangle
+        model_rect_3d_hom = compute_model_rectangle_3d_hom(
+            theta, x1, y1, x2, y2)
+        model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
+        model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
+
+        image_corners = np.array(
+            [[0, 0], [image_width - 1, 0], [image_width - 1, image_height - 1], [0, image_height-1]])
+        distances = np.linalg.norm(model_rect_2d.T - image_corners, axis=1)
+
+        # Extract the top corners (smallest y values in image coordinates)
+        top_corners_y = np.sort(model_rect_2d[1])[:2]
+
+        # Add penalty for top corners' y-values
+        y_penalty = np.mean(top_corners_y)
+
+        # Add penalty for corners being outside the image frame
+        x_coords, y_coords = model_rect_2d[0], model_rect_2d[1]
+        x_outside_penalty = np.sum(np.maximum(
+            0, -x_coords)) + np.sum(np.maximum(0, x_coords - image_width))
+        y_outside_penalty = np.sum(np.maximum(
+            0, -y_coords)) + np.sum(np.maximum(0, y_coords - image_height))
+        outside_penalty = x_outside_penalty + y_outside_penalty
+
+        # Balance the penalty with the main distance cost
+        alpha = 2.0  # Weight for the penalty term (tune this as needed)
+        beta = 10.0  # Weight for the outside penalty
+
+        return np.sum(distances) + alpha * y_penalty + beta * outside_penalty
+
+    # Optimize parameters
+    result = minimize(
+        objective,
+        x0=(0.0, -100.0, -100.0, 100.0, 100.0),
+        args=(RT, K, image),
+        method="Nelder-Mead",
+        options={
+            'maxiter': 1e6,
+            'gtol': 1e-11
+        }
+    )
+
+    theta, x1, y1, x2, y2 = result.x
+    print(f"Optimized Theta: {theta}, x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}")
+    return theta, x1, y1, x2, y2
+
+def plot_BEV(image, model_rect_2d, warped_image):
+    """
+    Handles the plotting and visualization of the BEV (Bird's Eye View).
+    Args:
+        image (ndarray): The original image.
+        model_rect_2d (ndarray): The optimized rectangle points in 2D.
+        warped_image (ndarray): The warped image after perspective transformation.
+    """
+    keepRunning = True
+    counter = 0
+    cv2.namedWindow("Full BEV")
+
+    while keepRunning:
+        # Alternate between original image with rectangle and warped image
+        if counter % 2 == 0:
+            rend_image = draw_points(
+                image, model_rect_2d.T, color=(255, 0, 255))
+            cv2.setWindowTitle("Full BEV", "Rectangle corners")
+        else:
+            rend_image = warped_image
+            cv2.setWindowTitle("Full BEV", "Warped perspective")
+        
+        counter += 1
+        cv2.imshow("Full BEV", rend_image)
+        key = cv2.waitKey(0)
+        if key == 113:  # Press 'q' to quit
+            keepRunning = False
+
+    cv2.destroyAllWindows()
+
+def draw_patches_on_image(image, homography, patch_corners, color, thickness):
+    """
+    Draws patches on the provided image using a given homography and patch corners.
+
+    Args:
+        image: The image to draw patches on.
+        homography: The homography matrix used to transform patch corners.
+        patch_corners: Array of patch corners in homogeneous coordinates.
+        color: Color of the patch boundary.
+        thickness: Thickness of the patch boundary line.
+    """
+    transformed_corners = homography @ patch_corners
+    transformed_corners /= transformed_corners[2]  # Normalize to (x, y) coordinates
+    points = transformed_corners[:2].T.astype(np.int32)
+    cv2.polylines(image, [points], isClosed=True, color=color, thickness=thickness)
