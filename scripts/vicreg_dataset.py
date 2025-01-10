@@ -17,46 +17,18 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
     n_timesteps = robot_data.getNTimesteps()
     patches = []
 
-    # Static transform from base_link to camera_link
-    x_offset = 0.2413
-    y_offset = 0.0
-    z_offset = 0.1
-    T_camera_base = np.array([-x_offset, -y_offset, -z_offset])
-
     for timestep in tqdm(range(history_size, n_timesteps), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
-        # past_image_test = robot_data.getImageAtTimestep(start - history_size)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         timestep_patches = []
 
         # Adjust the current translation for the camera offset
-        R_cur = cur_rt[:3, :3]
-        T_cur = cur_rt[:3, 3] - T_camera_base
+        R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3]
 
         # Get current patch
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
         timestep_patches.append(cur_patch)
 
-        # # Define patch corners in homogeneous coordinates
-        # patch_corners = np.array(
-        #     [
-        #         [0, patch_size[0], patch_size[0], 0],  # x-coordinates
-        #         [0, 0, patch_size[1], patch_size[1]],  # y-coordinates
-        #         [1, 1, 1, 1],  # homogeneous coordinates
-        #     ]
-        # )
-
-        # # Copy current image for visualization
-        # cur_image_with_patches = past_image_test.copy()
-
-        # # --- Draw the Current Patch ---
-        # H_inv = np.linalg.inv(H)  # Inverse homography for current patch
-        # current_corners = H_inv @ patch_corners
-        # current_corners /= current_corners[2]  # Normalize to (x, y) coordinates
-        # pts_current = current_corners[:2].T.astype(np.int32)  # Convert to integer pixel coordinates
-        # cv2.polylines(
-        #     cur_image_with_patches, [pts_current], isClosed=True, color=(0, 255, 0), thickness=3
-        # )  # Green for current patch
 
         # --- Draw Past Patches ---
         for past_hist in range(1, history_size):
@@ -67,41 +39,17 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
             # Get past image and past odometry data
             past_image = robot_data.getImageAtTimestep(past_timestep)
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
-
-            # Compute relative rotation and translation
-            R_past = past_rt[:3, :3]
-            T_past = past_rt[:3, 3] - T_camera_base
-
-            # R_rel = R_past.T @ R_cur  # Current to past rotation
-            # T_rel = R_past.T @ (T_cur - T_past)  # Current to past translation
+            R_past, T_past = past_rt[:3, :3], past_rt[:3, 3]
 
             R_rel = R_cur.T @ R_past  # Past to current rotation
-            T_rel = R_cur.T @ (T_past - T_cur)  # Past to current translation
-
-            # Scale translation using plane distance
-            T_test = T_rel / plane_distance
+            T_rel = R_cur.T @ (T_past - T_cur) / plane_distance  # Past to current translation
 
             # Compute homography for past -> current -> patch
-            H_past2cur = compute_homography_from_rt(K, R_rel, T_test, plane_normal, plane_distance)
+            H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
             H_past2patch = H @ H_past2cur
 
             past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
             timestep_patches.append(past_patch)
-
-            # # Compute patch corners for the past patch in the current image
-            # H_patch2cur = np.linalg.inv(H_past2patch)  # Inverse homography
-            # past_corners = H_patch2cur @ patch_corners
-            # past_corners /= past_corners[2]  # Normalize to (x, y) coordinates
-
-            # # Draw the past patch on the current image
-            # pts_past = past_corners[:2].T.astype(np.int32)  # Convert to integer pixel coordinates
-            # cv2.polylines(
-            #     cur_image_with_patches, [pts_past], isClosed=True, color=(255, 0, 0), thickness=2
-            # )  # Blue for past patches
-
-        # # Show the current image with all patches
-        # cv2.imshow("All Patches on Current Image", cur_image_with_patches)
-        # cv2.waitKey(1)
 
         patches.append(timestep_patches)
 

@@ -123,7 +123,7 @@ class Cluster:
         self.model.load_state_dict(torch.load(model_path, weights_only=True))
 
         # Create dataset and dataloader
-        dataset = TerrainDataset(patches=data_pkl["patches"])
+        dataset = TerrainDataset(patches=data_pkl)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         batch = next(iter(dataloader))
@@ -279,7 +279,7 @@ class Cluster:
         print(f"Best k according to silhouette score: {best_k}")
 
         # Plot clusters only for the best k
-        best_k_indices = all_k_cluster_indices[best_k]
+        #best_k_indices = all_k_cluster_indices[best_k]
         self.plot_clusters(representation_vectors, min_indices, best_k)
 
         return all_k_cluster_indices[best_k], silhouette_scores
@@ -393,12 +393,12 @@ if __name__ == "__main__":
 
     # Generate clusters
     cluster = Cluster(
-        data_pkl_path=os.path.join(script_dir, "../datasets/nrg_ahg_courtyard.pkl"),
+        data_pkl_path=os.path.join(script_dir, "../datasets/vicreg_data.pkl"),
         model_path=os.path.join(script_dir, "../models/vis_rep.pt"),
     )
 
     k_values = range(2, 10)
-    # k_values = 4
+    #k_values = 4
     iterations = 200
 
     if isinstance(k_values, range):

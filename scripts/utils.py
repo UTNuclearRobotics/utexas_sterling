@@ -112,7 +112,7 @@ def compute_homography_from_rt(K, R, T, plane_normal, plane_distance):
 
 def load_dataset():
     dataset_dir = os.path.join(script_dir, "../datasets/")
-    dataset_file = "nrg_ahg_courtyard.pkl"
+    dataset_file = "vicreg_data.pkl"
     dataset_path = dataset_dir + dataset_file
 
     with open(dataset_path, "rb") as file:

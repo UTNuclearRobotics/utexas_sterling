@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     # Create dataset and dataloader
     data_pkl = load_dataset()
-    dataset = TerrainDataset(patches=data_pkl["patches"])
+    dataset = TerrainDataset(patches=data_pkl)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model
