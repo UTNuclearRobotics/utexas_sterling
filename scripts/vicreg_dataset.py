@@ -122,7 +122,7 @@ if __name__ == "__main__":
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
 
-    bag_name = "panther_ahg_courtyard_0"
+    bag_name = "panther_ahg_courtyard"
     robot_data = RobotDataAtTimestep(os.path.join(script_dir, f"../bags/{bag_name}/{bag_name}.pkl"))
 
     # Load or compute vicreg data
