@@ -9,6 +9,11 @@ from sklearn.decomposition import PCA
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import numpy as np
+import joblib
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -131,7 +136,7 @@ class Cluster:
 
         self.patches = patch1.to(device)
 
-    def generate_clusters(self, k, iterations):
+    def generate_clusters(self, k, iterations, save_model_path="scripts/clusters/kmeans_model.pkl", save_scaler_path="scripts/clusters/scaler.pkl"):
         """
         Generate clusters using K-means algorithm.
         Args:
@@ -140,66 +145,76 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        row_sums = representation_vectors.sum(dim=1, keepdim=True)
-        representation_vectors = representation_vectors / row_sums
-        centroids = representation_vectors[torch.randperm(representation_vectors.size(0))[:k]]
+        scaler = MinMaxScaler()
+        #StandardScaler()
+        representation_vectors_np = representation_vectors.detach().cpu().numpy()
+        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
-        for _ in range(iterations):
-            distances = torch.cdist(representation_vectors, centroids)
-            min_values, min_indices = torch.min(distances, dim=1)
-            new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
+        # Apply K-means clustering with sklearn
+        kmeans = KMeans(n_clusters=k, init='k-means++', max_iter=iterations, n_init = 10, random_state=42)
+        kmeans.fit(representation_vectors_np)
+        min_indices = kmeans.labels_
 
-            if torch.allclose(centroids, new_centroids):
-                break
-            centroids = new_centroids
+        # Save the K-means model and scaler
+        joblib.dump(kmeans, save_model_path)
+        joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
-        print("Number of items in each cluster.")
+        print("Number of items in each cluster:")
         for i in range(0, k):
-            print(" [", i, "]: ", representation_vectors[min_indices == i].shape[0])
+            print(" [", i, "]: ", (min_indices == i).sum())
 
         # Find the K farthest apart vectors for each cluster
         cluster_rep_vectors = []
-        for i in range(0, k):
+        for i in range(k):
             cluster = representation_vectors[min_indices == i]
-            row_norms = torch.norm(cluster, dim=1, keepdim=True)
-            normalized_tensor = cluster / row_norms
-            clusterT = cluster.transpose(0, 1)
-            clusterSim = torch.matmul(cluster, clusterT)
+            cluster_size = cluster.size(0)
 
+            # Use pairwise distances to calculate similarities directly
+            clusterSim = torch.cdist(cluster, cluster)  # Pairwise distance matrix
+
+            # Store indices of the farthest apart vectors
             cluster_indices = []
-            while len(cluster_indices) < 25:
-                min_value = clusterSim.min()
-                min_idx = (clusterSim == min_value).nonzero(as_tuple=False)
-                min_row = min_idx[0, 0].item()
-                min_col = min_idx[0, 1].item()
-                cluster_indices.append(min_row)
-                cluster_indices.append(min_col)
-                clusterSim[min_row, min_col] = 1
-                cluster_indices = list(set(cluster_indices))
+            selected = torch.zeros(cluster_size, dtype=torch.bool)  # Track selected indices
+            if cluster_size == 0:  # Handle edge case for empty clusters
+                cluster_rep_vectors.append(torch.empty(0, cluster.size(1), device=cluster.device))
+                continue
 
-            # print("cluster.shape:   ", cluster.shape)
-            # print("cluster_indices:   ", cluster_indices)
+            # Start with the first random index
+            first_idx = 0
+            cluster_indices.append(first_idx)
+            selected[first_idx] = True
+
+            # Iteratively select the farthest vector
+            while len(cluster_indices) < min(25, cluster_size):
+                # Compute distances from already selected indices
+                distances = clusterSim[~selected][:, selected]
+                max_dist_idx = distances.max(dim=0).indices[0].item()  # Find farthest unselected index
+                unselected_indices = torch.where(~selected)[0]  # Map to original indices
+                next_idx = unselected_indices[max_dist_idx].item()
+
+                cluster_indices.append(next_idx)
+                selected[next_idx] = True
+
             cluster_subtensor = cluster[cluster_indices]
             cluster_rep_vectors.append(cluster_subtensor)
 
+        # Map back to image indices
         all_cluster_image_indices = []
-        for index, cluster in enumerate(cluster_rep_vectors):
-            # print("CLUSTER: ", index)
-            cluster_image_indices = []
-            for row in cluster:
-                match = torch.all(representation_vectors == row, dim=1)
-                indices = torch.nonzero(match, as_tuple=True)[0]
-                if indices.numel() == 1:
-                    cluster_image_indices.append(indices.item())
-                else:
-                    # Handle multiple matches (e.g., take the first match)
-                    cluster_image_indices.append(indices[0].item())
+        for cluster in cluster_rep_vectors:
+            cluster_image_indices = [
+                torch.nonzero(torch.all(representation_vectors == row, dim=1), as_tuple=True)[0].item()
+                for row in cluster
+            ]
             all_cluster_image_indices.append(cluster_image_indices)
 
+        # Display clusters
         for index, images in enumerate(all_cluster_image_indices):
             print("CLUSTER: ", index)
             print(images)
+
+        # Plot clusters only for the best k
+        self.plot_clusters(representation_vectors, torch.tensor(min_indices), k)
 
         return all_cluster_image_indices
 
@@ -211,8 +226,10 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        row_sums = representation_vectors.sum(dim=1, keepdim=True)
-        representation_vectors = representation_vectors / row_sums
+        scaler = MinMaxScaler()
+        #StandardScaler()
+        representation_vectors_np = representation_vectors.detach().cpu().numpy()
+        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
         silhouette_scores = []
         wcss_values = []
@@ -223,44 +240,29 @@ class Cluster:
         os.makedirs(save_dir, exist_ok=True)
 
         for k in k_values:
-            # Initialize centroids using random samples
-            centroids = representation_vectors[torch.randperm(representation_vectors.size(0))[:k]]
-
-            for _ in range(iterations):
-                # Compute the pairwise distance between points and centroids
-                distances = torch.cdist(representation_vectors, centroids)
-
-                # Assign each point to the nearest centroid
-                min_values, min_indices = torch.min(distances, dim=1)
-
-                # Efficient centroid update using the indices of assigned clusters
-                new_centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
-
-                # Break if centroids have not changed
-                if torch.allclose(centroids, new_centroids):
-                    break
-
-                centroids = new_centroids
+            # Initialize and fit KMeans with k-means++
+            kmeans = KMeans(n_clusters=k, init='k-means++', max_iter=iterations, n_init = 10, random_state=42)
+            cluster_labels = kmeans.fit_predict(representation_vectors_np)
 
             # WCSS Calculation
-            closest_distances = torch.min(distances, dim=1)[0]  # Closest centroid distances for each point
-            wcss = torch.sum(closest_distances**2).item()  # Sum of squared distances
+            wcss = kmeans.inertia_
             wcss_values.append((k, wcss))
 
             # Silhouette Score Calculation
-            silhouette_values = self.calculate_silhouette_scores(representation_vectors, min_indices, k)
-            avg_silhouette_score = torch.mean(torch.tensor(silhouette_values)).item()
-            silhouette_scores.append((k, avg_silhouette_score))
+            silhouette_avg = silhouette_score(representation_vectors_np, cluster_labels)
+            silhouette_scores.append((k, silhouette_avg))
 
             print(f"Clusters formed for k={k}:")
             for cluster_idx in range(k):
-                cluster_size = representation_vectors[min_indices == cluster_idx].shape[0]
+                cluster_size = np.sum(cluster_labels == cluster_idx)
                 print(f"  Cluster {cluster_idx}: {cluster_size} points")
 
-            print(f"Silhouette Score for k={k}: {avg_silhouette_score}")
+            print(f"Silhouette Score for k={k}: {silhouette_avg}")
 
             # Store the cluster indices
-            all_cluster_image_indices = self.store_cluster_image_indices(min_indices, k, representation_vectors)
+            all_cluster_image_indices = self.store_cluster_image_indices(
+                torch.tensor(cluster_labels), k, representation_vectors
+            )
             all_k_cluster_indices[k] = all_cluster_image_indices
 
         # Plot the elbow method for WCSS
@@ -275,36 +277,15 @@ class Cluster:
         for k, score in silhouette_scores:
             print(f"  k={k}: {score}")
 
-        best_k = max(silhouette_scores, key=lambda x: x[1])[0]
+        #best_k = max(silhouette_scores, key=lambda x: x[1])[0]
+        kn = KneeLocator(ks, wcss, curve="convex", direction="decreasing")
+        best_k = kn.knee
         print(f"Best k according to silhouette score: {best_k}")
 
         # Plot clusters only for the best k
-        #best_k_indices = all_k_cluster_indices[best_k]
-        self.plot_clusters(representation_vectors, min_indices, best_k)
+        self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), best_k)
 
-        return all_k_cluster_indices[best_k], silhouette_scores
-
-    def calculate_silhouette_scores(self, representation_vectors, min_indices, k):
-        silhouette_values = []
-        for i, vector in enumerate(representation_vectors):
-            # Intra-cluster distance (a)
-            cluster = representation_vectors[min_indices == min_indices[i]]
-            a = torch.mean(torch.norm(cluster - vector, dim=1))
-
-            # Nearest-cluster distance (b)
-            nearest_distances = []
-            for j in range(k):
-                if j != min_indices[i]:
-                    other_cluster = representation_vectors[min_indices == j]
-                    if other_cluster.size(0) > 0:
-                        nearest_distances.append(torch.mean(torch.norm(other_cluster - vector, dim=1)))
-            b = min(nearest_distances) if nearest_distances else 0
-
-            # Silhouette score for the point
-            s = (b - a) / max(a, b) if max(a, b) > 0 else 0
-            silhouette_values.append(s)
-
-        return silhouette_values
+        return all_k_cluster_indices[best_k], best_k
 
     def store_cluster_image_indices(self, min_indices, k, representation_vectors):
         all_cluster_image_indices = []
@@ -356,9 +337,8 @@ class Cluster:
         Visualizes the k-means clusters after performing dimensionality reduction
         using PCA.
         """
-        min_indices = min_indices.cpu().numpy()
         # Reduce the dimensionality of the representation vectors for visualization
-        pca = PCA(n_components=2)  # Use PCA for dimensionality reduction
+        pca = PCA(n_components=2, random_state = 42)  # Use PCA for dimensionality reduction
         reduced_vectors = pca.fit_transform(representation_vectors.detach().cpu().numpy())  # Convert to numpy for PCA
         # Set up the plot
         plt.figure(figsize=(8, 6))
@@ -385,6 +365,51 @@ class Cluster:
         plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
         plt.show()
 
+    def predict_cluster(self, model_path="kmeans_model.pkl", scaler_path="scaler.pkl"):
+        """
+        Predict cluster for new test data using the saved K-means model and scaler.
+        Args:
+            new_data (torch.Tensor): New test data to classify into clusters.
+            model_path (str): Path to the saved K-means model.
+            scaler_path (str): Path to the saved scaler.
+        Returns:
+            list: Cluster labels for the new data.
+        """
+        # Load the K-means model and scaler
+        kmeans = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+
+        representation_vectors = self.model.visual_encoder(self.patches)
+
+        print(f"K-means model loaded from {model_path}")
+        print(f"Scaler loaded from {scaler_path}")
+
+        # Preprocess the new data
+        new_data_np = representation_vectors.detach().cpu().numpy()
+        test_data = new_data_np[999]
+        test_data = test_data.reshape(1,-1)
+        new_data_scaled = scaler.transform(test_data)
+
+        # Predict cluster label
+        cluster_label = kmeans.predict(new_data_scaled)
+        print(f"Predicted Cluster Label: {cluster_label[0]}")
+
+        # Visualize the original image
+        original_image = self.patches[999]  # Extract the 1000th image (shape: [C, H, W])
+        original_image_np = original_image.detach().cpu().numpy()
+
+        # Convert [C, H, W] -> [H, W, C] for visualization
+        if original_image_np.shape[0] == 3:  # Check if the image has 3 channels (RGB)
+            original_image_np = np.transpose(original_image_np, (1, 2, 0))
+
+        # Denormalize if needed (assuming MinMaxScaler was used)
+        original_image_np = (original_image_np * 255).astype(np.uint8)  # Scale to [0, 255]
+
+        # Plot the image
+        plt.imshow(original_image_np)
+        plt.axis('off')
+        plt.title(f"Original Image (Cluster {cluster_label[0]})")
+        plt.show()
 
 if __name__ == "__main__":
     # Save directory
@@ -397,12 +422,15 @@ if __name__ == "__main__":
         model_path=os.path.join(script_dir, "../models/vis_rep.pt"),
     )
 
-    k_values = range(2, 10)
-    #k_values = 4
-    iterations = 200
+    #k_values = range(2, 10)
+    k_values = 5
+    iterations = 300
+
+    #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
+    #print(cluster_labels)
 
     if isinstance(k_values, range):
-        k_best_cluster_image_indices, silhouette_scores = cluster.iterate_generate_clusters(k_values, iterations)
+        k_best_cluster_image_indices, best_k = cluster.iterate_generate_clusters(k_values, iterations)
 
         # Render clusters
         rendered_clusters = PatchRenderer.render_clusters(k_best_cluster_image_indices, cluster.patches)
@@ -412,7 +440,7 @@ if __name__ == "__main__":
             grid_image.save(os.path.join(save_dir, f"cluster_{i}.png"))
 
     elif isinstance(k_values, int):
-        all_cluster_image_indices = cluster.generate_clusters(k_values, iterations)
+        all_cluster_image_indices = cluster.generate_clusters(k_values,iterations)
 
         # Render clusters
         rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)
@@ -423,6 +451,3 @@ if __name__ == "__main__":
 
     else:
         print("k_values is neither a range nor an integer")
-
-    # image = PatchRenderer.image_streaks(rendered_clusters)
-    # image.save(os.path.join(save_dir, "cluster_grid.png"))

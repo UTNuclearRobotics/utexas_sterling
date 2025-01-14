@@ -27,7 +27,11 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
 
         # Get current patch
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
-        timestep_patches.append(cur_patch)
+        if cur_patch.shape != (128,128):
+            cur_patch = cv2.resize(cur_patch,(128,128))
+            timestep_patches.append(cur_patch)
+        else:
+            timestep_patches.append(cur_patch)
 
 
         # --- Draw Past Patches ---
@@ -49,7 +53,11 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
             H_past2patch = H @ H_past2cur
 
             past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
-            timestep_patches.append(past_patch)
+            if past_patch.shape != (128,128):
+                past_patch = cv2.resize(past_patch,(128,128))
+                timestep_patches.append(past_patch)
+            else:
+                timestep_patches.append(past_patch)
 
         patches.append(timestep_patches)
 
@@ -71,7 +79,7 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
     # Create a blank canvas to hold the grid with gaps
     grid_height = (grid_rows + 1) * patch_height + grid_rows * gap_size  # +1 for the first patch row
     grid_width = max(grid_cols * patch_width + (grid_cols - 1) * gap_size, patch_width)
-    canvas = np.full((grid_height, grid_width, 3), gap_color, dtype=np.uint8)
+    canvas = np.full((int(grid_height), int(grid_width), 3), gap_color, dtype=np.uint8)
 
     # Place the first patch on its own row
     canvas[:patch_height, :patch_width] = patches[0]
@@ -118,6 +126,7 @@ if __name__ == "__main__":
     # Parameters for compute vicreg data
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
     H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    #H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
@@ -134,7 +143,7 @@ if __name__ == "__main__":
     else:
         history_size = 10
         vicreg_data = ComputeVicRegData(
-            H, K, plane_normal, plane_distance, robot_data, history_size, patch_size=(128, 128)
+            H, K, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128)
         )
         with open(vicreg_data_path, "wb") as f:
             pickle.dump(vicreg_data, f)

@@ -89,13 +89,16 @@ def ComputeVicRegData(
         R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3]
 
         full_bev_scale = 1
-
+        timestep_patches = []
         cur_patch = cv2.resize(
             cv2.warpPerspective(cur_image, H, dsize=patch_size),
             (patch_size[0] // full_bev_scale, patch_size[1] // full_bev_scale),
         )
-
-        timestep_patches = [cur_patch]
+        if cur_patch.shape != (128,128):
+            cur_patch = cv2.resize(cur_patch,(128,128))
+            timestep_patches.append(cur_patch)
+        else:
+            timestep_patches.append(cur_patch)
 
         # Copy current image for visualization
         cur_image_with_patches = cur_image.copy()
@@ -122,7 +125,11 @@ def ComputeVicRegData(
                 cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size),
                 (patch_size[0] // full_bev_scale, patch_size[1] // full_bev_scale),
             )
-            timestep_patches.append(past_patch)
+            if past_patch.shape != (128,128):
+                past_patch = cv2.resize(past_patch,(128,128))
+                timestep_patches.append(past_patch)
+            else:
+                timestep_patches.append(past_patch)
 
             # Draw past patch on current image
             draw_patches_on_image(
@@ -181,8 +188,8 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    # H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=True)
+    #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
     RT = chessboard_homography.get_rigid_transform()
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
@@ -211,8 +218,10 @@ if __name__ == "__main__":
     index = 1665
     history_size = 10
     vicreg_data = ComputeVicRegData(
-        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(256, 256), start=index
+        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=dsize, start=index
     )
+
+    print(len(vicreg_data[0]))
 
     # Get the current image from robot_data
     current_image = robot_data.getImageAtTimestep(index + history_size)
