@@ -20,7 +20,7 @@ class VisualEncoderModel(nn.Module):
             nn.PReLU(),  # torch.Size([batch_size, 32, 15, 15])
             nn.Conv2d(32, self.rep_size, kernel_size=3, stride=2),
             nn.PReLU(),  # torch.Size([batch_size, rep_size, 7, 7])
-            nn.AvgPool2d(kernel_size=7),  # torch.Size([batch_size, rep_size, 1, 1])
+            nn.AdaptiveAvgPool2d((1,1)),  # torch.Size([batch_size, rep_size, 1, 1])
             nn.Flatten(),
             nn.Linear(self.rep_size, latent_size),
             nn.ReLU(),

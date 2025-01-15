@@ -50,6 +50,22 @@ class SterlingRepresentation(nn.Module):
         zv2 = self.projector(v_encoded_2)
 
         return zv1, zv2, v_encoded_1, v_encoded_2
+    
+    def encode_single_patch(self, patch):
+        """
+        Encode a single patch and return its representation vector.
+        Args:
+            patch (torch.Tensor): Single patch image of shape (1, 3, H, W).
+        Returns:
+            torch.Tensor: Encoded and normalized representation vector.
+        """
+        # Ensure the input is on the correct device
+        patch = patch.to(self.device)
+
+        # Encode the patch
+        v_encoded = self.visual_encoder(patch)
+        v_encoded = F.normalize(v_encoded, dim=-1)  # Normalize the representation vector
+        return v_encoded
 
     def training_step(self, batch, batch_idx):
         """

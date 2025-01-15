@@ -365,52 +365,49 @@ class Cluster:
         plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
         plt.show()
 
-    def predict_cluster(self, model_path="kmeans_model.pkl", scaler_path="scaler.pkl"):
+    def predict_cluster(self, cell, model_path, scaler_path):
         """
         Predict cluster for new test data using the saved K-means model and scaler.
         Args:
-            new_data (torch.Tensor): New test data to classify into clusters.
+            cell (torch.Tensor or np.ndarray): New test data to classify into clusters.
+                                            Should have shape [C, H, W] or [1, C, H, W].
             model_path (str): Path to the saved K-means model.
             scaler_path (str): Path to the saved scaler.
         Returns:
-            list: Cluster labels for the new data.
+            int: Cluster label for the new data.
         """
         # Load the K-means model and scaler
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"K-means model not found at {model_path}")
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError(f"Scaler not found at {scaler_path}")
+
         kmeans = joblib.load(model_path)
         scaler = joblib.load(scaler_path)
 
-        representation_vectors = self.model.visual_encoder(self.patches)
+        # Ensure the cell is a tensor
+        if isinstance(cell, np.ndarray):
+            cell = torch.tensor(cell, dtype=torch.float32)
 
-        print(f"K-means model loaded from {model_path}")
-        print(f"Scaler loaded from {scaler_path}")
+        # Add batch dimension if not present
+        if len(cell.shape) == 3:  # [C, H, W]
+            cell = cell.unsqueeze(0)  # [1, C, H, W]
 
-        # Preprocess the new data
-        new_data_np = representation_vectors.detach().cpu().numpy()
-        test_data = new_data_np[999]
-        test_data = test_data.reshape(1,-1)
-        new_data_scaled = scaler.transform(test_data)
+        # Set model to evaluation mode
+        self.model.eval()
+
+        # Extract representation vector for the cell
+        with torch.no_grad():
+            representation_vector = self.model.encode_single_patch(cell)
+
+        # Preprocess the representation vector
+        representation_np = representation_vector.detach().cpu().numpy()
+        scaled_representation = scaler.transform(representation_np)
 
         # Predict cluster label
-        cluster_label = kmeans.predict(new_data_scaled)
-        print(f"Predicted Cluster Label: {cluster_label[0]}")
-
-        # Visualize the original image
-        original_image = self.patches[999]  # Extract the 1000th image (shape: [C, H, W])
-        original_image_np = original_image.detach().cpu().numpy()
-
-        # Convert [C, H, W] -> [H, W, C] for visualization
-        if original_image_np.shape[0] == 3:  # Check if the image has 3 channels (RGB)
-            original_image_np = np.transpose(original_image_np, (1, 2, 0))
-
-        # Denormalize if needed (assuming MinMaxScaler was used)
-        original_image_np = (original_image_np * 255).astype(np.uint8)  # Scale to [0, 255]
-
-        # Plot the image
-        plt.imshow(original_image_np)
-        plt.axis('off')
-        plt.title(f"Original Image (Cluster {cluster_label[0]})")
-        plt.show()
-
+        cluster_label = kmeans.predict(scaled_representation)
+        return cluster_label[0]
+    
 if __name__ == "__main__":
     # Save directory
     save_dir = os.path.join(script_dir, "clusters")

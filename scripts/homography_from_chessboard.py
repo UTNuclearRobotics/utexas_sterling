@@ -170,7 +170,7 @@ class HomographyFromChessboardImage:
             cv2.waitKey(1)
 
 
-    def plot_BEV_full(self, plot_BEV_full=False):
+    def plot_BEV_full(self,image, plot_BEV_full=False):
         """
         Plots the bird's-eye view (BEV) image using optimized rectangle parameters.
         """
@@ -211,7 +211,7 @@ class HomographyFromChessboardImage:
 
 
         H, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC)
-        warped_image = cv2.warpPerspective(self.image, H, dsize)
+        warped_image = cv2.warpPerspective(image, H, dsize)
 
         # Resize the warped image
         #warped_image = cv2.resize(warped_image, (int(dsize[0] / 2), int(dsize[1] / 2)))
@@ -219,5 +219,5 @@ class HomographyFromChessboardImage:
         if plot_BEV_full:
             plot_BEV(self.image, model_rect_2d, warped_image)
 
-        return H, dsize
+        return warped_image
     
