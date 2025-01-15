@@ -198,7 +198,7 @@ class SynchronizeRosbag:
             frame_size = (self.camera_info.width, self.camera_info.height)
             fps = 10
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            video_save_path = os.path.join(self.BAG_PATH, self.BAG_PATH.split("/")[-1] + ".mp4")
+            video_save_path = os.path.join(self.BAG_PATH, "original.mp4")
             video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, frame_size)
 
             for i in tqdm(range(len(self.synced_msgs["image"])), desc="Writing video"):
@@ -212,7 +212,7 @@ class SynchronizeRosbag:
 
         # Save the data as a pickle file
         os.makedirs(self.SAVE_PATH, exist_ok=True)
-        file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + ".pkl")
+        file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + "_synced.pkl")
         with open(file_path, "wb") as file:
             pickle.dump(self.synced_msgs, file)
         cprint(f"Data saved successfully: {file_path}", "green")
