@@ -170,6 +170,11 @@ class BEVCostmap:
 
 
 if __name__ == "__main__":
+    """
+    Notes:
+        Looks for the synced pickle file in the bag directory (ends in "_synced.pkl").
+        Uses the bag directory to save the video as "costmap.mp4".
+    """
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Get BEV cost visual.")
     parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronzied pickle file inside.")
