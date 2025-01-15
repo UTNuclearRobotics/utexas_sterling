@@ -125,15 +125,22 @@ class BEVCostmap:
         frame_size = self.processed_imgs["bev"][0].shape[1], self.processed_imgs["bev"][0].shape[0]
         fps = 10
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+        video_save_path = os.path.join(self.SAVE_PATH, "bev.mp4")
+        video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, frame_size)
+        for i in tqdm(range(len(self.processed_imgs["bev"])), desc="Writing BEV video"):
+            img = self.processed_imgs["bev"][i]
+            video_writer.write(img)
+        video_writer.release()
+        cprint(f"BEV video saved successfully: {video_save_path}", "green")
+
         video_save_path = os.path.join(self.SAVE_PATH, "costmap.mp4")
         video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, frame_size)
-
-        for i in tqdm(range(len(self.processed_imgs["cost"])), desc="Writing video"):
+        for i in tqdm(range(len(self.processed_imgs["cost"])), desc="Writing costmap video"):
             img = self.processed_imgs["cost"][i]
             video_writer.write(img)
-
         video_writer.release()
-        cprint(f"Video saved successfully: {video_save_path}", "green")
+        cprint(f"Costmap video saved successfully: {video_save_path}", "green")
 
 
 if __name__ == "__main__":
