@@ -4,8 +4,8 @@ import numpy as np
 from camera_intrinsics import CameraIntrinsics
 from homography_utils import *
 from utils import *
-from scipy.optimize import minimize, differential_evolution
 import tkinter as tk
+from scipy.spatial.transform import Rotation as R
 
 
 class HomographyFromChessboardImage:
@@ -179,7 +179,12 @@ class HomographyFromChessboardImage:
         K = self.get_camera_intrinsics()
 
         # Get optimized parameters
-        theta, x1, y1, x2, y2 = optimize_rectangle_parameters(self.image, RT, K)
+        #theta, x1, y1, x2, y2 = optimize_rectangle_parameters(self.image, RT, K)
+        theta = 0
+        x1 = -530
+        x2 = 540
+        y1 = -1300
+        y2 = 325
 
         # Generate optimized 3D rectangle
         model_rect_3d_hom = compute_model_rectangle_3d_hom(theta, x1, y1, x2, y2)
@@ -187,25 +192,32 @@ class HomographyFromChessboardImage:
         model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
 
         # Align rectangle with the bottom of the image
-        model_rect_2d[1] -= model_rect_2d[1].max() - (self.image.shape[0] - 1)
+        #model_rect_2d[1] -= model_rect_2d[1].max() - (self.image.shape[0] - 1)
 
         x_dif = abs(x2) + abs(x1)
         y_dif = abs(y2) + abs(y1)
-        dsize = (int(x_dif), int(y_dif))
+        dsize = (1280,720)
 
         # Adjust rectangle for warp perspective
         src_points = model_rect_2d.T[:, :2]
 
         # Define destination points aligned with the bottom
-        dst_points = np.array([[0, 0], [dsize[0], 0], [dsize[0], dsize[1]], [0, dsize[1]]], dtype=np.float32)
+        dst_points = np.array([
+            [dsize[0] // 2 - 300, 0],   # Top-left
+            [dsize[0] // 2 + 300, 0],  # Top-right
+            [3 * dsize[0] // 4, dsize[1] - 1],  # Bottom-right
+            [dsize[0] // 4, dsize[1] - 1]  # Bottom-left 
+        ], dtype=np.float32)
+
 
         H, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC)
         warped_image = cv2.warpPerspective(self.image, H, dsize)
 
         # Resize the warped image
-        warped_image = cv2.resize(warped_image, (int(dsize[0] / 5), int(dsize[1] / 5)))
+        #warped_image = cv2.resize(warped_image, (int(dsize[0] / 2), int(dsize[1] / 2)))
 
         if plot_BEV_full:
             plot_BEV(self.image, model_rect_2d, warped_image)
 
         return H, dsize
+    

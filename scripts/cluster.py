@@ -423,12 +423,12 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 10)
-    k_values = 5
+    #k_values = 5
     iterations = 300
 
-    #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
-    #print(cluster_labels)
-
+    cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
+    print(cluster_labels)
+"""
     if isinstance(k_values, range):
         k_best_cluster_image_indices, best_k = cluster.iterate_generate_clusters(k_values, iterations)
 
@@ -451,3 +451,4 @@ if __name__ == "__main__":
 
     else:
         print("k_values is neither a range nor an integer")
+"""
