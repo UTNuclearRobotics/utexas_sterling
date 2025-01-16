@@ -50,6 +50,7 @@ class FiddlyBEVHomography:
         corners = corners.reshape(-1, 2)
 
 
+
 def ComputeVicRegData(
     H, K, RT, plane_normal, plane_distance, robot_data, history_size=10, patch_size=(128, 128), start=0
 ):
@@ -121,10 +122,8 @@ def ComputeVicRegData(
             H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
             H_past2patch = H @ H_past2cur
 
-            past_patch = cv2.resize(
-                cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size),
-                (patch_size[0] // full_bev_scale, patch_size[1] // full_bev_scale),
-            )
+            past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
+            
             if past_patch.shape != (128,128):
                 past_patch = cv2.resize(past_patch,(128,128))
                 timestep_patches.append(past_patch)
@@ -188,15 +187,15 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
+    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    #H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
     RT = chessboard_homography.get_rigid_transform()
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_ahg_courtyard/panther_ahg_courtyard.pkl")
+        os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
     )
 
     output_dimensions = (
@@ -215,10 +214,10 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 1665
+    index = 1800
     history_size = 10
     vicreg_data = ComputeVicRegData(
-        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=dsize, start=index
+        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
     )
 
     print(len(vicreg_data[0]))
@@ -251,3 +250,8 @@ if __name__ == "__main__":
 - Training VICReg model
 - Classification: Segmenting patches for more accurate
 """
+
+#Base link 
+#Rigid Transform
+
+#Calculate rigid transfrom between odom and camera using non linear optimizer

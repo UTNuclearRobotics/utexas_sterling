@@ -24,6 +24,7 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
 
         # Adjust the current translation for the camera offset
         R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3]
+        print(T_cur)
 
         # Get current patch
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)

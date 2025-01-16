@@ -34,6 +34,7 @@ class PatchRenderer:
             A numpy array representing the patch image.
         """
         patch = patch.cpu().numpy()
+
         patch = patch.transpose(1, 2, 0)
         patch = (patch * 255).astype("uint8")
         return patch
@@ -147,9 +148,9 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = StandardScaler()
+        #scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
         # Apply K-means clustering with sklearn
         kmeans = KMeans(n_clusters=k, init='k-means++', max_iter=iterations, n_init = 10, random_state=42)
@@ -158,7 +159,7 @@ class Cluster:
 
         # Save the K-means model and scaler
         joblib.dump(kmeans, save_model_path)
-        joblib.dump(scaler, save_scaler_path)
+        #joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
         print("Number of items in each cluster:")
@@ -227,9 +228,9 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = StandardScaler()
+        #scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
         silhouette_scores = []
         wcss_values = []
@@ -277,9 +278,9 @@ class Cluster:
         for k, score in silhouette_scores:
             print(f"  k={k}: {score}")
 
-        #best_k = max(silhouette_scores, key=lambda x: x[1])[0]
-        kn = KneeLocator(ks, wcss, curve="convex", direction="decreasing")
-        best_k = kn.knee
+        best_k = max(silhouette_scores, key=lambda x: x[1])[0]
+        #kn = KneeLocator(ks, wcss, curve="convex", direction="decreasing")
+        #best_k = kn.knee
         print(f"Best k according to silhouette score: {best_k}")
 
         # Plot clusters only for the best k
@@ -414,12 +415,12 @@ if __name__ == "__main__":
 
     # Generate clusters
     cluster = Cluster(
-        data_pkl_path=os.path.join(script_dir, "../datasets/vicreg_data.pkl"),
+        data_pkl_path=os.path.join(script_dir, "../datasets/ahg_courtyard_1_vicreg.pkl"),
         model_path=os.path.join(script_dir, "../models/vis_rep.pt"),
     )
 
     #k_values = range(2, 10)
-    k_values = 5
+    k_values = 6
     iterations = 1000
 
     #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")

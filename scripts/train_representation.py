@@ -86,7 +86,7 @@ if __name__ == "__main__":
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
-    parser.add_argument("--batch_size", "-b", type=int, default=128, help="Batch size for training")
+    parser.add_argument("--batch_size", "-b", type=int, default=256, help="Batch size for training")
     parser.add_argument("--epochs", "-e", type=int, default=50, help="Number of epochs for training")
     args = parser.parse_args()
     

@@ -20,8 +20,11 @@ class TerrainDataset(Dataset):
         num_patches = sample.shape[0]
 
         # Pick a patch from first half and second half
-        patch1_idx = torch.randint(0, num_patches // 2, (1,)).item()
-        patch2_idx = torch.randint(num_patches // 2, num_patches, (1,)).item()
+        #patch1_idx = torch.randint(0, num_patches // 2, (1,)).item()
+        #patch2_idx = torch.randint(num_patches // 2, num_patches, (1,)).item()
+
+        patch1_idx = 0
+        patch2_idx = torch.randint(1, num_patches, (1,)).item()
         patch1 = sample[patch1_idx]  # torch.Size([3, 128, 128])
         patch2 = sample[patch2_idx]  # torch.Size([3, 128, 128])
 
