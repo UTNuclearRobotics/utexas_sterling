@@ -6,6 +6,7 @@ import torch
 from kneed import KneeLocator
 from PIL import Image
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
@@ -14,6 +15,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import numpy as np
 import joblib
+import cv2
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -145,8 +147,7 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
-        #StandardScaler()
+        scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -226,8 +227,7 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
-        #StandardScaler()
+        scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -379,8 +379,7 @@ class Cluster:
         # Load the K-means model and scaler
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"K-means model not found at {model_path}")
-        if not os.path.exists(scaler_path):
-            raise FileNotFoundError(f"Scaler not found at {scaler_path}")
+
 
         kmeans = joblib.load(model_path)
         scaler = joblib.load(scaler_path)
@@ -420,12 +419,12 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 10)
-    #k_values = 5
-    iterations = 300
+    k_values = 5
+    iterations = 1000
 
-    cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
-    print(cluster_labels)
-"""
+    #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
+    #print(cluster_labels)
+
     if isinstance(k_values, range):
         k_best_cluster_image_indices, best_k = cluster.iterate_generate_clusters(k_values, iterations)
 
@@ -448,4 +447,3 @@ if __name__ == "__main__":
 
     else:
         print("k_values is neither a range nor an integer")
-"""

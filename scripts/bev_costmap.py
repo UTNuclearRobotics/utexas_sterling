@@ -148,25 +148,21 @@ class BEVCostmap:
         # Initialize the video writer
         frame_size = self.processed_imgs["bev"][0].shape[1], self.processed_imgs["bev"][0].shape[0]
         fps = 10
+        combined_frame_size = (frame_size[0], frame_size[1]*2)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_save_path_cost = os.path.join(self.SAVE_PATH, "costmap.mp4")
-        video_writer_cost = cv2.VideoWriter(video_save_path_cost, fourcc, fps, frame_size)
-
-        video_save_path_BEV = os.path.join(self.SAVE_PATH, "BEV.mp4")
-        video_writer_BEV = cv2.VideoWriter(video_save_path_BEV, fourcc, fps, frame_size)
+        video_save_path = os.path.join(self.SAVE_PATH, "costmap.mp4")
+        video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, combined_frame_size)
 
         for i in tqdm(range(len(self.processed_imgs["cost"])), desc="Writing video"):
             img_cost = self.processed_imgs["cost"][i]
-            video_writer_cost.write(img_cost)
-
             img_BEV = self.processed_imgs["bev"][i]
-            video_writer_BEV.write(img_BEV)
 
+            # Combine frames side-by-side (horizontal concatenation)
+            combined_frame = cv2.vconcat([img_cost, img_BEV])
+            video_writer.write(combined_frame)
 
-
-        video_writer_cost.release()
-        video_writer_BEV.release()
-        cprint(f"Video saved successfully: {video_save_path_cost}", "green")
+        video_writer.release()
+        cprint(f"Video saved successfully: {video_save_path}", "green")
 
 
 if __name__ == "__main__":
@@ -204,11 +200,11 @@ if __name__ == "__main__":
     scaler_path = "scripts/clusters/scaler.pkl"
     preferences = {
         # 0: Black, 255: White
-        0: 150, #Cluster 0: Aggregate concrete
-        1: 0, #Cluster 1: Smooth concrete (Inside Lab)
-        2: 100, #Cluster 2: Mix of Brick and Aggregate Concrete
-        3: 50, #Cluster 3: Light Concrete
-        4: 0 #Cluster 4: Mix of smooth concrete and aggregate concrete
+        0: 0,      #Cluster 0: Smooth Concrete
+        1: 255,     #Cluster 1: Grass
+        2: 0,      #Cluster 2: Smooth Concrete
+        3: 50,     #Cluster 3: Aggregate concrete
+        4: 0       #Cluster 4: Smooth Concrete
 
     }
     bev_costmap = BEVCostmap(
