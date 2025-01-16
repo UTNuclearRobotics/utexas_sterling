@@ -33,10 +33,8 @@ class PatchRenderer:
         Returns:
             A numpy array representing the patch image.
         """
-        patch = patch.cpu().numpy()
+        patch = patch.permute(1, 2, 0).cpu().numpy().astype("uint8")
 
-        patch = patch.transpose(1, 2, 0)
-        patch = (patch * 255).astype("uint8")
         return patch
 
     @staticmethod
@@ -62,56 +60,29 @@ class PatchRenderer:
     @staticmethod
     def image_grid(images):
         """
-        Create and save a 5x5 image grid.
+        Create a 5x5 image grid using OpenCV.
         Args:
-            images (list): A list of images to be arranged in a grid.
-            save_path (str): The path where the grid image will be saved.
+            images (list): A list of images (NumPy arrays) to be arranged in a grid.
+        Returns:
+            A NumPy array representing the image grid.
         """
-        # Initialize grid
+        # Grid and image parameters
         grid_size = 5
-        image_size = (64, 64)
-        new_im = Image.new("RGB", (image_size[0] * grid_size, image_size[1] * grid_size))
+        image_size = (128, 128)  # Desired size for each patch
 
-        for idx in range(25):
-            vp = images[idx]
+        # Resize each image to the target size
+        resized_images = [cv2.resize(img, image_size) for img in images]
 
-            # Calculate grid position
-            row = idx // grid_size
-            col = idx % grid_size
+        # Build the grid row by row
+        rows = []
+        for i in range(grid_size):
+            row = np.hstack(resized_images[i * grid_size:(i + 1) * grid_size])
+            rows.append(row)
 
-            # Format and paste individual patches to grid
-            im = Image.fromarray(vp)
-            im = im.convert("RGB")
-            im.thumbnail(image_size)
-            new_im.paste(im, (col * image_size[0], row * image_size[1]))
+        # Stack rows vertically to form the full grid
+        grid = np.vstack(rows)
 
-        return new_im
-
-    @staticmethod
-    def image_streaks(images):
-        """
-        Create and save an image grid row by row.
-        Args:
-            images (list of list): A 2D list of images to be arranged in a grid.
-        """
-        # Validation
-        if not all(isinstance(row, list) for row in images):
-            raise ValueError("The images must be in a 2D list where each row is a cluster.")
-
-        max_row_len = max(len(row) for row in images)
-        grid_height = len(images)
-        image_size = (64, 64)
-        new_im = Image.new("RGB", (image_size[0] * max_row_len, image_size[1] * grid_height))
-
-        for row_idx, row in enumerate(images):
-            for col_idx, vp in enumerate(row):
-                # Format and paste individual patches to grid
-                im = Image.fromarray(vp)
-                im = im.convert("RGB")
-                im.thumbnail(image_size)
-                new_im.paste(im, (col_idx * image_size[0], row_idx * image_size[1]))
-
-        return new_im
+        return grid
 
 
 class Cluster:
@@ -420,7 +391,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 10)
-    k_values = 6
+    k_values = 5
     iterations = 1000
 
     #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
@@ -434,7 +405,10 @@ if __name__ == "__main__":
 
         for i, cluster in enumerate(rendered_clusters):
             grid_image = PatchRenderer.image_grid(cluster)
-            grid_image.save(os.path.join(save_dir, f"cluster_{i}.png"))
+            # Define the save path for the grid
+            save_path = os.path.join(save_dir, f"cluster_{i}.png")
+            # Save the grid image to the specified path
+            cv2.imwrite(save_path, grid_image)
 
     elif isinstance(k_values, int):
         all_cluster_image_indices = cluster.generate_clusters(k_values,iterations)
@@ -444,7 +418,9 @@ if __name__ == "__main__":
 
         for i, cluster in enumerate(rendered_clusters):
             grid_image = PatchRenderer.image_grid(cluster)
-            grid_image.save(os.path.join(save_dir, f"cluster_{i}.png"))
+            save_path = os.path.join(save_dir, f"cluster_{i}.png")
+            # Save the grid image to the specified path
+            cv2.imwrite(save_path, grid_image)
 
     else:
         print("k_values is neither a range nor an integer")
