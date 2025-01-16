@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import pickle
 
 import cv2
 import numpy as np
@@ -10,7 +11,6 @@ from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
 from utils import *
-import pickle
 
 
 def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_size=10, patch_size=(128, 128)):
@@ -27,12 +27,11 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
 
         # Get current patch
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
-        if cur_patch.shape != (128,128):
-            cur_patch = cv2.resize(cur_patch,(128,128))
+        if cur_patch.shape != patch_size:
+            cur_patch = cv2.resize(cur_patch, patch_size)
             timestep_patches.append(cur_patch)
         else:
             timestep_patches.append(cur_patch)
-
 
         # --- Draw Past Patches ---
         for past_hist in range(1, history_size):
@@ -53,8 +52,8 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
             H_past2patch = H @ H_past2cur
 
             past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
-            if past_patch.shape != (128,128):
-                past_patch = cv2.resize(past_patch,(128,128))
+            if past_patch.shape != patch_size:
+                past_patch = cv2.resize(past_patch, patch_size)
                 timestep_patches.append(past_patch)
             else:
                 timestep_patches.append(past_patch)
@@ -97,7 +96,10 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
 
 def validate_vicreg_data(robot_data, vicreg_data):
     history_size = robot_data.getNTimesteps() - len(vicreg_data)
-    
+
+    print("Number of patches: ", len(vicreg_data))
+    print("Number of patches per timestep: ", len(vicreg_data[0]))
+
     counter = 0
     cv2.namedWindow("VICReg Data")
     while counter < len(vicreg_data):
@@ -126,16 +128,31 @@ if __name__ == "__main__":
     # Parameters for compute vicreg data
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
     H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    #H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
+    # H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
 
-    bag_name = "panther_ahg_courtyard"
-    robot_data = RobotDataAtTimestep(os.path.join(script_dir, f"../bags/{bag_name}/{bag_name}.pkl"))
+    parser = argparse.ArgumentParser(description="Preprocess data for VICReg.")
+    parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronzied pickle file inside.")
+    args = parser.parse_args()
+
+    # Check if the bag file exists
+    bag_path = args.b
+    if not os.path.exists(bag_path):
+        raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
+    # Validate the sycned pickle file
+    synced_pkl = [file for file in os.listdir(bag_path) if file.endswith("_synced.pkl")]
+    if len(synced_pkl) != 1:
+        raise FileNotFoundError(f"Synced pickle file not found in: {bag_path}")
+    synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
+
+    robot_data = RobotDataAtTimestep(synced_pkl_path)
+
+    save_path = "/".join(synced_pkl_path.split("/")[:-1])
+    vicreg_data_path = os.path.join(save_path, save_path.split("/")[-1] + "_vicreg.pkl")
 
     # Load or compute vicreg data
-    vicreg_data_path = os.path.join(script_dir, f"../bags/{bag_name}/vicreg_data.pkl")
     if os.path.exists(vicreg_data_path):
         # --- DELETE THE .PKL IF YOU WANT TO RECALCULATE VICREG DATA ---
         with open(vicreg_data_path, "rb") as f:
@@ -143,7 +160,7 @@ if __name__ == "__main__":
     else:
         history_size = 10
         vicreg_data = ComputeVicRegData(
-            H, K, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128)
+            H, K, plane_normal, plane_distance, robot_data, history_size, patch_size=(128, 128)
         )
         with open(vicreg_data_path, "wb") as f:
             pickle.dump(vicreg_data, f)
