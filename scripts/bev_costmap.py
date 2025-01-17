@@ -10,7 +10,7 @@ from robot_data_at_timestep import RobotDataAtTimestep
 from termcolor import cprint
 from tqdm import tqdm
 from cluster import Cluster
-from concurrent.futures import ThreadPoolExecutor
+import joblib
 
 
 # GCD of 1280 and 720: 1,2,4,5,8,10,16,20,40,80
@@ -22,17 +22,16 @@ class BEVCostmap:
     An overview of the cost inference process for local planning at deployment.
     """
 
-    def __init__(self, synced_pkl_path, homography_cb, model_path, scaler_path, preferences):
+    def __init__(self, synced_pkl_path, homography_cb, model_path, preferences):
         self.synced_pkl_path = synced_pkl_path
         self.homography_cb = homography_cb
         self.model_path = model_path
-        self.scaler_path = scaler_path
         self.preferences = preferences
 
         self.processed_imgs = {"bev": [], "cost": []}
         self.SAVE_PATH = "/".join(synced_pkl_path.split("/")[:-1])
 
-        self.cluster = Cluster(data_pkl_path=os.path.join(script_dir, "../datasets/vicreg_data.pkl"),
+        self.cluster = Cluster(data_pkl_path=os.path.join(script_dir, "../datasets/ahg_courtyard_1_vicreg.pkl"),
                                model_path=os.path.join(script_dir, "../models/vis_rep.pt"))
 
     def process_images(self):
@@ -91,7 +90,7 @@ class BEVCostmap:
             # Convert cell to torch tensor
             cell_tensor = torch.tensor(cell, dtype=torch.float32)
 
-            cluster_label = self.cluster.predict_cluster(cell_tensor, self.model_path, self.scaler_path)
+            cluster_label = self.cluster.predict_cluster(cell_tensor, self.model_path)
             # Match image cell to a cluster using "predict_cluster" function
             # Assign grayscale value (0, 255) based on preference
             cost_value = self.preferences.get(cluster_label, 0)
@@ -200,15 +199,15 @@ if __name__ == "__main__":
     scaler_path = "scripts/clusters/scaler.pkl"
     preferences = {
         # 0: Black, 255: White
-        0: 0,      #Cluster 0: Smooth Concrete
-        1: 255,     #Cluster 1: Grass
-        2: 0,      #Cluster 2: Smooth Concrete
-        3: 50,     #Cluster 3: Aggregate concrete
+        0: 200,      #Cluster 0: Grass
+        1: 0,     #Cluster 1: Smooth Concrete
+        2: 100,      #Cluster 2: Aggregate Concrete
+        3: 0,     #Cluster 3: Smooth concrete
         4: 0       #Cluster 4: Smooth Concrete
 
     }
     bev_costmap = BEVCostmap(
-        synced_pkl_path=synced_pkl_path, homography_cb=homography_cb, model_path=model_path, scaler_path=scaler_path, preferences=preferences
+        synced_pkl_path=synced_pkl_path, homography_cb=homography_cb, model_path=model_path, preferences=preferences
     )
     bev_costmap.process_images()
     bev_costmap.save_data()

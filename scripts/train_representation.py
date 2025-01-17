@@ -14,7 +14,7 @@ class SterlingRepresentation(nn.Module):
     def __init__(self, device):
         super(SterlingRepresentation, self).__init__()
         self.device = device
-        self.latent_size = 64
+        self.latent_size = 128
         self.visual_encoder = VisualEncoderModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.visual_encoder.rep_size, self.latent_size),
@@ -29,8 +29,8 @@ class SterlingRepresentation(nn.Module):
     def forward(self, patch1, patch2):
         """
         Args:
-            patch1 (torch.Tensor): First patch image of shape (3, 64, 64)
-            patch2 (torch.Tensor): Second patch image of shape (3, 64, 64)
+            patch1 (torch.Tensor): First patch image of shape (3, 128, 128)
+            patch2 (torch.Tensor): Second patch image of shape (3, 128, 128)
         """
         # Shape should be [batch size, 2, 3, 64, 64]
         # patch1 = x[:, 0:1, :, :, :]

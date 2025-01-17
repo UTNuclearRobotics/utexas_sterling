@@ -16,6 +16,9 @@ from sklearn.metrics import silhouette_score
 import numpy as np
 import joblib
 import cv2
+import matplotlib
+matplotlib.use("TkAgg") 
+from matplotlib.widgets import Button, TextBox
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -110,7 +113,7 @@ class Cluster:
 
         self.patches = patch1.to(device)
 
-    def generate_clusters(self, k, iterations, save_model_path="scripts/clusters/kmeans_model.pkl", save_scaler_path="scripts/clusters/scaler.pkl"):
+    def generate_clusters(self, k, iterations, save_model_path="scripts/clusters/kmeans_model.pkl"):
         """
         Generate clusters using K-means algorithm.
         Args:
@@ -119,7 +122,7 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        #scaler = StandardScaler()
+        #scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -199,7 +202,7 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        #scaler = StandardScaler()
+        #scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -311,7 +314,8 @@ class Cluster:
         """
         # Reduce the dimensionality of the representation vectors for visualization
         pca = PCA(n_components=2, random_state = 42)  # Use PCA for dimensionality reduction
-        reduced_vectors = pca.fit_transform(representation_vectors.detach().cpu().numpy())  # Convert to numpy for PCA
+        representation_vectors_np = representation_vectors.detach().cpu().numpy()  # Convert to numpy for PCA
+        reduced_vectors = pca.fit_transform(representation_vectors_np)  # Convert to numpy for PCA
         # Set up the plot
         plt.figure(figsize=(8, 6))
 
@@ -337,7 +341,7 @@ class Cluster:
         plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
         plt.show()
 
-    def predict_cluster(self, cell, model_path, scaler_path):
+    def predict_cluster(self, cell, model_path):
         """
         Predict cluster for new test data using the saved K-means model and scaler.
         Args:
@@ -354,7 +358,6 @@ class Cluster:
 
 
         kmeans = joblib.load(model_path)
-        scaler = joblib.load(scaler_path)
 
         # Ensure the cell is a tensor
         if isinstance(cell, np.ndarray):
@@ -373,11 +376,14 @@ class Cluster:
 
         # Preprocess the representation vector
         representation_np = representation_vector.detach().cpu().numpy()
-        scaled_representation = scaler.transform(representation_np)
+        #scaled_representation = scaler.transform(representation_np)
 
         # Predict cluster label
-        cluster_label = kmeans.predict(scaled_representation)
+        cluster_label = kmeans.predict(representation_np)
         return cluster_label[0]
+
+
+
     
 if __name__ == "__main__":
     # Save directory
@@ -411,7 +417,7 @@ if __name__ == "__main__":
             cv2.imwrite(save_path, grid_image)
 
     elif isinstance(k_values, int):
-        all_cluster_image_indices = cluster.generate_clusters(k_values,iterations)
+        all_cluster_image_indices = cluster.generate_clusters(k_values,iterations,save_model_path="scripts/clusters/kmeans_model.pkl")
 
         # Render clusters
         rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)

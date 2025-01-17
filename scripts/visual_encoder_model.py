@@ -2,9 +2,9 @@ import torch.nn as nn
 
 
 class VisualEncoderModel(nn.Module):
-    def __init__(self, latent_size=64):
+    def __init__(self, latent_size=128):
         super(VisualEncoderModel, self).__init__()
-        self.rep_size = 64
+        self.rep_size = 128
         self.latent_size = latent_size
 
         self.model = nn.Sequential(
