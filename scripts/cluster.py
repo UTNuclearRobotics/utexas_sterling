@@ -16,9 +16,6 @@ from sklearn.metrics import silhouette_score
 import numpy as np
 import joblib
 import cv2
-import matplotlib
-matplotlib.use("TkAgg") 
-from matplotlib.widgets import Button, TextBox
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -113,7 +110,7 @@ class Cluster:
 
         self.patches = patch1.to(device)
 
-    def generate_clusters(self, k, iterations, save_model_path="scripts/clusters/kmeans_model.pkl"):
+    def generate_clusters(self, k, iterations, save_model_path="scripts/clusters/kmeans_model.pkl", save_scaler_path = "scripts/clusters/scaler.pkl"):
         """
         Generate clusters using K-means algorithm.
         Args:
@@ -122,9 +119,9 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        #scaler = MinMaxScaler()
+        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
         # Apply K-means clustering with sklearn
         kmeans = KMeans(n_clusters=k, init='k-means++', max_iter=iterations, n_init = 10, random_state=42)
@@ -133,7 +130,7 @@ class Cluster:
 
         # Save the K-means model and scaler
         joblib.dump(kmeans, save_model_path)
-        #joblib.dump(scaler, save_scaler_path)
+        joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
         print("Number of items in each cluster:")
@@ -202,9 +199,9 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        #scaler = MinMaxScaler()
+        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
         silhouette_scores = []
         wcss_values = []

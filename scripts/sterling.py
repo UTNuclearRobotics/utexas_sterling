@@ -210,11 +210,11 @@ if __name__ == "__main__":
             chessboard_homography.plot_BEV_chessboard()
         case _ if args.bev_full:
             #chessboard_homography.BEVEditor()
-            chessboard_homography.plot_BEV_full(plot_BEV_full=True)
+            chessboard_homography.plot_BEV_full(image,plot_BEV_full=True)
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 1800
+    index = 20
     history_size = 10
     vicreg_data = ComputeVicRegData(
         H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
@@ -247,7 +247,8 @@ if __name__ == "__main__":
 
 """Next Steps: 
 - Stiching map together from ROS bag
-- Training VICReg model
+- Improve pattern recognition
+- Making sure patches remain in the image ie when robots making a hard turn
 - Classification: Segmenting patches for more accurate
 """
 

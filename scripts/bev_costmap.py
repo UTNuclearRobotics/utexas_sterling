@@ -198,9 +198,9 @@ if __name__ == "__main__":
     model_path = "scripts/clusters/kmeans_model.pkl"
     scaler_path = "scripts/clusters/scaler.pkl"
     preferences = {
-        # 0: Black, 255: White
+        # Black: 0, White: 255
         0: 200,      #Cluster 0: Grass
-        1: 0,     #Cluster 1: Smooth Concrete
+        1: 0,        #Cluster 1: Smooth Concrete
         2: 100,      #Cluster 2: Aggregate Concrete
         3: 0,     #Cluster 3: Smooth concrete
         4: 0       #Cluster 4: Smooth Concrete

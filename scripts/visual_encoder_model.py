@@ -8,21 +8,21 @@ class VisualEncoderModel(nn.Module):
         self.latent_size = latent_size
 
         self.model = nn.Sequential(
-            # torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros')
-            nn.Conv2d(3, 8, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(8),
-            nn.PReLU(),  # torch.Size([batch_size, 8, 64, 64])
-            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1, bias=False),
+            # Input shape: (batch_size, 3, H, W), where 3 = RGB channels
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(16),
-            nn.PReLU(),  # torch.Size([batch_size, 16, 32, 32])
+            nn.PReLU(),  # Output shape: (batch_size, 16, H/2, W/2)
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(32),
-            nn.PReLU(),  # torch.Size([batch_size, 32, 16, 16])
-            nn.Conv2d(32, self.rep_size, kernel_size=3, stride=2, padding=1),
-            nn.PReLU(),  # torch.Size([batch_size, rep_size, 8, 8])
-            nn.AdaptiveAvgPool2d((1, 1)), # output shape : (batch_size, 64, 1, 1),  # torch.Size([batch_size, rep_size, 1, 1])
-            nn.Flatten(),
-            nn.Linear(self.rep_size, latent_size),
+            nn.PReLU(),  # Output shape: (batch_size, 32, H/4, W/4)
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.PReLU(),  # Output shape: (batch_size, 64, H/8, W/8)
+            nn.Conv2d(64, self.rep_size, kernel_size=3, stride=2, padding=1),
+            nn.PReLU(),  # Output shape: (batch_size, 64, H/16, W/16)
+            nn.AdaptiveAvgPool2d((1, 1)), # Output shape: (batch_size, 64, 1, 1)
+            nn.Flatten(), # Flattens to (batch_size, 64)
+            nn.Linear(self.rep_size, latent_size), # Reduces to (batch_size, latent_size)
             nn.ReLU(),
         )
 

@@ -170,7 +170,7 @@ class HomographyFromChessboardImage:
             cv2.waitKey(1)
 
 
-    def plot_BEV_full(self,image, plot_BEV_full=False):
+    def plot_BEV_full(self, image, plot_BEV_full=False):
         """
         Plots the bird's-eye view (BEV) image using optimized rectangle parameters.
         """
@@ -196,7 +196,9 @@ class HomographyFromChessboardImage:
 
         x_dif = abs(x2) + abs(x1)
         y_dif = abs(y2) + abs(y1)
-        dsize = (1280,720)
+        aspect_ratio = y_dif/x_dif
+        #dsize = (1280,720)
+        dsize = (int(aspect_ratio*720),720)
 
         # Adjust rectangle for warp perspective
         src_points = model_rect_2d.T[:, :2]
