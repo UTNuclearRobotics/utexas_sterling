@@ -31,9 +31,11 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
         if cur_patch.shape != patch_size:
             cur_patch = cv2.resize(cur_patch, patch_size)
-            timestep_patches.append(cur_patch)
-        else:
-            timestep_patches.append(cur_patch)
+        timestep_patches.append(cur_patch)
+
+        # Define current bounding box in image space
+        cur_bbox = [0, 0, patch_size[0], patch_size[1]]  # [xmin, ymin, xmax, ymax]
+
 
         # --- Draw Past Patches ---
         for past_hist in range(1, history_size):
@@ -53,16 +55,44 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
             H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
             H_past2patch = H @ H_past2cur
 
-            past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
-            if past_patch.shape != patch_size:
-                past_patch = cv2.resize(past_patch, patch_size)
-                timestep_patches.append(past_patch)
-            else:
+            # Transform past patch bounding box to current coordinates
+            past_bbox_corners = np.array([
+                [0, 0],
+                [patch_size[0], 0],
+                [patch_size[0], patch_size[1]],
+                [0, patch_size[1]]
+            ], dtype=np.float32).reshape(-1, 1, 2)
+
+            transformed_corners = cv2.perspectiveTransform(past_bbox_corners, H_past2cur)
+            x_min = int(np.min(transformed_corners[:, 0, 0]))
+            y_min = int(np.min(transformed_corners[:, 0, 1]))
+            x_max = int(np.max(transformed_corners[:, 0, 0]))
+            y_max = int(np.max(transformed_corners[:, 0, 1]))
+            past_bbox = [x_min, y_min, x_max, y_max]
+
+            # Check if the current patch overlaps with the past patch
+            if does_overlap(cur_bbox, past_bbox):
+                # Add the past patch if overlapping
+                past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
+                if past_patch.shape != patch_size:
+                    past_patch = cv2.resize(past_patch, patch_size)
                 timestep_patches.append(past_patch)
 
         patches.append(timestep_patches)
 
     return patches
+
+def does_overlap(cur_bbox, past_bbox):
+    """
+    Checks if two bounding boxes overlap.
+    """
+    x_min_cur, y_min_cur, x_max_cur, y_max_cur = cur_bbox
+    x_min_past, y_min_past, x_max_past, y_max_past = past_bbox
+
+    return not (
+        x_max_cur < x_min_past or x_max_past < x_min_cur or
+        y_max_cur < y_min_past or y_max_past < y_min_cur
+    )
 
 
 def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
