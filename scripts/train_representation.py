@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
-from utils import load_dataset, load_model
+from utils import load_bag_pkl, load_bag_pt_model
 from vicreg import VICRegLoss
 from visual_encoder_model import VisualEncoderModel
 from torchvision import transforms
@@ -91,14 +91,15 @@ if __name__ == "__main__":
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
-    parser.add_argument("--batch_size", "-b", type=int, default=256, help="Batch size for training")
-    parser.add_argument("--epochs", "-e", type=int, default=50, help="Number of epochs for training")
+    parser.add_argument("-bag", "-b", type=str, required=True, help="Bag directory with VICReg dataset pickle file inside.")
+    parser.add_argument("-batch_size", "-batch", type=int, default=256, help="Batch size for training")
+    parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
     args = parser.parse_args()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create dataset and dataloader
-    data_pkl = load_dataset()
+    data_pkl = load_bag_pkl(parser.bag, "vicreg")
     # Define the augmentation pipeline
     augment_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),  # Flips tensor horizontally
@@ -111,7 +112,7 @@ if __name__ == "__main__":
 
     # Initialize model
     model = SterlingRepresentation(device).to(device)
-    model_path = load_model(model)
+    save_path = load_bag_pt_model(parser.bag, "terrain_rep", model)
 
     # Define optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
@@ -130,4 +131,4 @@ if __name__ == "__main__":
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{args.epochs}], Loss: {avg_loss:.4f}")
 
-    torch.save(model.state_dict(), model_path)
+    torch.save(model.state_dict(), save_path)
