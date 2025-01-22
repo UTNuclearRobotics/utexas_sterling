@@ -114,7 +114,6 @@ def ComputeVicRegData(
             past_image = robot_data.getImageAtTimestep(past_timestep)
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
             R_past, T_past = past_rt[:3, :3], past_rt[:3, 3]
-            T_past *= 3.75*past_hist
 
             R_rel = R_cur.T @ R_past  # Past to current rotation
             T_rel = R_cur.T @ (T_past - T_cur)  # Past to current translation
@@ -215,7 +214,7 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 1900
+    index = 2400
     history_size = 10
     vicreg_data = ComputeVicRegData(
         H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
