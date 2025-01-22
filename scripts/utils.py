@@ -124,7 +124,7 @@ def load_bag_pkl(bag_path, suffix):
     return pkl_data
 
 
-def load_bag_pt_model(bag_path, suffix, model):
+def load_bag_pt_model(bag_path, suffix, model=None):
     model_path = os.path.join(bag_path, "models")
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model path does not exist: {model_path}")
@@ -138,7 +138,8 @@ def load_bag_pt_model(bag_path, suffix, model):
     pt_model_path = os.path.join(model_path, pt_model[0])
     model.load_state_dict(torch.load(pt_model_path, weights_only=True))
     cprint("Existing model weights loaded successfully", "green")
-    return os.path.join(model_path, f"{suffix}.pt")
+    
+    return os.path.join(model_path, f"${bag_path.rstrip('/').split("/")[-1]}_{suffix}.pt")
 
 
 def fixedWarpPerspective(H, image):
