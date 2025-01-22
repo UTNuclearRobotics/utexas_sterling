@@ -67,7 +67,7 @@ class PatchRenderer:
             A NumPy array representing the image grid.
         """
         # Grid and image parameters
-        grid_size = 5
+        grid_size = 10
         image_size = (128, 128)  # Desired size for each patch
 
         # Resize each image to the target size
@@ -119,7 +119,7 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
+        scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -159,7 +159,7 @@ class Cluster:
             selected[first_idx] = True
 
             # Iteratively select the farthest vector
-            while len(cluster_indices) < min(25, cluster_size):
+            while len(cluster_indices) < min(100, cluster_size):
                 # Compute distances from already selected indices
                 distances = clusterSim[~selected][:, selected]
                 max_dist_idx = distances.max(dim=0).indices[0].item()  # Find farthest unselected index
@@ -199,7 +199,7 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
+        scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 10)
-    k_values = 5
+    k_values = 6
     iterations = 1000
 
     #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")

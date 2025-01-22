@@ -8,13 +8,14 @@ from torch.utils.data import DataLoader
 from utils import load_dataset, load_model
 from vicreg import VICRegLoss
 from visual_encoder_model import VisualEncoderModel
+from torchvision import transforms
 
 
 class SterlingRepresentation(nn.Module):
     def __init__(self, device):
         super(SterlingRepresentation, self).__init__()
         self.device = device
-        self.latent_size = 128
+        self.latent_size = 256
         self.visual_encoder = VisualEncoderModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.visual_encoder.rep_size, self.latent_size),
@@ -78,7 +79,11 @@ class SterlingRepresentation(nn.Module):
         """
         patch1, patch2 = batch
         zv1, zv2, _, _ = self.forward(patch1, patch2)
-        return self.vicreg_loss(zv1, zv2)
+
+        # Compute VICReg loss
+        vicreg_loss = self.vicreg_loss(zv1, zv2)
+
+        return vicreg_loss
 
 if __name__ == "__main__":
     """
@@ -94,7 +99,14 @@ if __name__ == "__main__":
 
     # Create dataset and dataloader
     data_pkl = load_dataset()
-    dataset = TerrainDataset(patches=data_pkl)
+    # Define the augmentation pipeline
+    augment_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),  # Flips tensor horizontally
+        transforms.RandomVerticalFlip(),    # Flips tensor vertically
+        transforms.RandomRotation(15),      # Rotates the tensor by ±15 degrees
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalizes RGB channels
+    ])
+    dataset = TerrainDataset(patches=data_pkl, transform=augment_transform)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model
@@ -102,7 +114,7 @@ if __name__ == "__main__":
     model_path = load_model(model)
 
     # Define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
     # Training loop
     for epoch in range(args.epochs):

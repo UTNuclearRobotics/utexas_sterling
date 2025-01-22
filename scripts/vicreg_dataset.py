@@ -24,8 +24,9 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
 
         # Adjust the current translation for the camera offset
         R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3]
-        camera_offset = np.array([0.2286, 0, 0.5715])  # Static transform offset from odometry to camera frame
-        T_cur += camera_offset
+        #camera_offset = np.array([0.2286, 0, 0.5715])  # Static transform offset from odometry to camera frame
+
+        #T_cur += camera_offset
 
         # Get current patch
         cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
@@ -47,9 +48,11 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
             past_image = robot_data.getImageAtTimestep(past_timestep)
             past_rt = robot_data.getOdomAtTimestep(past_timestep)
             R_past, T_past = past_rt[:3, :3], past_rt[:3, 3]
+            #T_past += camera_offset
+            T_past *= 3.75*past_hist
 
             R_rel = R_cur.T @ R_past  # Past to current rotation
-            T_rel = R_cur.T @ (T_past - T_cur) / plane_distance  # Past to current translation
+            T_rel = R_cur.T @ (T_past - T_cur) # Past to current translation
 
             # Compute homography for past -> current -> patch
             H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)

@@ -6,6 +6,7 @@ import pickle
 import torch
 from termcolor import cprint
 from scipy.optimize import minimize
+import albumentations as A
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
