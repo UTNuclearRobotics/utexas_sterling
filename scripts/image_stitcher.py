@@ -189,20 +189,20 @@ if __name__ == "__main__":
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
     #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
+    H, _ = chessboard_homography.plot_BEV_full(image)
     RT = chessboard_homography.get_rigid_transform()
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_ahg_courtyard/panther_ahg_courtyard.pkl")
+        os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
     )
 
     # Initialize the BirdseyeCanvas object
-    canvas = BirdseyeCanvas(H, canvas_size=None, scale_factor=700, dsize=dsize)
+    canvas = BirdseyeCanvas(H, canvas_size=None, scale_factor=700, dsize=(1280,720))
 
-    for timestep in tqdm(range(0,1200), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(0,1000,5), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
 
@@ -214,3 +214,6 @@ if __name__ == "__main__":
     cv2.imshow("Birdseye Canvas", final_canvas)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+# Add Z buffer, so that pixels off in the distance are replaced with the most recent. 
+# We can get pixel and depth of the pixel using homography, once we reach that pixel, replace that portion of the image with most current

@@ -187,7 +187,7 @@ class Cluster:
             print(images)
 
         # Plot clusters only for the best k
-        self.plot_clusters(representation_vectors, torch.tensor(min_indices), k)
+        #self.plot_clusters(representation_vectors, torch.tensor(min_indices), k)
 
         return all_cluster_image_indices
 
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 10)
-    k_values = 6
+    k_values = 5
     iterations = 1000
 
     #cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")

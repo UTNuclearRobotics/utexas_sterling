@@ -197,18 +197,18 @@ class HomographyFromChessboardImage:
         x_dif = abs(x2) + abs(x1)
         y_dif = abs(y2) + abs(y1)
         aspect_ratio = y_dif/x_dif
-        #dsize = (1280,720)
-        dsize = (int(aspect_ratio*720),720)
+        dsize = (1280,720)
+        #dsize = (int(aspect_ratio*720),720)
 
         # Adjust rectangle for warp perspective
         src_points = model_rect_2d.T[:, :2]
 
         # Define destination points aligned with the bottom
         dst_points = np.array([
-            [dsize[0] // 2 - 300, 0],   # Top-left
-            [dsize[0] // 2 + 300, 0],  # Top-right
-            [3 * dsize[0] // 4, dsize[1] - 1],  # Bottom-right
-            [dsize[0] // 4, dsize[1] - 1]  # Bottom-left 
+            [dsize[0] // 2 - 180, 0],   # Top-left
+            [dsize[0] // 2 + 180, 0],  # Top-right
+            [2 * dsize[0] // 3, dsize[1] - 1],  # Bottom-right
+            [dsize[0] // 3, dsize[1] - 1]  # Bottom-left 
         ], dtype=np.float32)
 
 
@@ -221,5 +221,5 @@ class HomographyFromChessboardImage:
         if plot_BEV_full:
             plot_BEV(self.image, model_rect_2d, warped_image)
 
-        return warped_image
+        return H, warped_image
     

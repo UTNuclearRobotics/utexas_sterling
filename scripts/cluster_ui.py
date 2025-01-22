@@ -238,23 +238,42 @@ class GenerateClusters:
         for i, cluster in enumerate(rendered_clusters):
             images.append(PatchRenderer.image_grid(cluster))
 
-        def pil_to_pixbuf(pil_image):
-            data = pil_image.tobytes()
-            width, height = pil_image.size
+        def numpy_to_pixbuf(array):
+            """
+            Convert a NumPy array to a GdkPixbuf.Pixbuf object.
+            Supports RGB and RGBA formats.
+            """
+            # Ensure input is a 3D array
+            if array.ndim not in (3,):
+                raise ValueError("Input must be a 3D NumPy array with shape (height, width, channels)")
+
+            height, width, channels = array.shape
+
+            # Validate channels
+            if channels not in (3, 4):  # RGB or RGBA
+                raise ValueError("Array must have 3 (RGB) or 4 (RGBA) channels")
+
+            # Convert array to bytes
+            data = array.tobytes()
+
+            # Define rowstride (bytes per row)
+            rowstride = width * channels
+
+            # Create and return GdkPixbuf
             return GdkPixbuf.Pixbuf.new_from_data(
                 data,
                 GdkPixbuf.Colorspace.RGB,
-                pil_image.mode == "RGBA",
-                8,
+                channels == 4,  # Has alpha if RGBA
+                8,  # Bits per sample
                 width,
                 height,
-                pil_image.mode == "RGBA" and width * 4 or width * 3,
+                rowstride,
             )
 
         hbox_images = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
         for i, image in enumerate(images):
-            pixbuf = pil_to_pixbuf(image)
+            pixbuf = numpy_to_pixbuf(image)
             image_widget = Gtk.Image.new_from_pixbuf(pixbuf)
             image_widget.set_size_request(200, 200)  # Set the desired width and height
 
