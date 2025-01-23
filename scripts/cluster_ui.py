@@ -236,7 +236,7 @@ class GenerateClusters:
 
         images = []
         for i, cluster in enumerate(rendered_clusters):
-            images.append(PatchRenderer.image_grid(cluster))
+            images.append(PatchRenderer.image_grid(cluster, 2))
 
         def numpy_to_pixbuf(array):
             """
