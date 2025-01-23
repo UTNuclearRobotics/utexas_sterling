@@ -59,24 +59,27 @@ python3 train_representations.py -b <bag_dir>
 The PyTorch model will be in a `/models` folder in the `<bag_dir>` as `terrain_rep.pt`.
 
 # 6. Create Terrain Clusters
-Calculates the number of clusters and saves a visual sample of each.
+Configure the number of clusters and saves a visual sample of each.
 
 ### Command
 ```sh
-python3 cluster.py -b <bag_dir>
+python3 cluster_ui.py
 ```
 
-### Parameters
-- `-b`: Path to the ROS bag folder. Should contain a `<bag_dir>_vicreg.pkl` and the `terrain_rep.pt` file.
+### Inputs
+The UI will ask you to locate 2 files:
+- `<bag_dir>/vicreg.pkl`
+- `<bag_dir>/models/terrain_rep.pt`
 
 ### Output
-...
+Saves the centroid of each cluster as `kmeans_model.pkl`, `scalar.pkl`, and `preference.yaml` under the `<bag_dir>/clusters` directory.
 
 # 7. Create BEV Costmap Video
 Creates a video of a BEV costmap stacked on top of a BEV of the raw camera feed.
 
 ### Parameters
 - `-b`: Path to the ROS bag folder. Should contain a `<bag_dir>_vicreg.pkl` file.
+...
 
 ### Output
 Uses saves the video as `costmap.mp4`.

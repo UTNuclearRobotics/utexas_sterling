@@ -59,7 +59,7 @@ class PatchRenderer:
         return rendered_clusters
 
     @staticmethod
-    def image_grid(images):
+    def image_grid(images, grid_size=5):
         """
         Create a 5x5 image grid using OpenCV.
         Args:
@@ -68,7 +68,6 @@ class PatchRenderer:
             A NumPy array representing the image grid.
         """
         # Grid and image parameters
-        grid_size = 10
         image_size = (128, 128)  # Desired size for each patch
 
         # Resize each image to the target size
@@ -434,7 +433,7 @@ if __name__ == "__main__":
         rendered_clusters = PatchRenderer.render_clusters(k_best_cluster_image_indices, cluster.patches)
 
         for i, cluster in enumerate(rendered_clusters):
-            grid_image = PatchRenderer.image_grid(cluster)
+            grid_image = PatchRenderer.image_grid(cluster, 10)
             # Define the save path for the grid
             save_path = os.path.join(save_dir, f"cluster_{i}.png")
             # Save the grid image to the specified path
@@ -449,7 +448,7 @@ if __name__ == "__main__":
         rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)
 
         for i, cluster in enumerate(rendered_clusters):
-            grid_image = PatchRenderer.image_grid(cluster)
+            grid_image = PatchRenderer.image_grid(cluster, 10)
             save_path = os.path.join(save_dir, f"cluster_{i}.png")
             # Save the grid image to the specified path
             cv2.imwrite(save_path, grid_image)
