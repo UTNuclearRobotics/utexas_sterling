@@ -188,7 +188,7 @@ if __name__ == "__main__":
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
     H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    #H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
+    #H, dsize,_ = chessboard_homography.plot_BEV_full(image,plot_BEV_full=False)
     RT = chessboard_homography.get_rigid_transform()
     plane_normal = chessboard_homography.get_plane_norm()
     plane_distance = chessboard_homography.get_plane_dist()
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 2400
+    index = 350
     history_size = 10
     vicreg_data = ComputeVicRegData(
         H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
