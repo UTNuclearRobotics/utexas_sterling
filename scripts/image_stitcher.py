@@ -11,6 +11,7 @@ from utils import *
 from collections import defaultdict
 from scipy.spatial.transform import Rotation as R
 from numba import njit
+from scipy.optimize import minimize
 
 
 class GlobalMap:
@@ -102,109 +103,95 @@ class GlobalMap:
         x_max = int(np.ceil(x_max))
         y_max = int(np.ceil(y_max))
 
+        # Determine the required offsets for expansion
+        x_offset = max(0, -x_min)  # Only expand if x_min < 0
+        y_offset = max(0, -y_min)  # Only expand if y_min < 0
+
         # Determine new canvas dimensions
-        new_width = max(self.output_img.shape[1], x_max + abs(x_min))
-        new_height = max(self.output_img.shape[0], y_max + abs(y_min))
+        new_width = max(self.output_img.shape[1] + x_offset, x_max)
+        new_height = max(self.output_img.shape[0] + y_offset, y_max)
 
         # Create a new larger canvas
         new_canvas = np.zeros((new_height, new_width, 3), dtype=np.uint8)
 
-        # Calculate offsets for copying the old canvas
-        x_offset = abs(x_min) if x_min < 0 else 0
-        y_offset = abs(y_min) if y_min < 0 else 0
-
         # Copy the existing map into the new canvas
         new_canvas[y_offset:y_offset + self.output_img.shape[0],
                 x_offset:x_offset + self.output_img.shape[1]] = self.output_img
-        self.output_img = new_canvas
 
-        # Update offsets in the homography matrix
+        # Update the global map and offsets
+        self.output_img = new_canvas
+        self.h_offset += x_offset  # Update horizontal offset
+        self.w_offset += y_offset  # Update vertical offset
+
+        # Update the homography matrix offsets
         self.H_old[0, 2] += x_offset
         self.H_old[1, 2] += y_offset
         self.H_old /= self.H_old[2, 2]  # Normalize
 
-
-    def process_frame(self, frame_cur, timestep, reset_interval=50, odom_matrix=None):
+    def process_frame(self, frame_cur, timestep, odom_data=None, meters_to_pixels=100):
         """
-        Process a new BEV frame, compute its keypoints and descriptors, and update the global map.
+        Process a new BEV frame using odometry data and SSD minimization to update the global map.
         Args:
             frame_cur (np.ndarray): The current BEV frame.
             timestep (int): Current timestep in the process.
-            reset_interval (int): Number of timesteps after which the alignment is reset.
-            odom_matrix (np.ndarray): 4x4 odometry matrix for initial homography estimation.
+            meters_to_pixels (float): Conversion factor from meters to pixels.
+            odom_data (np.ndarray): Current odometry data as a 4x4 transformation matrix.
         """
-        # Compute keypoints and descriptors for the current frame
-        self.frame_cur = frame_cur
-        frame_gray_cur = cv2.cvtColor(frame_cur, cv2.COLOR_BGR2GRAY)
-        self.kp_cur, self.des_cur = self.detector.detectAndCompute(frame_gray_cur, None)
+        # Get image dimensions
+        image_height, image_width = frame_cur.shape[:2]
 
-        # Initialize the homography with odometry if provided
-        if odom_matrix is not None:
-            H_odom = self.odom_to_homography(odom_matrix)
-            H_initial = np.matmul(self.H_old, H_odom)  # Use odometry to estimate H_initial
-        else:
-            H_initial = self.H_old  # Default fallback to the cumulative homography
+        # Initialize odometry and previous frame on the first call
+        if not hasattr(self, 'odom_previous'):
+            self.odom_previous = odom_data  # Initialize previous odometry data
+            self.frame_previous = frame_cur  # Store the first frame for SSD comparisons
+            print(f"Initializing odometry at timestep {timestep}")
+            return  # Skip processing for the first frame
 
-        # Periodically reset the homography alignment
-        if timestep % reset_interval == 0:
-            print(f"Resetting homography alignment at timestep {timestep}")
-            kp_map, des_map = self.detector.detectAndCompute(
-                cv2.cvtColor(self.output_img, cv2.COLOR_BGR2GRAY), None
+        # Compute relative odometry transformation
+        if odom_data is not None and self.odom_previous is not None:
+            # Compute the initial homography from relative odometry
+            H_odom = self.compute_relative_odometry(
+                self.odom_previous, odom_data, meters_to_pixels, image_width, image_height
             )
-            matches = self.match(self.des_cur, des_map)
-
-            if len(matches) >= 4:
-                H_reset = self.findHomography(self.kp_cur, kp_map, matches)
-                if H_reset is not None:
-                    # Align reset homography with the global map
-                    H_reset_aligned = np.matmul(self.H_old, H_reset)
-                    H_reset_aligned[0, 2] -= self.h_offset
-                    H_reset_aligned[1, 2] -= self.w_offset
-                    H_reset_aligned /= H_reset_aligned[2, 2]  # Normalize
-                    self.H_old = H_reset_aligned
-                else:
-                    print(f"Failed to reset alignment at timestep {timestep}. Falling back to H_initial.")
-                    self.H_old = H_initial
-            else:
-                print(f"Insufficient matches for alignment reset at timestep {timestep}. Falling back to H_initial.")
-                self.H_old = H_initial
         else:
-            # Compute homography relative to the previous frame
-            matches = self.match(self.des_cur, self.des_prev)
-            if len(matches) >= 4:
-                H = self.findHomography(self.kp_cur, self.kp_prev, matches)
-                if H is not None:
-                    H = np.matmul(self.H_old, H)  # Update with previous cumulative transformation
-                    H /= H[2, 2]  # Normalize
-                    self.H_old = H
-                else:
-                    print(f"Failed to compute homography at timestep {timestep}. Falling back to H_initial.")
-                    self.H_old = H_initial
-            else:
-                print(f"Skipping frame at timestep {timestep}: Not enough matches. Falling back to H_initial.")
-                self.H_old = H_initial
+            print(f"Missing odometry data at timestep {timestep}")
+            return  # Skip processing if odometry data is unavailable
 
-        # Determine bounds for canvas expansion
+        # Update the previous odometry for the next iteration
+        self.odom_previous = odom_data
+
+        # Refine the odometry-based homography using SSD minimization
+        H_refined = self.optimize_homography(self.frame_previous, frame_cur, H_odom)
+
+        # Update the cumulative transformation using the refined homography
+        self.H_old = np.matmul(self.H_old, H_odom)
+        self.H_old /= self.H_old[2, 2]  # Normalize to ensure stability
+
+        # Determine transformed corners of the new frame in the global map
         transformed_corners = self.get_transformed_corners(frame_cur, self.H_old)
         x_min, y_min = transformed_corners.min(axis=0).squeeze()
         x_max, y_max = transformed_corners.max(axis=0).squeeze()
 
-        # Expand canvas if necessary
+        # Expand canvas if necessary to fit the new frame
         if x_min < 0 or y_min < 0 or x_max > self.output_img.shape[1] or y_max > self.output_img.shape[0]:
             self.expand_canvas(x_min, y_min, x_max, y_max)
 
-        # Warp the current frame and update the global map
+        # Warp the current frame into the global map using the refined homography
         self.warp(frame_cur, self.H_old)
 
-        # Save keypoints/descriptors for the next frame
-        self.kp_prev = self.kp_cur
-        self.des_prev = self.des_cur
-        self.frame_prev = self.frame_cur
+        # Update the previous frame for the next iteration
+        self.frame_previous = frame_cur
+
+        # Optional: Visualize the updated global map
+        if self.visualize:
+            cv2.namedWindow('output', cv2.WINDOW_NORMAL)
+            cv2.imshow('output', self.output_img)
+            cv2.waitKey(1)
 
 
     def warp(self, frame_cur, H):
         """
-        Warp the current BEV frame and merge it into the global map using feather blending.
+        Warp the current BEV frame and merge it into the global map using feather blending without overblending.
         Args:
             frame_cur (np.ndarray): The current BEV frame.
             H (np.ndarray): The homography matrix.
@@ -212,13 +199,14 @@ class GlobalMap:
         Returns:
             np.ndarray: The updated global map.
         """
+        # Warp the current frame to the global map space
         warped_img = cv2.warpPerspective(frame_cur, H, (self.output_img.shape[1], self.output_img.shape[0]),
                                         flags=cv2.INTER_LINEAR)
 
         # Create a binary mask for the warped image
-        warped_mask = (warped_img > 0).any(axis=2).astype(np.uint8) * 255
+        warped_mask = (warped_img > 0).any(axis=2).astype(np.uint8)
 
-        # Perform feather blending
+        # Blend the warped image into the global map
         self.output_img = self.feather_blend(warped_img, self.output_img, warped_mask)
 
         # Optional visualization
@@ -229,24 +217,41 @@ class GlobalMap:
 
         return self.output_img
 
-    def feather_blend(self, warped_img, global_map, mask):
+
+    def feather_blend(self, warped_img, global_map, warped_mask):
         """
-        Feather blending for smoothing transitions between overlapping images.
+        Feather blending to smooth transitions between overlapping regions, without excessive blending.
         Args:
             warped_img (np.ndarray): The warped image to blend.
             global_map (np.ndarray): The existing global map.
-            mask (np.ndarray): Binary mask of the warped image.
+            warped_mask (np.ndarray): Binary mask of the warped image.
 
         Returns:
-            np.ndarray: The blended image.
+            np.ndarray: The blended global map.
         """
-        # Distance transform to calculate weights
-        distance_map = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
-        distance_map = distance_map / (distance_map.max() + 1e-6)  # Normalize to 0-1
+        # Compute the distance transform of the warped mask
+        distance_map = cv2.distanceTransform(warped_mask, cv2.DIST_L2, 5)
+        distance_map = distance_map / (distance_map.max() + 1e-6)  # Normalize to [0, 1]
 
-        # Blend images based on distance weights
-        blended_img = global_map * (1 - distance_map[:, :, None]) + warped_img * distance_map[:, :, None]
-        return blended_img.astype(np.uint8)
+        # Invert the distance map for the global map's weight
+        global_map_weight = 1 - distance_map
+
+        # Expand distance maps to 3 channels for blending
+        distance_map = np.repeat(distance_map[:, :, None], 3, axis=2)
+        global_map_weight = np.repeat(global_map_weight[:, :, None], 3, axis=2)
+
+        # Normalize weights to prevent overblending
+        total_weight = distance_map + global_map_weight
+        distance_map /= total_weight
+        global_map_weight /= total_weight
+
+        # Blend the warped image and global map using the normalized weights
+        blended_map = global_map * global_map_weight + warped_img * distance_map
+
+        # Fill in non-overlapping regions with the warped image directly
+        blended_map[warped_mask == 1] = warped_img[warped_mask == 1]
+
+        return blended_map.astype(np.uint8)
 
     @staticmethod
     def findHomography(image_1_kp, image_2_kp, matches):
@@ -286,27 +291,110 @@ class GlobalMap:
 
         return transformed_corners
 
-    @staticmethod
-    def odom_to_homography(odom_matrix):
+
+    def compute_relative_odometry(self, odom_matrix_prev, odom_matrix_cur, meters_to_pixels, image_width, image_height):
         """
-        Convert a 4x4 odometry matrix to a 3x3 homography for 2D alignment.
+        Compute the relative transformation between two odometry matrices, considering
+        the center of the bottom edge of the BEV image as the reference point.
+        
         Args:
-            odom_matrix (np.ndarray): The 4x4 transformation matrix from odometry.
-
+            odom_matrix_prev (np.ndarray): The 4x4 odometry matrix of the previous timestep.
+            odom_matrix_cur (np.ndarray): The 4x4 odometry matrix of the current timestep.
+            meters_to_pixels (float): Conversion factor from meters to pixels.
+            image_width (int): Width of the image in pixels.
+            image_height (int): Height of the image in pixels.
+        
         Returns:
-            np.ndarray: A 3x3 homography matrix.
+            np.ndarray: A 3x3 homography matrix representing the relative transformation.
         """
-        tx = odom_matrix[0, 3]
-        ty = odom_matrix[1, 3]
-        cos_theta = odom_matrix[0, 0]
-        sin_theta = odom_matrix[1, 0]
+        # Extract relative motion in meters
+        relative_transform = np.linalg.inv(odom_matrix_prev) @ odom_matrix_cur
+        tx = relative_transform[1, 3] * meters_to_pixels
+        ty = relative_transform[0, 3] * meters_to_pixels
+        cos_theta = relative_transform[0, 0]
+        sin_theta = relative_transform[1, 0]
 
-        homography = np.array([
-            [cos_theta, -sin_theta, tx],
-            [sin_theta, cos_theta, ty],
+        # Translation to shift the origin to the bottom-center of the image
+        to_bottom_center = np.array([
+            [1, 0, -image_width / 2],
+            [0, 1, -image_height],
             [0, 0, 1]
         ])
-        return homography
+
+        # Relative transformation matrix in the new coordinate system
+        relative_homography = np.array([
+            [cos_theta, sin_theta, -tx],
+            [-sin_theta, cos_theta, -ty],
+            [0, 0, 1]
+        ])
+
+        # Translate back to the original coordinate system
+        to_original = np.array([
+            [1, 0, image_width / 2],
+            [0, 1, image_height],
+            [0, 0, 1]
+        ])
+
+        # Combined transformation
+        final_homography = to_original @ relative_homography @ to_bottom_center
+        return final_homography
+
+    def compute_ssd(self, image1, image2, homography):
+        """
+        Compute the sum of squared differences (SSD) between two images given a homography.
+        Args:
+            image1 (np.ndarray): The reference image (previous frame).
+            image2 (np.ndarray): The current image to align.
+            homography (np.ndarray): The 3x3 homography matrix.
+
+        Returns:
+            float: The SSD value for the current alignment.
+        """
+        # Warp image2 using the homography
+        warped_image2 = cv2.warpPerspective(image2, homography, (image1.shape[1], image1.shape[0]))
+
+        # Compute SSD for overlapping regions
+        mask = (warped_image2 > 0) & (image1 > 0)  # Only compare valid regions
+        ssd = np.sum((image1[mask] - warped_image2[mask]) ** 2)
+
+        return ssd
+
+
+    def optimize_homography(self, frame_prev, frame_cur, initial_homography):
+        """
+        Optimize the homography matrix using SSD minimization between two images.
+        Args:
+            frame_prev (np.ndarray): The reference image (previous frame).
+            frame_cur (np.ndarray): The current image to align.
+            initial_homography (np.ndarray): Initial homography matrix.
+
+        Returns:
+            np.ndarray: Optimized 3x3 homography matrix.
+        """
+        def ssd_loss(params):
+            # Convert parameters back to a homography matrix
+            homography = np.array([
+                [params[0], params[1], params[2]],
+                [params[3], params[4], params[5]],
+                [params[6], params[7], 1.0]
+            ])
+            return self.compute_ssd(frame_prev, frame_cur, homography)
+
+        # Flatten the initial homography to use as the optimization starting point
+        initial_params = initial_homography.flatten()[:-1]  # Exclude the bottom-right value (fixed to 1)
+
+        # Minimize SSD
+        result = minimize(ssd_loss, initial_params, method='L-BFGS-B')
+
+        # Reconstruct the optimized homography matrix
+        optimized_params = result.x
+        optimized_homography = np.array([
+            [optimized_params[0], optimized_params[1], optimized_params[2]],
+            [optimized_params[3], optimized_params[4], optimized_params[5]],
+            [optimized_params[6], optimized_params[7], 1.0]
+        ])
+
+        return optimized_homography
 
     def get_map(self):
         """
@@ -428,20 +516,21 @@ if __name__ == "__main__":
     )
 
     # Initialize the global map with the first BEV image
-    first_bev_image = cv2.warpPerspective(robot_data.getImageAtTimestep(0), H, dsize)
+    first_bev_image = cv2.warpPerspective(robot_data.getImageAtTimestep(849), H, dsize)
     global_map = GlobalMap(first_bev_image, detector_type="sift", visualize=True)
 
     # Process subsequent BEV images
-    for timestep in tqdm(range(1, 700), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(850, 1100), desc="Processing patches at timesteps"):
         try:
             cur_img = robot_data.getImageAtTimestep(timestep)
             cur_rt = robot_data.getOdomAtTimestep(timestep)
+            prev_rt = robot_data.getOdomAtTimestep(timestep-1)
             if cur_img is None:
                 print(f"Missing image data at timestep {timestep}")
                 continue
 
             bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-            global_map.process_frame(bev_img, timestep=timestep, reset_interval = 50)
+            global_map.process_frame(bev_img, timestep, odom_data=cur_rt, meters_to_pixels=200)
 
         except Exception as e:
             print(f"Error at timestep {timestep}: {e}")
@@ -454,3 +543,7 @@ if __name__ == "__main__":
     viewer.show_map()
 # Add Z buffer, so that pixels off in the distance are replaced with the most recent. 
 # We can get pixel and depth of the pixel using homography, once we reach that pixel, replace that portion of the image with most current
+
+# Interpolate between IMU homography
+#SUm of squared differences of the pixel intensites between images, use minimization function to minimize the difference in pixel intensities
+# This would prevent overlap between sequential images
