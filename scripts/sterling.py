@@ -214,7 +214,7 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 350
+    index = 325
     history_size = 10
     vicreg_data = ComputeVicRegData(
         H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
