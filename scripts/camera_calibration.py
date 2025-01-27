@@ -1,17 +1,13 @@
 import cv2 as cv
 import glob
 import numpy as np
-import os
-import time
 import torch
-import yaml
 
-from homography_from_chessboard import HomographyFromChessboardImage
+from chess_board_renderer import *
+from homography_utils import *
+from model_chessboard import *
 from utils import *
 
-from point_cloud_viewer import PointCloudViewer
-
-#   Squares on Justin's big chessboard are 100mm
 def prepare_object_points(grid_size, square_width = 100):
     """
     Prepare object points like (0,0,0), (1,0,0), ..., (grid_width-1, grid_height-1, 0)
@@ -108,13 +104,14 @@ class MetricCalibration:
         print(" Loading Images: ", image_path_pattern)
         images = glob.glob(image_path_pattern)
         criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
-        model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 1, center_at_zero=True)
+        # model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 1, center_at_zero=True)
+        model_chessboard = ModelChessboard(cb_rows, cb_cols, 1)
 
         K_inv = np.linalg.inv(K)
 
         corner_list = []
         h_list = []
-        h_euc_list = []
+        rt_list = []
         for fname in images:
             img = cv.imread(fname)
             gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
@@ -122,13 +119,19 @@ class MetricCalibration:
 
             if ret:
                 corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-                H, mask = cv2.findHomography(model_chessboard, corners2, cv2.RANSAC)
+                H, mask = cv2.findHomography(model_chessboard.cb_pts_2D_cart.T.numpy(), corners2, cv2.RANSAC)
+                rt, _, _ = decompose_homography(H, K)
                 corner_list.append(corners2)
                 h_list.append(H)
+                rt_list.append(rt)
                 print("GOOD")
             else:
                 print("BAD")
-        
+
+        cbr = ChessboardRenderer()
+        while cbr.running:
+            cbr.display_iteration(rt_list)
+        pygame.quit()
 
         # grid_size=(8, 6)
         # objp = prepare_object_points(grid_size)
@@ -163,13 +166,3 @@ if __name__ == "__main__":
     print("Mean error:\n", calibration_values["mean_error"])
 
     metric_calibration = MetricCalibration(calibration_values["camera_matrix"], 8, 6, image_path_pattern)
-
-    # viewer = PointCloudViewer()
-    # n_boards = 1
-    # n_pts = 1000
-    # initial_points = torch.rand((n_boards, n_pts, 3)) * 2.0 - 1.0  # Points in [-1,1]^3
-    # viewer.set_points(initial_points)  
-    # while viewer.main_loop_iteration():
-    #     # Here you can add additional processing if needed
-    #     # For example, updating points dynamically
-    #     time.sleep(0.016)  # Approximately 60 FPS
