@@ -12,6 +12,8 @@ from collections import defaultdict
 from scipy.spatial.transform import Rotation as R
 from numba import njit
 from scipy.optimize import minimize
+import torch
+import torch.nn.functional as F
 
 
 class GlobalMap:
@@ -42,6 +44,7 @@ class GlobalMap:
         height, width, channels = first_bev_image.shape
         canvas_height = int(self.output_height_times * height)
         canvas_width = int(self.output_width_times * width)
+        self.z_buffer = np.full((canvas_height, canvas_width), -np.inf, dtype=np.float32)
 
         # Initialize the global map canvas and offsets
         self.output_img = np.zeros((canvas_height, canvas_width, channels), dtype=np.uint8)
@@ -54,25 +57,37 @@ class GlobalMap:
         self.output_img[self.w_offset:self.w_offset + first_bev_image.shape[0],
         self.h_offset:self.h_offset + first_bev_image.shape[1]] = first_bev_image
 
+        self.edge_mask = np.zeros((first_bev_image.shape[:2]), dtype=np.uint8)
+        height, width = first_bev_image.shape[:2]
+        cv2.rectangle(self.edge_mask, (0, 0), (width, 10), 1, -1)  # Top edge
+        cv2.rectangle(self.edge_mask, (0, height - 10), (width, height), 1, -1)  # Bottom edge
+        cv2.rectangle(self.edge_mask, (0, 0), (10, height), 1, -1)  # Left edge
+        cv2.rectangle(self.edge_mask, (width - 10, 0), (width, height), 1, -1)  # Right edge
+
         # Initialize the transformation matrix
         self.H_old = np.eye(3)
         self.H_old[0, 2] = self.h_offset
         self.H_old[1, 2] = self.w_offset
 
-    def expand_canvas(self, x_min, y_min, x_max, y_max):
+    def expand_canvas(self, x_min, y_min, x_max, y_max, buffer=720):
         x_min, y_min, x_max, y_max = map(int, [x_min, y_min, x_max, y_max])
 
-        x_offset = max(0, -x_min)
-        y_offset = max(0, -y_min)
-        new_width = max(self.output_img.shape[1] + x_offset, x_max)
-        new_height = max(self.output_img.shape[0] + y_offset, y_max)
+        x_offset = max(0, -x_min) + buffer
+        y_offset = max(0, -y_min) + buffer
+        new_width = max(self.output_img.shape[1] + x_offset, x_max + buffer)
+        new_height = max(self.output_img.shape[0] + y_offset, y_max + buffer)
 
-        # Resize canvas in-place to avoid creating new arrays
         if new_width > self.output_img.shape[1] or new_height > self.output_img.shape[0]:
             expanded_canvas = np.zeros((new_height, new_width, self.output_img.shape[2]), dtype=self.output_img.dtype)
             expanded_canvas[y_offset:y_offset + self.output_img.shape[0],
                             x_offset:x_offset + self.output_img.shape[1]] = self.output_img
             self.output_img = expanded_canvas
+
+            # Expand the z-buffer: Resize and initialize new areas with -inf (no depth)
+            expanded_z_buffer = np.full((new_height, new_width), -np.inf, dtype=np.float32)
+            expanded_z_buffer[y_offset:y_offset + self.z_buffer.shape[0],
+                            x_offset:x_offset + self.z_buffer.shape[1]] = self.z_buffer
+            self.z_buffer = expanded_z_buffer
 
             self.h_offset += x_offset
             self.w_offset += y_offset
@@ -84,7 +99,7 @@ class GlobalMap:
         """
         Process a new BEV frame using odometry data and SSD minimization to update the global map.
         """
-        translation_threshold=0.05
+        translation_threshold=0.01
         rotation_threshold=0.01
         if self.output_img is None:
             self.initialize_canvas(frame_cur)
@@ -117,7 +132,7 @@ class GlobalMap:
 
 
         # **Improvement Highlight**: Avoid re-warping large regions unnecessarily
-        H_refined = self.refine_homography_with_ssd(frame_cur, self.output_img, H_relative)
+        H_refined = self.refine_homography_with_ssd(frame_cur, self.frame_previous, H_relative)
 
         self.H_old = np.matmul(self.H_old, H_refined)
         self.H_old /= self.H_old[2, 2]
@@ -127,96 +142,71 @@ class GlobalMap:
         x_max, y_max = transformed_corners.max(axis=0).squeeze()
 
         if x_min < 0 or y_min < 0 or x_max > self.output_img.shape[1] or y_max > self.output_img.shape[0]:
-            self.expand_canvas(x_min, y_min, x_max, y_max)
+            self.expand_canvas(x_min, y_min, x_max, y_max, 720)
 
-        self.warp(frame_cur, self.H_old)
+        self.warp(frame_cur, self.H_old, timestep)
         self.odom_previous = odom_data
         self.frame_previous = frame_cur
 
         # Optional: Visualize the updated global map
-        if self.visualize:
+        if self.visualize & timestep % 100 ==0:
             cv2.namedWindow('output', cv2.WINDOW_NORMAL)
             cv2.imshow('output', self.output_img)
             cv2.waitKey(1)
 
-    def warp(self, frame_cur, H):
+    def warp(self, frame_cur, H, depth):
         """
-        Warp the current BEV frame into the global map and blend overlapping regions,
-        ensuring no black borders contribute to the final output.
+        Warp the current BEV frame into the global map using a z-buffer to handle overlaps.
         Args:
             frame_cur (np.ndarray): The current BEV frame.
             H (np.ndarray): The homography matrix.
+            depth (float): The depth value for the current frame (e.g., timestamp or priority).
         """
+        height, width = self.output_img.shape[:2]
+
         # Warp the current frame into the global map space
         warped_img = cv2.warpPerspective(
             frame_cur, H, (self.output_img.shape[1], self.output_img.shape[0]),
-            flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+            flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE
         )
 
-        # Generate a binary mask for the valid pixels in the warped image
-        mask = (frame_cur > 0).any(axis=2).astype(np.uint8)  # Valid region of the input image
+        # Generate a binary mask for valid pixels in the warped image
+        mask = (frame_cur > 0).any(axis=2).astype(np.uint8)
         warped_mask = cv2.warpPerspective(
             mask, H, (self.output_img.shape[1], self.output_img.shape[0]),
             flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
         )
 
-        # Generate the global mask for valid pixels in the global map
-        global_mask = (self.output_img > 0).any(axis=2).astype(np.uint8)
+        # Replace edges of the warped image with the corresponding regions from the previous frame
+        if self.frame_previous is not None:
+            warped_edge_mask = cv2.warpPerspective(
+                self.edge_mask, H, (self.output_img.shape[1], self.output_img.shape[0]),
+                flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+            )
 
-        # Ensure consistency between the masks by filling gaps
-        kernel = np.ones((3, 3), np.uint8)
-        warped_mask = cv2.morphologyEx(warped_mask, cv2.MORPH_CLOSE, kernel)
-        global_mask = cv2.morphologyEx(global_mask, cv2.MORPH_CLOSE, kernel)
+        # Get only non-zero pixel coordinates from the warped mask
+        valid_pixels = cv2.findNonZero(warped_mask)
 
-        # Identify overlapping and non-overlapping regions
-        overlap_mask = (warped_mask & global_mask).astype(np.uint8)
-        non_overlap_mask = (warped_mask & (~global_mask)).astype(np.uint8)
+        if valid_pixels is not None:  # Check if there are any valid pixels
+            for px in valid_pixels:
+                x, y = px[0]  # Extract pixel coordinates
 
-        # Smooth the overlap mask to avoid abrupt transitions
-        smoothed_overlap_mask = cv2.morphologyEx(overlap_mask, cv2.MORPH_CLOSE, kernel)
+                # Ensure indices are within bounds
+                if not (0 <= x < width and 0 <= y < height):
+                    continue
 
-        # Blend overlapping regions
-        if np.any(smoothed_overlap_mask):
-            self.output_img = self.blend_with_validity(warped_img, self.output_img, smoothed_overlap_mask, warped_mask)
-
-        # Copy non-overlapping regions
-        self.output_img[non_overlap_mask == 1] = warped_img[non_overlap_mask == 1]
-
-        # Optional visualization
-        if self.visualize:
-            cv2.namedWindow('output', cv2.WINDOW_NORMAL)
-            cv2.imshow('output', self.output_img)
-            cv2.waitKey(1)
+                # Handle edges from the previous frame
+                if self.frame_previous is not None and warped_edge_mask is not None and warped_edge_mask[y, x] == 1:
+                    if 0 <= y < self.frame_previous.shape[0] and 0 <= x < self.frame_previous.shape[1]:
+                        self.output_img[y, x] = self.frame_previous[y, x]
+                    continue  # Skip further processing for edge pixels
+                
+                # Depth-based update (Z-buffer)
+                if depth > self.z_buffer[y, x]:  
+                    self.output_img[y, x] = warped_img[y, x]
+                    self.z_buffer[y, x] = depth
 
         return self.output_img
-
-    def blend_with_validity(self, warped_img, global_map, overlap_mask, warped_mask):
-        """
-        Blend the warped image with the global map using a validity mask to exclude black borders.
-        Args:
-            warped_img (np.ndarray): The warped image.
-            global_map (np.ndarray): The global map.
-            overlap_mask (np.ndarray): Binary mask for overlapping regions.
-            warped_mask (np.ndarray): Binary mask for valid pixels in the warped image.
-        Returns:
-            np.ndarray: Updated global map with blended regions.
-        """
-        # Normalize the overlap mask to compute alpha blending
-        distance_to_edge = cv2.distanceTransform(overlap_mask, distanceType=cv2.DIST_L2, maskSize=3)
-        max_distance = np.max(distance_to_edge) if np.max(distance_to_edge) > 0 else 1
-        alpha = (distance_to_edge / max_distance)[..., None]  # Add a channel dimension
-
-        # Ensure black pixels are excluded from blending
-        warped_img[warped_mask == 0] = 0  # Mask out invalid pixels in the warped image
-
-        # Blend the images
-        blended_map = global_map.copy()
-        blended_map[overlap_mask == 1] = (
-            alpha[overlap_mask == 1] * warped_img[overlap_mask == 1] +
-            (1 - alpha[overlap_mask == 1]) * global_map[overlap_mask == 1]
-        ).astype(np.uint8)
-
-        return blended_map
 
     @staticmethod
     def get_transformed_corners(frame_cur, H):
@@ -260,39 +250,117 @@ class GlobalMap:
             [0, 0, 1]])
         return to_original @ relative_homography @ to_bottom_center
     
-    def refine_homography_with_ssd(self, frame_cur, global_map, H_initial):
+    def refine_homography_with_ssd(self, frame_cur, prev_frame, H_initial, patch_size=32):
+        """
+        Refine the homography matrix using SSD loss in a parallelized manner with PyTorch.
+        
+        Args:
+            frame_cur (np.ndarray): Current BEV frame (H, W, C).
+            global_map (np.ndarray): Global map (H, W, C).
+            H_initial (np.ndarray): Initial homography matrix.
+            patch_size (int): Size of patches for SSD computation.
+        
+        Returns:
+            np.ndarray: Refined homography matrix.
+        """
+        # Convert inputs to PyTorch tensors
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        frame_cur_tensor = torch.tensor(frame_cur.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0  # (C, H, W)
+        prev_frame_tensor = torch.tensor(prev_frame.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0  # (C, H, W)
+        H_initial_tensor = torch.tensor(H_initial, dtype=torch.float32, device=device)
+
         def ssd_loss(params):
-            H = np.array([
+            # Reconstruct the homography matrix from params
+            H = torch.tensor([
                 [params[0], params[1], params[2]],
                 [params[3], params[4], params[5]],
                 [0,         0,         1]
-            ])
-            warped_img = cv2.warpPerspective(frame_cur, H, (global_map.shape[1], global_map.shape[0]))
-            warped_mask = (warped_img > 0).any(axis=2).astype(np.uint8)
-            global_mask = (global_map > 0).any(axis=2).astype(np.uint8)
-            overlap_mask = (warped_mask & global_mask).astype(np.uint8)
-            
-            # Focus on regions with high texture (e.g., high gradient magnitudes)
-            if np.any(overlap_mask):
-                gradient_map = cv2.Sobel(global_map, cv2.CV_64F, 1, 1, ksize=3)
-                texture_mask = (gradient_map > gradient_map.mean()).astype(np.uint8)
-                refined_mask = overlap_mask & texture_mask
-                if np.any(refined_mask):
-                    global_overlap = global_map[refined_mask == 1]
-                    warped_overlap = warped_img[refined_mask == 1]
-                    ssd = np.sum((global_overlap - warped_overlap) ** 2)
-                    return ssd
-            return 1e6  # Penalize cases with no overlap or poor texture
+            ], dtype=torch.float32, device=device)
 
-        initial_params = H_initial.flatten()[:6]
+            # Warp the current frame using the homography matrix
+            warped_frame = self.warp_with_homography(frame_cur_tensor, H, prev_frame_tensor.shape[1:])
+
+            # Compute the SSD loss over patches
+            ssd_loss = self.compute_patchwise_ssd(prev_frame_tensor, warped_frame, patch_size)
+            return ssd_loss.item()  # Convert to scalar for optimization
+
+        # Optimize using scipy's minimize
+        initial_params = H_initial_tensor[:2, :].flatten().cpu().numpy()  # Flatten first 6 elements
         result = minimize(ssd_loss, initial_params, method='L-BFGS-B', options={"maxiter": 100})
-        refined_H = np.array([
-            [result.x[0], result.x[1], result.x[2]],
-            [result.x[3], result.x[4], result.x[5]],
-            [0,           0,           1]
-        ])
-        return refined_H
-        
+        refined_params = result.x
+
+        # Reconstruct refined homography matrix
+        refined_H = torch.tensor([
+            [refined_params[0], refined_params[1], refined_params[2]],
+            [refined_params[3], refined_params[4], refined_params[5]],
+            [0,                 0,                 1]
+        ], dtype=torch.float32, device=device)
+
+        return refined_H.cpu().numpy()
+
+    def warp_with_homography(self, image, homography, output_shape):
+        """
+        Warp an image using a given homography matrix with PyTorch.
+
+        Args:
+            image (torch.Tensor): Input image (C, H, W).
+            homography (torch.Tensor): Homography matrix (3x3).
+            output_shape (tuple): Shape of the output image (H, W).
+
+        Returns:
+            torch.Tensor: Warped image (C, H, W).
+        """
+        H, W = output_shape
+        device = image.device
+
+        # Create a grid of normalized coordinates (-1 to 1)
+        y_coords, x_coords = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=device),
+            torch.linspace(-1, 1, W, device=device)
+        )
+        coords = torch.stack([x_coords, y_coords, torch.ones_like(x_coords)], dim=-1)  # (H, W, 3)
+        coords = coords.view(-1, 3).T  # (3, H*W)
+
+        # Transform coordinates using the homography matrix
+        warped_coords = homography @ coords  # (3, H*W)
+        warped_coords = warped_coords / warped_coords[2, :]  # Normalize by z-coordinate
+        warped_coords = warped_coords[:2, :].T  # (H*W, 2)
+
+        # Convert normalized coordinates back to image space
+        warped_coords = warped_coords.view(H, W, 2).unsqueeze(0)  # (1, H, W, 2)
+
+        # Sample the image using the warped coordinates
+        warped_image = F.grid_sample(
+            image.unsqueeze(0),  # Add batch dimension
+            warped_coords,
+            mode='bilinear',
+            align_corners=True,
+            padding_mode='zeros'
+        )
+        return warped_image.squeeze(0)  # Remove batch dimension
+
+    def compute_patchwise_ssd(self, prev_frame, warped_frame, patch_size):
+        """
+        Compute the SSD loss between the global map and warped frame in patches.
+
+        Args:
+            global_map (torch.Tensor): Global map (C, H, W).
+            warped_frame (torch.Tensor): Warped frame (C, H, W).
+            patch_size (int): Size of patches.
+
+        Returns:
+            torch.Tensor: Total SSD loss (scalar).
+        """
+        C, H, W = prev_frame.shape
+        prev_patches = prev_frame.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)  # (C, N, M, patch_size, patch_size)
+        warped_patches = prev_frame.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)  # (C, N, M, patch_size, patch_size)
+
+        # Compute SSD loss for each patch
+        ssd = torch.sum((prev_patches - warped_patches) ** 2, dim=(-1, -2, -3))  # (N, M)
+
+        # Sum up all patch losses
+        return torch.sum(ssd)
+
     def get_map(self):
         """
         Retrieve the current global map.
