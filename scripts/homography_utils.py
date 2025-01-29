@@ -58,6 +58,8 @@ def decompose_homography(H, K):
     # Combine R and T into a single RT matrix
     RT = np.column_stack((R, T))
     RT = np.vstack([RT, np.array([0, 0, 0, 1])])
-    print("RT:  ", RT)
+    # print("RT:  ", RT)
+    # print("plane_normal:  ", plane_normal)
+    # print("scale:  ", scale)
 
     return RT, plane_normal, plane_distance

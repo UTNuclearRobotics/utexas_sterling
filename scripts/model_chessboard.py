@@ -1,41 +1,44 @@
+from homography_utils import *
 from OpenGL.GL import *
 from OpenGL.GLU import *
 import torch
 
 #Justin's big chessboard, squares 100mm
 class ModelChessboard:
-    def __init__(self, rows=8, cols=8, square_size=1.0):
+    def __init__(self, rows=8, cols=8, square_size=100):
         self.rows = rows
         self.cols = cols
+
         self.square_size = square_size
-        self.width = cols * square_size
-        self.height = rows * square_size
+        self.width = self.cols * square_size
+        self.height = self.rows * square_size
         self.midW = self.width / 2.0
         self.midH = self.height / 2.0
 
-        self.cb_pts_2D_cart = torch.zeros(2, rows * cols)
-        self.cb_pts_2D = torch.zeros(3, rows * cols)
-        self.cb_pts_3D = torch.zeros(4, rows * cols)
+        self.cb_pts_2D_cart = torch.zeros(2, self.rows * self.cols)
+        self.cb_pts_2D = torch.zeros(3, self.rows * self.cols)
+        self.cb_pts_3D_cart = torch.zeros(3, self.rows * self.cols)
+        self.cb_pts_3D = torch.zeros(4, self.rows * self.cols)
 
-        n_lines = (cols - 1) * rows + (rows - 1) * cols
+        n_lines = (self.cols - 1) * self.rows + (self.rows - 1) * self.cols
         self.lines = torch.zeros(2, n_lines)
 
         ctr = 0
 
         line_ctr = 0
-        for row in range(0, rows):
-            for col in range(0, cols):
+        for row in range(0, self.rows):
+            for col in range(0, self.cols):
                 x = col * square_size - self.midW
                 y = row * square_size - self.midH
                 self.cb_pts_2D_cart[0, ctr] = x
                 self.cb_pts_2D_cart[1, ctr] = y
 
-                if row < (rows - 1):
+                if row < (self.rows - 1):
                     self.lines[0, line_ctr] = ctr
                     self.lines[1, line_ctr] = self.getIndex(row + 1, col)
                     line_ctr = line_ctr + 1
 
-                if col < (cols - 1):
+                if col < (self.cols - 1):
                     self.lines[0, line_ctr] = ctr
                     self.lines[1, line_ctr] = ctr + 1
                     line_ctr = line_ctr + 1
@@ -44,8 +47,10 @@ class ModelChessboard:
 
         self.cb_pts_2D[:2, :] = self.cb_pts_2D_cart
         self.cb_pts_3D[:2, :] = self.cb_pts_2D_cart
+        self.cb_pts_3D_cart[:2, :] = self.cb_pts_2D_cart
         self.cb_pts_2D[2, :] = 1
         self.cb_pts_3D[3, :] = 1
+
 
     def getIndex(self, row, col):
         return row * self.cols + col

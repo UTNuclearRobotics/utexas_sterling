@@ -1,6 +1,9 @@
 import cv2 as cv
 import glob
 import numpy as np
+from scipy.optimize import least_squares
+# from scipy.spatial.transform import Rotation as R
+import sys
 import torch
 
 from chess_board_renderer import *
@@ -8,21 +11,20 @@ from homography_utils import *
 from model_chessboard import *
 from utils import *
 
-def prepare_object_points(grid_size, square_width = 100):
-    """
-    Prepare object points like (0,0,0), (1,0,0), ..., (grid_width-1, grid_height-1, 0)
-    """
-    grid_width, grid_height = grid_size
-    objp = torch.zeros((grid_width * grid_height, 3), dtype=torch.float32).numpy()
-    objp[:, :2] = np.mgrid[0:grid_width, 0:grid_height].T.reshape(-1, 2)
-    objp = objp * square_width
-    return objp
+script_dir = os.path.dirname(os.path.abspath(__file__))
+pyceres_location = script_dir + "../../sterling_env/lib/python3.10/site-packages/PyCeres/"
+sys.path.insert(0, pyceres_location)
 
-def find_image_points(grid_size, objp, image_path_pattern):
+'''
+ [[759.85478155   0.         633.28655077]
+ [  0.         760.95738925 357.70398778]
+ [  0.           0.           1.        ]]
+'''
+
+def find_image_points(grid_size,image_path_pattern):
     """
     Detect corners in chessboard images and refine the points.
     """
-    objpoints = []  # 3D points in real-world space
     imgpoints = []  # 2D points in image plane
     criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
 
@@ -37,119 +39,205 @@ def find_image_points(grid_size, objp, image_path_pattern):
         ret, corners = cv.findChessboardCorners(gray, grid_size, None)
 
         if ret:
-            objpoints.append(objp)
             corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
             imgpoints.append(corners2)
+            # cv.drawChessboardCorners(img, grid_size, corners2, ret)
+            # cv.imshow('Detected Corners', img)
+            # cv.waitKey(1)
+            # print("GOOD")
+        # else:
+        #     print("BAD")
 
-            cv.drawChessboardCorners(img, grid_size, corners2, ret)
-            cv.imshow('Detected Corners', img)
-            cv.waitKey(1)
-            print("GOOD")
-        else:
-            print("BAD")
-
-    return objpoints, imgpoints
+    return imgpoints
 
             # Draw and display corners
 
     #cv.destroyAllWindows()
 
 class CameraCalibration:
-    def __init__(self, image_path_pattern, grid_size=(8, 6)):
-        objp = prepare_object_points(grid_size)
-        self.objpoints, self.imgpoints = \
-            find_image_points(grid_size, objp, image_path_pattern)
-
-    def calibrate_camera(self, image_path_pattern):
+    def __init__(self, image_path_pattern, rows=6, cols=8, square_size=100):
+        self.rows = rows
+        self.cols = cols
+        self.square_size = square_size
+        grid_size=(self.cols, self.rows)
+        self.imgpoints = find_image_points(grid_size,image_path_pattern)
+        
         """
         Perform camera calibration using detected points.
         """
-        if not self.objpoints or not self.imgpoints:
+        if not self.imgpoints:
             raise ValueError("Object points or image points are empty. Run find_image_points() first.")
 
         # Use the shape of the last processed image for calibration
-        h, w = cv.imread(glob.glob(image_path_pattern)[-1]).shape[:2]
+        self.h, self.w = cv.imread(glob.glob(image_path_pattern)[-1]).shape[:2]
 
-        ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera(
-            self.objpoints, self.imgpoints, (w, h), None, None
+        self.model_chessboard = ModelChessboard(rows, cols, square_size)
+        # print("self.model_chessboard.cb_pts_3D: ", self.model_chessboard.cb_pts_3D)
+        # print("self.model_chessboard.cb_pts_3D_cart: ", self.model_chessboard.cb_pts_3D_cart)
+        # objpoints = []
+        objpoints = []
+        for i in range(0, len(self.imgpoints)):
+            objpoints.append(self.model_chessboard.cb_pts_3D_cart.T.numpy())
+            # objpoints.append(objp)
+        self.ret, self.mtx, self.dist, self.rvecs, self.tvecs = cv.calibrateCamera(
+            objpoints, self.imgpoints, (self.w, self.h), None, None
         )
 
-        mean_error = self.calculate_reprojection_error(rvecs, tvecs, mtx, dist)
-
-        return {
-            "ret": ret,
-            "camera_matrix": mtx,
-            "distortion_coefficients": dist,
-            "rotation_vectors": rvecs,
-            "translation_vectors": tvecs,
-            "mean_error": mean_error,
-        }
-    
-    def calculate_reprojection_error(self, rvecs, tvecs, mtx, dist):
-        """
-        Calculate the mean reprojection error for the calibration.
-        """
         mean_error = 0
-        for i in range(len(self.objpoints)):
-            imgpoints2, _ = cv.projectPoints(self.objpoints[i], rvecs[i], tvecs[i], mtx, dist)
+        for i in range(len(self.imgpoints)):
+            imgpoints2, _ = cv.projectPoints(
+                self.model_chessboard.cb_pts_3D_cart.T.numpy(), self.rvecs[i], self.tvecs[i], self.mtx, self.dist)
             error = cv.norm(self.imgpoints[i], imgpoints2, cv.NORM_L2) / len(imgpoints2)
             mean_error += error
 
-        return mean_error / len(self.objpoints)
+        self.mean_error = mean_error / len(self.imgpoints)
+
+# class RigidTransformation:
+#     def __init__(self, RT):
+#           self.rt_mat = RT
+#           self.rot_mat = R.from_matrix(RT[:3, :3])
+#           self.rot_rod = R.from_matrix(self.rot_mat).as_rotvec()
+
+class CameraIntrinsicMatrix:
+    def __init__(self, alpha, beta, u0, v0):
+        self.alpha = alpha
+        self.beta = beta
+        self.u0 = u0
+        self.v0 = v0
+
+        self.intrinsic_matrix = torch.tensor([
+            [self.alpha,    0.0, self.u0],
+            [0.0,    self.beta, self.v0],
+            [0.0,      0.0,     1.0]
+        ], dtype=torch.float32)
     
-class MetricCalibration:
-    def __init__(self, K, cb_rows, cb_cols, image_path_pattern):
-        grid_size = (cb_rows, cb_cols)
-        print("MetricCalibration()")
-        print(" Loading Images: ", image_path_pattern)
-        images = glob.glob(image_path_pattern)
-        criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
-        # model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 1, center_at_zero=True)
-        model_chessboard = ModelChessboard(cb_rows, cb_cols, 1)
+    def adjust_focal_length(self, f):
+        self.alpha = f
+        self.beta = f
+        self.intrinsic_matrix[0, 0] = f
+        self.intrinsic_matrix[1, 1] = f
 
-        K_inv = np.linalg.inv(K)
+    def adjust_alpha_beta(self, alpha, beta):
+        self.alpha = alpha
+        self.beta = beta
+        self.intrinsic_matrix[0, 0] = alpha
+        self.intrinsic_matrix[1, 1] = beta
 
-        corner_list = []
-        h_list = []
-        rt_list = []
-        for fname in images:
-            img = cv.imread(fname)
-            gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-            ret, corners = cv.findChessboardCorners(gray, grid_size, None)
+    def adjust_alpha_beta_u0_v0(self, alpha, beta, u0, v0):
+        self.alpha = alpha
+        self.beta = beta
+        self.u0 = u0
+        self.v0 = v0
+        self.intrinsic_matrix[0, 0] = alpha
+        self.intrinsic_matrix[1, 1] = beta
+        self.intrinsic_matrix[0, 2] = u0
+        self.intrinsic_matrix[1, 2] = v0
 
-            if ret:
-                corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-                H, mask = cv2.findHomography(model_chessboard.cb_pts_2D_cart.T.numpy(), corners2, cv2.RANSAC)
-                rt, _, _ = decompose_homography(H, K)
-                corner_list.append(corners2)
-                h_list.append(H)
-                rt_list.append(rt)
-                print("GOOD")
-            else:
-                print("BAD")
-
-        cbr = ChessboardRenderer()
-        while cbr.running:
-            cbr.display_iteration(rt_list)
-        pygame.quit()
-
-        # grid_size=(8, 6)
-        # objp = prepare_object_points(grid_size)
-        # objpoints, imgpoints_list = \
-        #     find_image_points(grid_size, objp, image_path_pattern)
-        # camera_intrinsic_matrix = torch.tensor(camera_intrinsic_matrix)
-        # imgpoints = torch.tensor(imgpoints_list)
-        # imgpoints = imgpoints.squeeze(-2)
-
-        # # for image_cb in imgpoints_list:self.
-        # #     H, mask = cv2.findHomography(model_chessboard, corners, cv2.RANSAC)
-        # #     homography = HomographyFromChessboardImage(image_cb, 8, 6)
-        # #     print(homography)
-
-        # print(camera_matrix.shape, " ", objpoints.shape, " ", imgpoints.shape)
-
-# def render3DPoints(in_pts):
+def projection(k_mat_torch, r,t):
+    r, _ = cv.Rodrigues(r)
+    r_torch = torch.from_numpy(r).float()
+    t_torch = torch.from_numpy(t).float().view(3, 1)
+    RT = torch.cat([r_torch, t_torch], dim=1)
+    # RT = torch.cat([RT, torch.tensor([[0.0, 0.0, 0.0, 1.0]], dtype=torch.float32)], dim=0)
+    # print("r_torch:   ", r_torch)
+    # print("t_torch:   ", t_torch)
+    # print("RT:   ", RT)
+    return k_mat_torch @ RT
         
+class ZhangNonlinear:
+    def __init__(self, calibration_values):
+        super().__init__()
+        # , cb_rows, cb_cols, image_path_pattern
+        # grid_size = (cb_rows, cb_cols)
+        print("ZhangNonlinear()")
+        # print(" Loading Images: ", image_path_pattern)
+        # images = glob.glob(image_path_pattern)
+        # criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
+        # model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 1, center_at_zero=True)
+
+        self.calibration_values = calibration_values
+        self.model_chessboard = ModelChessboard(
+            calibration_values.rows, calibration_values.cols, calibration_values.square_size)
+        self.num_images = len(calibration_values.imgpoints)
+        
+        self.K = CameraIntrinsicMatrix(
+            calibration_values.mtx[0,0],
+            calibration_values.mtx[1,1],
+            calibration_values.mtx[0,2],
+            calibration_values.mtx[1,2])
+        
+        print("num_images: ", len(self.num_images))
+
+        # print("calibration.rvecs[1]:    ", calibration.rvecs[1])
+        # print("calibration.tvecs[1]:    ", calibration.tvecs[1])
+
+        rvecs = [calibration.rvecs[i].flatten() for i in range(len(calibration.rvecs))]
+        tvecs = [calibration.tvecs[i].flatten() for i in range(len(calibration.tvecs))]
+        params_initial = np.hstack([
+            calibration_values.mtx[0,0],
+            calibration_values.mtx[1,1],
+            calibration_values.mtx[0,2],
+            calibration_values.mtx[1,2],
+            *rvecs,
+            *tvecs])
+        
+        # print("params_initial:  ", params_initial)
+        self.residuals(params_initial)
+
+
+    def residuals(self, params):
+        alpha, beta, u0, v0 = params[:4]
+        rvecs = params[4:4 + 3*self.num_images].reshape(self.num_images, 3)
+        tvecs = params[4 + 3*self.num_images:].reshape(self.num_images, 3)
+        # print("rvecs[1]:    ", rvecs[1])
+        # print("tvecs[1]:    ", tvecs[1])
+
+        # for i in range(0, len(calibration_values.rvecs)):
+        #     # print("rvec:    ", self.calibration_values.rvecs[i])
+        #     # print("tvec:    ", self.calibration_values.tvecs[i])
+        #     p = projection(self.K.intrinsic_matrix,
+        #         self.calibration_values.rvecs[i],
+        #         self.calibration_values.tvecs[i])
+        #     projected_hom = p @ self.model_chessboard.cb_pts_3D
+        #     projected_cartesian = projected_hom[:-1, :] / projected_hom[-1, :]
+        #     img_cartesian = torch.Tensor(self.calibration_values.imgpoints[i]).squeeze(1).T
+        #     # print("p:  ", p)
+        #     # print("projected_hom:  ", projected_hom)
+        #     print("projected_cartesian:  ", projected_cartesian)
+        #     print("img_cartesian:  ", img_cartesian)
+        #     print("minus:  ", projected_cartesian - img_cartesian)
+        
+        # self.set_num_residuals(calibration_values.rows * calibration_values.cols * )
+        
+        # print("K.intrinsic_matrix:  ", K.intrinsic_matrix)
+        
+        # K_inv = np.linalg.inv(K)
+
+        # corner_list = []
+        # h_list = []
+        # rt_list = []
+        # for fname in images:
+        #     img = cv.imread(fname)
+        #     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        #     ret, corners = cv.findChessboardCorners(gray, grid_size, None)
+
+        #     if ret:
+        #         corners2 = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+        #         H, mask = cv2.findHomography(model_chessboard.cb_pts_2D_cart.T.numpy(), corners2, cv2.RANSAC)
+        #         rt, _, _ = decompose_homography(H, K)
+        #         corner_list.append(corners2)
+        #         h_list.append(H)
+        #         rt_list.append(rt)
+        #         print("GOOD")
+        #     else:
+        #         print("BAD")
+
+        
+
+        # cbr = ChessboardRenderer()
+        # while cbr.running:
+        #     cbr.display_iteration(rt_list)
+        # pygame.quit()        
 
 
 # Example usage
@@ -157,12 +245,12 @@ class MetricCalibration:
 if __name__ == "__main__":
     image_path_pattern='./homography/calibration_images/*.jpg'
     calibration = CameraCalibration(image_path_pattern=image_path_pattern)
-    calibration_values = calibration.calibrate_camera(image_path_pattern)
+    # calibration_values = calibration.calibrate_camera(image_path_pattern)
 
-    print("Camera matrix:\n", calibration_values["camera_matrix"])
+    print("Camera matrix:\n", calibration.mtx)
     #print("Distortion coefficients:\n", results["distortion_coefficients"])
     #print("Rotation vectors:\n", results["rotation_vectors"])
     #print("Translation vectors:\n", results["translation_vectors"])
-    print("Mean error:\n", calibration_values["mean_error"])
+    print("Mean error:\n", calibration.mean_error)
 
-    metric_calibration = MetricCalibration(calibration_values["camera_matrix"], 8, 6, image_path_pattern)
+    zhang_nonlinear = ZhangNonlinear(calibration)
