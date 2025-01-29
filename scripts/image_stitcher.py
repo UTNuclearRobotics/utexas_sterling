@@ -8,104 +8,215 @@ from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
 from utils import *
-from collections import defaultdict
+from collections import deque
 from scipy.spatial.transform import Rotation as R
 from numba import njit
 from scipy.optimize import minimize
 import torch
 import torch.nn.functional as F
+import math
+
+import math
+import numpy as np
+import cv2
+
+class TiledMapper:
+    def __init__(self, tile_size=1024, channels=3):
+        """
+        tile_size : Size in pixels for each tile (square).
+        channels  : Number of channels (e.g., 3 for RGB).
+        """
+        self.tile_size = tile_size
+        self.channels = channels
+        # Dictionary: (tile_x, tile_y) -> {'image': np.ndarray, 'z_buffer': np.ndarray}
+        self.tiles = {}  
+    
+    def _get_or_create_tile(self, tile_x, tile_y):
+        """Return tile at (tile_x, tile_y), create if it doesn't exist."""
+        if (tile_x, tile_y) not in self.tiles:
+            tile_img = np.zeros((self.tile_size, self.tile_size, self.channels), dtype=np.uint8)
+            tile_zb = np.full((self.tile_size, self.tile_size), -np.inf, dtype=np.float32)
+            self.tiles[(tile_x, tile_y)] = {'image': tile_img, 'z_buffer': tile_zb}
+        return self.tiles[(tile_x, tile_y)]
+
+    def _global_to_tile_coords(self, x, y):
+        """
+        Convert a global pixel coordinate (x,y) into
+        integer tile indices (tile_x, tile_y) and local offsets within that tile.
+        """
+        tile_x = x // self.tile_size
+        tile_y = y // self.tile_size
+        return tile_x, tile_y
+
+    def get_transformed_corners(self, frame_cur, H):
+        """Same as your existing function, or see below usage."""
+        h, w = frame_cur.shape[:2]
+        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32).reshape(-1, 1, 2)
+        return cv2.perspectiveTransform(corners, H)
+
+    def warp_frame_into_tiles(self, frame_cur, H, depth):
+        """
+        Warp the current frame into all overlapping tiles. 
+        Only updates tiles that the warped frame touches.
+        """
+        # 1. Compute corners in global space
+        corners = self.get_transformed_corners(frame_cur, H)
+        xs = corners[:, 0, 0]
+        ys = corners[:, 0, 1]
+        
+        x_min, x_max = math.floor(xs.min()), math.ceil(xs.max())
+        y_min, y_max = math.floor(ys.min()), math.ceil(ys.max())
+        
+        if x_min >= x_max or y_min >= y_max:
+            return  # No valid region
+
+        # 2. Figure out which tiles we need to update
+        tx_min, ty_min = self._global_to_tile_coords(x_min, y_min)
+        tx_max, ty_max = self._global_to_tile_coords(x_max - 1, y_max - 1)
+        
+        for ty in range(ty_min, ty_max + 1):
+            for tx in range(tx_min, tx_max + 1):
+                tile_data = self._get_or_create_tile(tx, ty)
+                tile_img = tile_data['image']
+                tile_zb = tile_data['z_buffer']
+                
+                # 3. Compute offset homography to warp into this tile's local coordinate system
+                tile_origin_x = tx * self.tile_size
+                tile_origin_y = ty * self.tile_size
+                T_offset = np.array([
+                    [1, 0, -tile_origin_x],
+                    [0, 1, -tile_origin_y],
+                    [0, 0, 1]
+                ], dtype=np.float32)
+                H_tile = T_offset @ H
+
+                # 4. Warp the frame into the size of the tile
+                warped_img = cv2.warpPerspective(
+                    frame_cur,
+                    H_tile,
+                    (self.tile_size, self.tile_size),
+                    flags=cv2.INTER_LANCZOS4,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
+                )
+                
+                # 5. Mask + z-buffer checks
+                mask = (frame_cur > 0).any(axis=2).astype(np.uint8)
+                warped_mask = cv2.warpPerspective(
+                    mask,
+                    H_tile,
+                    (self.tile_size, self.tile_size),
+                    flags=cv2.INTER_LANCZOS4,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
+                )
+                
+                valid_indices = (warped_mask == 1)
+                depth_mask = (depth > tile_zb)
+                update_mask = valid_indices & depth_mask
+                
+                # For color images, broadcast update_mask to shape (H,W,3)
+                if tile_img.ndim == 3:
+                    update_mask_3d = np.repeat(update_mask[:, :, np.newaxis], 3, axis=2)
+                    tile_img[update_mask_3d] = warped_img[update_mask_3d]
+                else:
+                    tile_img[update_mask] = warped_img[update_mask]
+                
+                tile_zb[update_mask] = depth  # update depth
+
+    def get_full_map(self):
+        """
+        Reconstruct a large mosaic from all existing tiles.
+        Useful for occasional visualization or saving to disk.
+        """
+        if not self.tiles:
+            return None
+
+        all_coords = list(self.tiles.keys())
+        txs = [c[0] for c in all_coords]
+        tys = [c[1] for c in all_coords]
+        tx_min, tx_max = min(txs), max(txs)
+        ty_min, ty_max = min(tys), max(tys)
+        
+        # Overall width/height in tiles
+        tile_range_x = tx_max - tx_min + 1
+        tile_range_y = ty_max - ty_min + 1
+        
+        big_width = tile_range_x * self.tile_size
+        big_height = tile_range_y * self.tile_size
+        
+        big_map = np.zeros((big_height, big_width, self.channels), dtype=np.uint8)
+        
+        for (tx, ty), tile_data in self.tiles.items():
+            tile_img = tile_data['image']
+            offset_x = (tx - tx_min) * self.tile_size
+            offset_y = (ty - ty_min) * self.tile_size
+            big_map[offset_y:offset_y+self.tile_size, offset_x:offset_x+self.tile_size] = tile_img
+        
+        return big_map
 
 
 class GlobalMap:
-    def __init__(self, output_height_times=3, output_width_times=3.0, visualize=True):
-        """
-        Initialize the GlobalMap object without requiring an explicit first BEV image.
-        Args:
-            output_height_times (float): Scale factor for output height relative to input image.
-            output_width_times (float): Scale factor for output width relative to input image.
-            visualize (bool): Whether to visualize matches and intermediate outputs.
-        """
+    def __init__(self, tile_size=1024, visualize=True):
         self.visualize = visualize
-        self.output_img = None  # Global map canvas initialized dynamically
-        self.w_offset = None  # Horizontal offset, initialized dynamically
-        self.h_offset = None  # Vertical offset, initialized dynamically
-        self.H_old = None  # Homography matrix, initialized dynamically
-        self.output_height_times = output_height_times
-        self.output_width_times = output_width_times
+
+        # Instead of one monolithic output_img:
+        self.tiled_mapper = TiledMapper(tile_size=tile_size, channels=3)
+
+        self.H_old = None
         self.frame_previous = None
         self.odom_previous = None
 
-    def initialize_canvas(self, first_bev_image):
+        # If you still want frame history for homography refinement:
+        self.frame_history = deque(maxlen=3)
+
+    def get_map(self):
         """
-        Dynamically initialize the global map canvas using the first BEV image.
-        Args:
-            first_bev_image (np.ndarray): The first bird's-eye view image.
+        Retrieve the current global map.
+        Returns:
+            np.ndarray: The current global map.
         """
-        height, width, channels = first_bev_image.shape
-        canvas_height = int(self.output_height_times * height)
-        canvas_width = int(self.output_width_times * width)
-        self.z_buffer = np.full((canvas_height, canvas_width), -np.inf, dtype=np.float32)
+        return self.tiled_mapper.get_full_map()
 
-        # Initialize the global map canvas and offsets
-        self.output_img = np.zeros((canvas_height, canvas_width, channels), dtype=np.uint8)
+    def compute_relative_odometry(self, odom_matrix_prev, odom_matrix_cur, image_width, image_height, scale):
+        relative_transform = np.linalg.inv(odom_matrix_prev) @ odom_matrix_cur
+        tx = relative_transform[1, 3] * scale
+        ty = relative_transform[0, 3] * scale
+        cos_theta = relative_transform[0, 0]
+        sin_theta = relative_transform[1, 0]
 
-        # Calculate offsets to center the first frame on the canvas
-        self.w_offset = (self.output_img.shape[0] - first_bev_image.shape[0]) // 2
-        self.h_offset = (self.output_img.shape[1] - first_bev_image.shape[1]) // 2
-
-        # Place the first frame at the center
-        self.output_img[self.w_offset:self.w_offset + first_bev_image.shape[0],
-        self.h_offset:self.h_offset + first_bev_image.shape[1]] = first_bev_image
-
-        self.edge_mask = np.zeros((first_bev_image.shape[:2]), dtype=np.uint8)
-        height, width = first_bev_image.shape[:2]
-        cv2.rectangle(self.edge_mask, (0, 0), (width, 10), 1, -1)  # Top edge
-        cv2.rectangle(self.edge_mask, (0, height - 10), (width, height), 1, -1)  # Bottom edge
-        cv2.rectangle(self.edge_mask, (0, 0), (10, height), 1, -1)  # Left edge
-        cv2.rectangle(self.edge_mask, (width - 10, 0), (width, height), 1, -1)  # Right edge
-
-        # Initialize the transformation matrix
-        self.H_old = np.eye(3)
-        self.H_old[0, 2] = self.h_offset
-        self.H_old[1, 2] = self.w_offset
-
-    def expand_canvas(self, x_min, y_min, x_max, y_max, buffer=720):
-        x_min, y_min, x_max, y_max = map(int, [x_min, y_min, x_max, y_max])
-
-        x_offset = max(0, -x_min) + buffer
-        y_offset = max(0, -y_min) + buffer
-        new_width = max(self.output_img.shape[1] + x_offset, x_max + buffer)
-        new_height = max(self.output_img.shape[0] + y_offset, y_max + buffer)
-
-        if new_width > self.output_img.shape[1] or new_height > self.output_img.shape[0]:
-            expanded_canvas = np.zeros((new_height, new_width, self.output_img.shape[2]), dtype=self.output_img.dtype)
-            expanded_canvas[y_offset:y_offset + self.output_img.shape[0],
-                            x_offset:x_offset + self.output_img.shape[1]] = self.output_img
-            self.output_img = expanded_canvas
-
-            # Expand the z-buffer: Resize and initialize new areas with -inf (no depth)
-            expanded_z_buffer = np.full((new_height, new_width), -np.inf, dtype=np.float32)
-            expanded_z_buffer[y_offset:y_offset + self.z_buffer.shape[0],
-                            x_offset:x_offset + self.z_buffer.shape[1]] = self.z_buffer
-            self.z_buffer = expanded_z_buffer
-
-            self.h_offset += x_offset
-            self.w_offset += y_offset
-            self.H_old[0, 2] += x_offset
-            self.H_old[1, 2] += y_offset
-
+        to_bottom_center = np.array([
+            [1, 0, -image_width / 2],
+            [0, 1, -image_height],
+            [0, 0, 1]])
+        relative_homography = np.array([
+            [cos_theta, sin_theta, -tx],
+            [-sin_theta, cos_theta, -ty],
+            [0, 0, 1]])
+        to_original = np.array([
+            [1, 0, image_width / 2],
+            [0, 1, image_height],
+            [0, 0, 1]])
+        return to_original @ relative_homography @ to_bottom_center
 
     def process_frame(self, frame_cur, timestep, odom_data=None, scale=100):
         """
-        Process a new BEV frame using odometry data and SSD minimization to update the global map.
+        1. Compute relative odometry -> get H_relative
+        2. Refine homography
+        3. Compose with self.H_old
+        4. Warp into tile map
+        5. Optional: visualize
         """
-        translation_threshold=0.01
-        rotation_threshold=0.01
-        if self.output_img is None:
-            self.initialize_canvas(frame_cur)
+        translation_threshold = 0.01
+        rotation_threshold = 0.01
+
+        if self.H_old is None:
+            # First frame: set identity transform, etc.
+            self.H_old = np.eye(3, dtype=np.float32)
             self.frame_previous = frame_cur
             self.odom_previous = odom_data
-            print(f"Initialized global map at timestep {timestep}")
+            self.frame_history.append(frame_cur)
+            print(f"Initialized tile-based global map at timestep {timestep}")
             return
 
         if odom_data is not None and self.odom_previous is not None:
@@ -130,333 +241,278 @@ class GlobalMap:
             print(f"Missing odometry data at timestep {timestep}")
             return
 
+        # Optionally refine H_relative using your SSD approach with self.frame_history
+        # Let's call that H_refined:
+        H_refined = self.refine_homography_with_ssd(frame_cur, list(self.frame_history), H_relative)
 
-        # **Improvement Highlight**: Avoid re-warping large regions unnecessarily
-        H_refined = self.refine_homography_with_ssd(frame_cur, self.frame_previous, H_relative)
+        # Update global homography
+        self.H_old = self.H_old @ H_refined
+        self.H_old /= self.H_old[2,2]
 
-        self.H_old = np.matmul(self.H_old, H_refined)
-        self.H_old /= self.H_old[2, 2]
+        # Warp into tile map
+        self.warp(frame_cur, self.H_old, depth=timestep)
 
-        transformed_corners = self.get_transformed_corners(frame_cur, self.H_old)
-        x_min, y_min = transformed_corners.min(axis=0).squeeze()
-        x_max, y_max = transformed_corners.max(axis=0).squeeze()
-
-        if x_min < 0 or y_min < 0 or x_max > self.output_img.shape[1] or y_max > self.output_img.shape[0]:
-            self.expand_canvas(x_min, y_min, x_max, y_max, 720)
-
-        self.warp(frame_cur, self.H_old, timestep)
+        # Update references
         self.odom_previous = odom_data
         self.frame_previous = frame_cur
+        self.frame_history.append(frame_cur)
 
-        # Optional: Visualize the updated global map
-        if self.visualize & timestep % 100 ==0:
-            cv2.namedWindow('output', cv2.WINDOW_NORMAL)
-            cv2.imshow('output', self.output_img)
-            cv2.waitKey(1)
+        # Visualize only every 100 steps
+        if self.visualize:
+            # 1. Reconstruct a single large map from all tiles
+            big_map = self.tiled_mapper.get_full_map()
+            if big_map is not None:
+                cv2.namedWindow('output', cv2.WINDOW_NORMAL)
+                cv2.imshow('output', big_map)
+                cv2.waitKey(1)
 
     def warp(self, frame_cur, H, depth):
         """
-        Warp the current BEV frame into the global map using a z-buffer to handle overlaps.
-        Args:
-            frame_cur (np.ndarray): The current BEV frame.
-            H (np.ndarray): The homography matrix.
-            depth (float): The depth value for the current frame (e.g., timestamp or priority).
+        Warp the current frame into the tile map using the TiledMapper.
         """
-        height, width = self.output_img.shape[:2]
+        self.tiled_mapper.warp_frame_into_tiles(frame_cur, H, depth)
 
-        # Warp the current frame into the global map space
-        warped_img = cv2.warpPerspective(
-            frame_cur, H, (self.output_img.shape[1], self.output_img.shape[0]),
-            flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE
-        )
-
-        # Generate a binary mask for valid pixels in the warped image
-        mask = (frame_cur > 0).any(axis=2).astype(np.uint8)
-        warped_mask = cv2.warpPerspective(
-            mask, H, (self.output_img.shape[1], self.output_img.shape[0]),
-            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
-        )
-
-        # Replace edges of the warped image with the corresponding regions from the previous frame
-        if self.frame_previous is not None:
-            warped_edge_mask = cv2.warpPerspective(
-                self.edge_mask, H, (self.output_img.shape[1], self.output_img.shape[0]),
-                flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
-            )
-
-        # Get only non-zero pixel coordinates from the warped mask
-        valid_pixels = cv2.findNonZero(warped_mask)
-
-        if valid_pixels is not None:  # Check if there are any valid pixels
-            for px in valid_pixels:
-                x, y = px[0]  # Extract pixel coordinates
-
-                # Ensure indices are within bounds
-                if not (0 <= x < width and 0 <= y < height):
-                    continue
-
-                # Handle edges from the previous frame
-                if self.frame_previous is not None and warped_edge_mask is not None and warped_edge_mask[y, x] == 1:
-                    if 0 <= y < self.frame_previous.shape[0] and 0 <= x < self.frame_previous.shape[1]:
-                        self.output_img[y, x] = self.frame_previous[y, x]
-                    continue  # Skip further processing for edge pixels
-                
-                # Depth-based update (Z-buffer)
-                if depth > self.z_buffer[y, x]:  
-                    self.output_img[y, x] = warped_img[y, x]
-                    self.z_buffer[y, x] = depth
-
-        return self.output_img
-
-    @staticmethod
-    def get_transformed_corners(frame_cur, H):
+    def refine_homography_with_ssd(self, frame_cur, prev_frames, H_initial, patch_size=32):
         """
-        Finds the corners of the current frame after applying the homography.
-        Args:
-            frame_cur (np.ndarray): Current BEV frame.
-            H (np.ndarray): Homography matrix.
-
-        Returns:
-            np.ndarray: Transformed corner points.
-        """
-        # Define the four corners of the input frame
-        h, w = frame_cur.shape[:2]
-        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32).reshape(-1, 1, 2)
-
-        # Transform the corners using the homography
-        transformed_corners = cv2.perspectiveTransform(corners, H)
-
-        return transformed_corners
-
-
-    def compute_relative_odometry(self, odom_matrix_prev, odom_matrix_cur, image_width, image_height, scale):
-        relative_transform = np.linalg.inv(odom_matrix_prev) @ odom_matrix_cur
-        tx = relative_transform[1, 3] * scale
-        ty = relative_transform[0, 3] * scale
-        cos_theta = relative_transform[0, 0]
-        sin_theta = relative_transform[1, 0]
-
-        to_bottom_center = np.array([
-            [1, 0, -image_width / 2],
-            [0, 1, -image_height],
-            [0, 0, 1]])
-        relative_homography = np.array([
-            [cos_theta, sin_theta, -tx],
-            [-sin_theta, cos_theta, -ty],
-            [0, 0, 1]])
-        to_original = np.array([
-            [1, 0, image_width / 2],
-            [0, 1, image_height],
-            [0, 0, 1]])
-        return to_original @ relative_homography @ to_bottom_center
-    
-    def refine_homography_with_ssd(self, frame_cur, prev_frame, H_initial, patch_size=32):
-        """
-        Refine the homography matrix using SSD loss in a parallelized manner with PyTorch.
+        Refine the homography matrix using SSD loss across the last 3 frames.
         
         Args:
             frame_cur (np.ndarray): Current BEV frame (H, W, C).
-            global_map (np.ndarray): Global map (H, W, C).
+            prev_frames (list of np.ndarray): List of last 3 previous frames (each H, W, C).
             H_initial (np.ndarray): Initial homography matrix.
             patch_size (int): Size of patches for SSD computation.
         
         Returns:
             np.ndarray: Refined homography matrix.
         """
-        # Convert inputs to PyTorch tensors
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        frame_cur_tensor = torch.tensor(frame_cur.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0  # (C, H, W)
-        prev_frame_tensor = torch.tensor(prev_frame.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0  # (C, H, W)
-        H_initial_tensor = torch.tensor(H_initial, dtype=torch.float32, device=device)
 
+        # Convert current frame and all previous frame to PyTorch tensor
+        frame_cur_tensor = torch.tensor(frame_cur.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0  # (C, H, W)
+        prev_frames_tensor = [
+            torch.tensor(f.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0 for f in prev_frames
+        ]  # List of (C, H, W) tensors
+
+        # Retrieve height and width
+        _, H, W = frame_cur_tensor.shape
+
+        # Cache a coordinate grid once (normalized [-1,1] range)
+        #    shape of coords => (3, H*W)
+        y_coords, x_coords = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=device),
+            torch.linspace(-1, 1, W, device=device),
+            indexing='ij'  # For PyTorch 1.10+; omit if on older PyTorch
+        )
+        coords = torch.stack([x_coords, y_coords, torch.ones_like(x_coords)], dim=-1)
+        coords = coords.view(-1, 3).T  # (3, H*W)
+        
+        # A local function to warp with a cached grid
+        def warp_with_homography_cached(image, H_mat):
+            """
+            Warp 'image' using homography 'H_mat', reusing the cached 'coords'.
+            image shape: (C, H, W)
+            H_mat shape: (3, 3)
+            returns: warped image (C, H, W)
+            """
+            # Transform the base coords => (3, H*W)
+            warped_coords = H_mat @ coords
+            # Normalize by z
+            warped_coords = warped_coords / warped_coords[2, :]
+            # Drop z => (2, H*W)
+            warped_coords = warped_coords[:2, :].T.view(H, W, 2)  # (H, W, 2)
+            
+            # grid_sample expects shape (N, H, W, 2)
+            warped_coords = warped_coords.unsqueeze(0)  # (1, H, W, 2)
+
+            # Add batch dimension to image => (1, C, H, W)
+            image_for_sampling = image.unsqueeze(0)
+
+            # Sample
+            warped = F.grid_sample(
+                image_for_sampling,
+                warped_coords,
+                mode='bilinear',
+                align_corners=True,
+                padding_mode='zeros'
+            )
+            return warped.squeeze(0)  # => (C, H, W)
+
+        # 4. Efficient patchwise SSD using pooling
+        def compute_patchwise_ssd_pool(a, b, patch):
+            """
+            Compute patchwise sum of squared differences between 'a' and 'b'.
+            a, b: (C, H, W)
+            """
+            diff_sq = (a - b)**2
+            # Use average pooling over each patch, then multiply back patch_size**2 to get the sum.
+            patch_sum = F.avg_pool2d(diff_sq, kernel_size=patch, stride=patch) * (patch**2)
+            return patch_sum.sum()  # scalar
+
+        # Convert initial homography to torch (we only optimize 6 parameters => top 2 rows)
+        H_initial_tensor = torch.tensor(H_initial, dtype=torch.float32, device=device)
+        initial_params = H_initial_tensor[:2, :].reshape(-1).cpu().numpy()  # shape (6,)
+
+        # 5. Define the loss function for SciPy
         def ssd_loss(params):
-            # Reconstruct the homography matrix from params
-            H = torch.tensor([
+            """
+            Given the 6 homography parameters (top two rows),
+            compute average patchwise SSD over 'prev_frames_tensor'.
+            """
+            # Rebuild a 3x3 homography
+            H_mat = torch.tensor([
                 [params[0], params[1], params[2]],
                 [params[3], params[4], params[5]],
-                [0,         0,         1]
-            ], dtype=torch.float32, device=device)
+                [0.0,       0.0,       1.0]
+            ], device=device, dtype=torch.float32)
 
-            # Warp the current frame using the homography matrix
-            warped_frame = self.warp_with_homography(frame_cur_tensor, H, prev_frame_tensor.shape[1:])
+            total_loss = 0.0
+            for prev_frame_tensor in prev_frames_tensor:
+                # Warp current frame to the "prev_frame" coordinates
+                warped_cur = warp_with_homography_cached(frame_cur_tensor, H_mat)
+                # Compute patchwise SSD
+                total_loss += compute_patchwise_ssd_pool(prev_frame_tensor, warped_cur, patch_size)
 
-            # Compute the SSD loss over patches
-            ssd_loss = self.compute_patchwise_ssd(prev_frame_tensor, warped_frame, patch_size)
-            return ssd_loss.item()  # Convert to scalar for optimization
+            # Return the average as a Python float
+            avg_loss = total_loss / len(prev_frames_tensor)
+            return avg_loss.item()
 
-        # Optimize using scipy's minimize
-        initial_params = H_initial_tensor[:2, :].flatten().cpu().numpy()  # Flatten first 6 elements
+        # 6. Use scipy to minimize
         result = minimize(ssd_loss, initial_params, method='L-BFGS-B', options={"maxiter": 100})
         refined_params = result.x
 
-        # Reconstruct refined homography matrix
-        refined_H = torch.tensor([
+        # 7. Rebuild the full 3x3 homography from the refined params
+        refined_H_tensor = torch.tensor([
             [refined_params[0], refined_params[1], refined_params[2]],
             [refined_params[3], refined_params[4], refined_params[5]],
-            [0,                 0,                 1]
-        ], dtype=torch.float32, device=device)
+            [0.0,               0.0,               1.0]
+        ], device=device, dtype=torch.float32)
 
-        return refined_H.cpu().numpy()
-
-    def warp_with_homography(self, image, homography, output_shape):
-        """
-        Warp an image using a given homography matrix with PyTorch.
-
-        Args:
-            image (torch.Tensor): Input image (C, H, W).
-            homography (torch.Tensor): Homography matrix (3x3).
-            output_shape (tuple): Shape of the output image (H, W).
-
-        Returns:
-            torch.Tensor: Warped image (C, H, W).
-        """
-        H, W = output_shape
-        device = image.device
-
-        # Create a grid of normalized coordinates (-1 to 1)
-        y_coords, x_coords = torch.meshgrid(
-            torch.linspace(-1, 1, H, device=device),
-            torch.linspace(-1, 1, W, device=device)
-        )
-        coords = torch.stack([x_coords, y_coords, torch.ones_like(x_coords)], dim=-1)  # (H, W, 3)
-        coords = coords.view(-1, 3).T  # (3, H*W)
-
-        # Transform coordinates using the homography matrix
-        warped_coords = homography @ coords  # (3, H*W)
-        warped_coords = warped_coords / warped_coords[2, :]  # Normalize by z-coordinate
-        warped_coords = warped_coords[:2, :].T  # (H*W, 2)
-
-        # Convert normalized coordinates back to image space
-        warped_coords = warped_coords.view(H, W, 2).unsqueeze(0)  # (1, H, W, 2)
-
-        # Sample the image using the warped coordinates
-        warped_image = F.grid_sample(
-            image.unsqueeze(0),  # Add batch dimension
-            warped_coords,
-            mode='bilinear',
-            align_corners=True,
-            padding_mode='zeros'
-        )
-        return warped_image.squeeze(0)  # Remove batch dimension
-
-    def compute_patchwise_ssd(self, prev_frame, warped_frame, patch_size):
-        """
-        Compute the SSD loss between the global map and warped frame in patches.
-
-        Args:
-            global_map (torch.Tensor): Global map (C, H, W).
-            warped_frame (torch.Tensor): Warped frame (C, H, W).
-            patch_size (int): Size of patches.
-
-        Returns:
-            torch.Tensor: Total SSD loss (scalar).
-        """
-        C, H, W = prev_frame.shape
-        prev_patches = prev_frame.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)  # (C, N, M, patch_size, patch_size)
-        warped_patches = prev_frame.unfold(1, patch_size, patch_size).unfold(2, patch_size, patch_size)  # (C, N, M, patch_size, patch_size)
-
-        # Compute SSD loss for each patch
-        ssd = torch.sum((prev_patches - warped_patches) ** 2, dim=(-1, -2, -3))  # (N, M)
-
-        # Sum up all patch losses
-        return torch.sum(ssd)
-
-    def get_map(self):
-        """
-        Retrieve the current global map.
-        Returns:
-            np.ndarray: The current global map.
-        """
-        return self.output_img
-
+        # Return as numpy on CPU
+        return refined_H_tensor.cpu().numpy()
 
 class MapViewer:
     def __init__(self, global_map):
         self.global_map = global_map
-        self.view_window = self.get_non_black_bounding_box()  # Initial view set to non-black region
+        self.view_window = self.get_non_black_bounding_box()
         self.dragging = False
         self.start_x = 0
         self.start_y = 0
+        self.zoom_factor = 1.2
+        self.scale = 1.0  # Start with 100% scale
 
     def get_non_black_bounding_box(self):
         """
         Calculate the bounding box of the non-black area in the global map.
-
-        Returns:
-            tuple: (x, y, width, height) of the bounding box for the non-black region.
         """
-        # Find non-black pixels
-        gray_map = cv2.cvtColor(self.global_map, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
-        non_black_pixels = np.argwhere(gray_map > 0)  # Identify non-black pixels
+        gray_map = cv2.cvtColor(self.global_map, cv2.COLOR_BGR2GRAY)
+        non_black_pixels = np.argwhere(gray_map > 0)
 
         if non_black_pixels.size == 0:
-            # If no non-black pixels exist, show the top-left corner by default
-            return (0, 0, 1280, 720)
+            return (0, 0, min(1920, self.global_map.shape[1]), min(1280, self.global_map.shape[0]))
 
-        # Calculate bounding box
         y_min, x_min = non_black_pixels.min(axis=0)
         y_max, x_max = non_black_pixels.max(axis=0)
 
-        # Expand the bounding box slightly for better visibility
         margin = 50
         x_min = max(0, x_min - margin)
         y_min = max(0, y_min - margin)
         x_max = min(self.global_map.shape[1], x_max + margin)
         y_max = min(self.global_map.shape[0], y_max + margin)
 
-        # Width and height of the view
-        width = min(x_max - x_min, 1280)
-        height = min(y_max - y_min, 720)
+        width = min(x_max - x_min, 1920)
+        height = min(y_max - y_min, 1280)
 
         return (x_min, y_min, width, height)
 
-    def show_map(self):
-        def mouse_callback(event, x, y, flags, param):
-            nonlocal self
+    def update_view(self, dx, dy):
+        """ Moves the view based on dragging. """
+        x, y, w, h = self.view_window
+        x = np.clip(x - dx, 0, self.global_map.shape[1] - w)
+        y = np.clip(y - dy, 0, self.global_map.shape[0] - h)
+        self.view_window = (x, y, w, h)
 
+    def resize_view(self, dx, dy):
+        """ Resizes the viewport while keeping it inside the image bounds. """
+        x, y, w, h = self.view_window
+        img_h, img_w, _ = self.global_map.shape
+
+        if self.resize_mode == "right":
+            w = np.clip(w + dx, 100, img_w - x)  # Minimum width = 100
+        elif self.resize_mode == "bottom":
+            h = np.clip(h + dy, 100, img_h - y)  # Minimum height = 100
+        elif self.resize_mode == "corner":
+            w = np.clip(w + dx, 100, img_w - x)
+            h = np.clip(h + dy, 100, img_h - y)
+
+        self.view_window = (x, y, w, h)
+
+    def zoom(self, zoom_in, cursor_x, cursor_y):
+        """
+        Zooms in or out while keeping the viewport size fixed but adjusting the scale.
+        """
+        prev_scale = self.scale
+
+        if zoom_in:
+            self.scale *= self.zoom_factor
+        else:
+            self.scale /= self.zoom_factor
+
+        self.scale = max(0.1, min(self.scale, 5.0))  # Prevent extreme zooming
+
+    def save_current_view(self, filename="current_view.png"):
+        """ Saves the currently visible section of the map. """
+        x, y, w, h = self.view_window
+        view = self.global_map[y:y + h, x:x + w]
+        cv2.imwrite(filename, view)
+        print(f"Saved current view as {filename}")
+
+    def save_full_map(self, filename="full_map.png"):
+        """ Saves the full map image. """
+        cv2.imwrite(filename, self.global_map)
+        print(f"Saved full map as {filename}")
+
+    def show_map(self):
+        """Displays the interactive map."""
+        def mouse_callback(event, x, y, flags, param):
             if event == cv2.EVENT_LBUTTONDOWN:
                 self.dragging = True
                 self.start_x, self.start_y = x, y
-
-            elif event == cv2.EVENT_MOUSEMOVE:
-                if self.dragging:
-                    dx = self.start_x - x
-                    dy = self.start_y - y
-                    self.start_x, self.start_y = x, y
-                    self.update_view(dx, dy)
-
+            elif event == cv2.EVENT_MOUSEMOVE and self.dragging:
+                dx = x - self.start_x
+                dy = y - self.start_y
+                self.start_x, self.start_y = x, y
+                self.update_view(dx, dy)
             elif event == cv2.EVENT_LBUTTONUP:
                 self.dragging = False
+            elif event == cv2.EVENT_MOUSEWHEEL:
+                self.zoom(flags > 0, x, y)
 
         cv2.namedWindow("Scrollable Map")
         cv2.setMouseCallback("Scrollable Map", mouse_callback)
 
         while True:
-            # Extract the current view from the global map
             x, y, w, h = self.view_window
-            view = self.global_map[y:y + h, x:x + w]
 
-            # Resize for consistent viewing if the view is smaller
-            display = cv2.resize(view, (w, h), interpolation=cv2.INTER_NEAREST)
+            # Resize the global map to simulate zooming out while keeping the viewport the same
+            scaled_map = cv2.resize(self.global_map, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_LINEAR)
 
-            cv2.imshow("Scrollable Map", display)
+            # Extract the viewport from the resized image
+            scaled_h, scaled_w, _ = scaled_map.shape
+            x = np.clip(int(x * self.scale), 0, max(0, scaled_w - w))
+            y = np.clip(int(y * self.scale), 0, max(0, scaled_h - h))
 
-            # Exit on 'q' key
+            view = scaled_map[y:y + h, x:x + w]
+            cv2.imshow("Scrollable Map", view)
+
             key = cv2.waitKey(1)
             if key == ord('q'):
                 break
+            elif key == ord('+'):
+                self.zoom(True, w // 2, h // 2)  # Zoom in at center
+            elif key == ord('-'):
+                self.zoom(False, w // 2, h // 2)  # Zoom out at center
 
         cv2.destroyAllWindows()
-
-    def update_view(self, dx, dy):
-        """Update the view window based on the drag motion."""
-        x, y, w, h = self.view_window
-
-        # Update x and y positions
-        new_x = max(0, min(x + dx, self.global_map.shape[1] - w))
-        new_y = max(0, min(y + dy, self.global_map.shape[0] - h))
-
-        self.view_window = (new_x, new_y, w, h)
 
 def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_matrix_cur):
     """
@@ -513,6 +569,74 @@ def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_mat
     return meters_to_pixels
 
 
+def remove_lines(image, 
+                canny_threshold1=25, 
+                canny_threshold2=125,
+                hough_threshold=40,
+                min_line_length=75,
+                max_line_gap=5,
+                line_thickness=2,
+                inpaint_radius=1):
+    """
+    Detects lines of any orientation using Canny + Hough transform, 
+    then inpaints them out of the original image.
+
+    Args:
+        image (np.ndarray): BGR or grayscale input image.
+        canny_threshold1 (int): Lower threshold for Canny edge detection.
+        canny_threshold2 (int): Upper threshold for Canny edge detection.
+        hough_threshold (int): Minimum number of intersecting 'votes' 
+                               to detect a line in Hough space.
+        min_line_length (int): Minimum length of a line to accept (in pixels).
+        max_line_gap (int): Max allowed gap between segments to link them (HoughLinesP).
+        line_thickness (int): Thickness (in pixels) used to draw lines on the mask.
+        inpaint_radius (int): Radius for OpenCV inpainting.
+
+    Returns:
+        np.ndarray: The input image with detected lines removed via inpainting.
+    """
+    
+    # 1. Convert to grayscale if needed
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+    
+    # 2. Detect edges
+    edges = cv2.Canny(gray, canny_threshold1, canny_threshold2)
+
+    # 3. Run Hough line transform (probabilistic version HoughLinesP)
+    lines = cv2.HoughLinesP(edges, 
+                            1, 
+                            np.pi / 180, 
+                            threshold=hough_threshold,
+                            minLineLength=min_line_length,
+                            maxLineGap=max_line_gap)
+
+    if lines is None:
+        # No lines found => return original
+        return image
+
+    # 4. Create a mask of detected lines
+    line_mask = np.zeros_like(gray)  # single channel, same size
+
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        # Draw white lines on black mask
+        cv2.line(line_mask, (x1, y1), (x2, y2), 255, thickness=line_thickness)
+
+    # 5. Inpaint lines in the original color image
+    #    If the image is grayscale, inpainting will also be grayscale
+    if len(image.shape) == 2:  
+        # grayscale inpaint
+        inpainted = cv2.inpaint(image, line_mask, inpaint_radius, cv2.INPAINT_TELEA)
+    else:
+        # color BGR inpaint
+        inpainted = cv2.inpaint(image, line_mask, inpaint_radius, cv2.INPAINT_TELEA)
+
+    return inpainted
+
+
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
@@ -535,40 +659,51 @@ if __name__ == "__main__":
     )
 
     scale_start = 490
-
-    # Initialize the global map
-    global_map = GlobalMap(visualize=True)
     bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
     bev_image_cur = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start+1), H, dsize)
 
     meters_to_pixels = calculate_meters_to_pixels(bev_image_prev, bev_image_cur,
                                                   robot_data.getOdomAtTimestep(scale_start),
                                                   robot_data.getOdomAtTimestep(scale_start+1))
+    # Initialize the global map
+    global_map = GlobalMap(tile_size = 1024, visualize=False)
 
-    start = 850
-    end = 1500
-    
-    # Process subsequent BEV images
-    for timestep in tqdm(range(start+1, end), desc="Processing patches at timesteps"):
-        try:
-            cur_img = robot_data.getImageAtTimestep(timestep)
-            cur_rt = robot_data.getOdomAtTimestep(timestep)
-            if cur_img is None:
-                print(f"Missing image data at timestep {timestep}")
-                continue
+    start = 0
+    end = 4000
+    #robot_data.getNTimesteps()
 
-            bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-            global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
+    # Check if an image path is provided
+    image_path = "full_map.png"  # Change this to None if no image path is given
 
-        except Exception as e:
-            print(f"Error at timestep {timestep}: {e}")
-            continue
+    if image_path:  # Show image if path exists
+        clean_map = cv2.imread(image_path)
+        if clean_map is not None:
+            viewer = MapViewer(clean_map)
+            viewer.show_map()
+        else:
+            # Process subsequent BEV images
+            for timestep in tqdm(range(start+1, end), desc="Processing patches at timesteps"):
+                try:
+                    cur_img = robot_data.getImageAtTimestep(timestep)
+                    cur_rt = robot_data.getOdomAtTimestep(timestep)
+                    if cur_img is None:
+                        print(f"Missing image data at timestep {timestep}")
+                        continue
 
-    # Retrieve and save the final stitched map
-    final_map = global_map.get_map()
-    # Ensure the map is properly scaled for viewing
-    viewer = MapViewer(final_map)
-    viewer.show_map()
+                    bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
+                    global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
+
+                except Exception as e:
+                    print(f"Error at timestep {timestep}: {e}")
+                    continue
+
+            # Retrieve and save the final stitched map
+            final_map = global_map.get_map()
+            clean_map = remove_lines(final_map)
+            # Ensure the map is properly scaled for viewing
+            viewer = MapViewer(clean_map)
+            viewer.show_map()
+            viewer.save_full_map()
 # Add Z buffer, so that pixels off in the distance are replaced with the most recent. 
 # We can get pixel and depth of the pixel using homography, once we reach that pixel, replace that portion of the image with most current
 
