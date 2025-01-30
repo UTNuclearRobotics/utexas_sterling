@@ -9,174 +9,173 @@ from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
 from utils import *
 from collections import deque
-from scipy.spatial.transform import Rotation as R
-from numba import njit
-from scipy.optimize import minimize
-import torch
-import torch.nn.functional as F
 import math
+from concurrent.futures import ThreadPoolExecutor
+import threading
+from scipy.linalg import solve
 
-import math
-import numpy as np
-import cv2
-
-class TiledMapper:
-    def __init__(self, tile_size=1024, channels=3):
+class GlobalMap:
+    def __init__(self, tile_size=1024, channels=3, visualize=True):
         """
-        tile_size : Size in pixels for each tile (square).
-        channels  : Number of channels (e.g., 3 for RGB).
+        A global mapping system using a tiled structure for efficient large-scale stitching.
+
+        Args:
+            tile_size (int): Size of each tile in pixels.
+            channels (int): Number of color channels (e.g., 3 for RGB).
+            visualize (bool): Whether to display the stitched map periodically.
         """
         self.tile_size = tile_size
         self.channels = channels
-        # Dictionary: (tile_x, tile_y) -> {'image': np.ndarray, 'z_buffer': np.ndarray}
-        self.tiles = {}  
-    
-    def _get_or_create_tile(self, tile_x, tile_y):
-        """Return tile at (tile_x, tile_y), create if it doesn't exist."""
-        if (tile_x, tile_y) not in self.tiles:
-            tile_img = np.zeros((self.tile_size, self.tile_size, self.channels), dtype=np.uint8)
-            tile_zb = np.full((self.tile_size, self.tile_size), -np.inf, dtype=np.float32)
-            self.tiles[(tile_x, tile_y)] = {'image': tile_img, 'z_buffer': tile_zb}
-        return self.tiles[(tile_x, tile_y)]
-
-    def _global_to_tile_coords(self, x, y):
-        """
-        Convert a global pixel coordinate (x,y) into
-        integer tile indices (tile_x, tile_y) and local offsets within that tile.
-        """
-        tile_x = x // self.tile_size
-        tile_y = y // self.tile_size
-        return tile_x, tile_y
-
-    def get_transformed_corners(self, frame_cur, H):
-        """Same as your existing function, or see below usage."""
-        h, w = frame_cur.shape[:2]
-        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32).reshape(-1, 1, 2)
-        return cv2.perspectiveTransform(corners, H)
-
-    def warp_frame_into_tiles(self, frame_cur, H, depth):
-        """
-        Warp the current frame into all overlapping tiles. 
-        Only updates tiles that the warped frame touches.
-        """
-        # 1. Compute corners in global space
-        corners = self.get_transformed_corners(frame_cur, H)
-        xs = corners[:, 0, 0]
-        ys = corners[:, 0, 1]
-        
-        x_min, x_max = math.floor(xs.min()), math.ceil(xs.max())
-        y_min, y_max = math.floor(ys.min()), math.ceil(ys.max())
-        
-        if x_min >= x_max or y_min >= y_max:
-            return  # No valid region
-
-        # 2. Figure out which tiles we need to update
-        tx_min, ty_min = self._global_to_tile_coords(x_min, y_min)
-        tx_max, ty_max = self._global_to_tile_coords(x_max - 1, y_max - 1)
-        
-        for ty in range(ty_min, ty_max + 1):
-            for tx in range(tx_min, tx_max + 1):
-                tile_data = self._get_or_create_tile(tx, ty)
-                tile_img = tile_data['image']
-                tile_zb = tile_data['z_buffer']
-                
-                # 3. Compute offset homography to warp into this tile's local coordinate system
-                tile_origin_x = tx * self.tile_size
-                tile_origin_y = ty * self.tile_size
-                T_offset = np.array([
-                    [1, 0, -tile_origin_x],
-                    [0, 1, -tile_origin_y],
-                    [0, 0, 1]
-                ], dtype=np.float32)
-                H_tile = T_offset @ H
-
-                # 4. Warp the frame into the size of the tile
-                warped_img = cv2.warpPerspective(
-                    frame_cur,
-                    H_tile,
-                    (self.tile_size, self.tile_size),
-                    flags=cv2.INTER_LANCZOS4,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0
-                )
-                
-                # 5. Mask + z-buffer checks
-                mask = (frame_cur > 0).any(axis=2).astype(np.uint8)
-                warped_mask = cv2.warpPerspective(
-                    mask,
-                    H_tile,
-                    (self.tile_size, self.tile_size),
-                    flags=cv2.INTER_LANCZOS4,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0
-                )
-                
-                valid_indices = (warped_mask == 1)
-                depth_mask = (depth > tile_zb)
-                update_mask = valid_indices & depth_mask
-                
-                # For color images, broadcast update_mask to shape (H,W,3)
-                if tile_img.ndim == 3:
-                    update_mask_3d = np.repeat(update_mask[:, :, np.newaxis], 3, axis=2)
-                    tile_img[update_mask_3d] = warped_img[update_mask_3d]
-                else:
-                    tile_img[update_mask] = warped_img[update_mask]
-                
-                tile_zb[update_mask] = depth  # update depth
-
-    def get_full_map(self):
-        """
-        Reconstruct a large mosaic from all existing tiles.
-        Useful for occasional visualization or saving to disk.
-        """
-        if not self.tiles:
-            return None
-
-        all_coords = list(self.tiles.keys())
-        txs = [c[0] for c in all_coords]
-        tys = [c[1] for c in all_coords]
-        tx_min, tx_max = min(txs), max(txs)
-        ty_min, ty_max = min(tys), max(tys)
-        
-        # Overall width/height in tiles
-        tile_range_x = tx_max - tx_min + 1
-        tile_range_y = ty_max - ty_min + 1
-        
-        big_width = tile_range_x * self.tile_size
-        big_height = tile_range_y * self.tile_size
-        
-        big_map = np.zeros((big_height, big_width, self.channels), dtype=np.uint8)
-        
-        for (tx, ty), tile_data in self.tiles.items():
-            tile_img = tile_data['image']
-            offset_x = (tx - tx_min) * self.tile_size
-            offset_y = (ty - ty_min) * self.tile_size
-            big_map[offset_y:offset_y+self.tile_size, offset_x:offset_x+self.tile_size] = tile_img
-        
-        return big_map
-
-
-class GlobalMap:
-    def __init__(self, tile_size=1024, visualize=True):
         self.visualize = visualize
+        self.tiles = {}  # Dictionary: (tile_x, tile_y) -> {'image', 'z_buffer'}
+        self.lock = threading.Lock()  # Ensures thread safety
 
-        # Instead of one monolithic output_img:
-        self.tiled_mapper = TiledMapper(tile_size=tile_size, channels=3)
-
+        # Odometry & frame history
         self.H_old = None
         self.frame_previous = None
         self.odom_previous = None
-
-        # If you still want frame history for homography refinement:
         self.frame_history = deque(maxlen=3)
+    
+    def _get_or_create_tile(self, tile_x, tile_y):
+        """Thread-safe function to retrieve or initialize a tile."""
+        if (tile_x, tile_y) not in self.tiles:
+            with self.lock:  # Only lock when modifying shared state
+                if (tile_x, tile_y) not in self.tiles:  # Double-check inside lock
+                    self.tiles[(tile_x, tile_y)] = {  # ✅ Ensure it's a dictionary
+                        'image': np.zeros((self.tile_size, self.tile_size, self.channels), dtype=np.uint8),
+                        'z_buffer': np.full((self.tile_size, self.tile_size), -np.inf, dtype=np.float32),
+                        'frame_history': deque(maxlen=3)
+                    }
+        return self.tiles[(tile_x, tile_y)]
 
-    def get_map(self):
-        """
-        Retrieve the current global map.
-        Returns:
-            np.ndarray: The current global map.
-        """
-        return self.tiled_mapper.get_full_map()
+    def _global_to_tile_coords(self, x, y):
+        """Converts global pixel coordinates to tile indices."""
+        return int(x // self.tile_size), int(y // self.tile_size)
+
+    def get_transformed_corners(self, frame_cur, H):
+        """Transforms image corners using a homography matrix."""
+        h, w = frame_cur.shape[:2]
+        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32).reshape(-1, 1, 2)
+        return cv2.perspectiveTransform(corners, H)
+    
+    def compute_depth_map(self, H, image):
+        """Computes a depth map using the homography matrix."""
+        h, w, _ = image.shape
+        x, y = np.meshgrid(np.arange(w), np.arange(h), indexing="xy")
+        depth_values = (H[2, 0] * x + H[2, 1] * y + H[2, 2]).astype(np.float32)
+        depth_values -= depth_values.min()  # In-place min subtraction
+        depth_values *= 255.0 / (depth_values.max() + 1e-5)  # Avoid division by zero
+        return depth_values.astype(np.uint8)
+
+    def compute_sharpness(self, image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sharpness = np.hypot(sobel_x, sobel_y)  # Faster than Laplacian
+        sharpness /= sharpness.max() + 1e-5  # Normalize
+        return sharpness
+
+    def process_tile(self, tx, ty, frame_cur, depth_map, sharpness_map, H, tile_size):
+        """Processes a single tile - warping, depth check, and blending."""
+        tile_data = self._get_or_create_tile(tx, ty)
+        tile_img = tile_data['image']
+        tile_zb = tile_data['z_buffer']
+        
+        tile_origin_x, tile_origin_y = tx * tile_size, ty * tile_size
+        T_offset = np.array([[1, 0, -tile_origin_x], [0, 1, -tile_origin_y], [0, 0, 1]], dtype=np.float32)
+        H_tile = T_offset @ H
+        H_tile /= H_tile[2, 2]
+
+        # Initialize a rolling history of past 5 frames per tile
+        if 'frame_history' not in tile_data:
+            tile_data['frame_history'] = deque(maxlen=3)  # Store last 5 frames
+
+        # Warp images to the tile
+        warped_img = cv2.warpPerspective(
+            frame_cur, H_tile, (tile_size, tile_size),
+            flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT
+        )
+        warped_depth = cv2.warpPerspective(
+            depth_map, H_tile, (tile_size, tile_size),
+            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=-np.inf
+        )
+        warped_sharpness = cv2.warpPerspective(
+            sharpness_map, H_tile, (tile_size, tile_size),
+            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+        )
+
+        mask = (warped_img > 0).any(axis=2).astype(np.uint8)
+        valid_indices = mask == 1
+        depth_mask = warped_depth >= tile_zb
+        sharpness_mask = warped_sharpness > 0
+        update_mask = valid_indices & depth_mask & sharpness_mask
+
+        if tile_img.ndim == 3:
+            update_mask_3d = np.repeat(update_mask[:, :, np.newaxis], 3, axis=2)
+
+            # 🔹 **Use Past 5 Frames for Blending**
+            frame_history = tile_data['frame_history']
+            frame_history.append(warped_img.copy())  # Store the current frame
+
+            # Compute weighted average of past frames (newer frames get more weight)
+            weight_sum = sum((i + 1) for i in range(len(frame_history)))
+            blended_img = frame_history[-1].copy()
+            for i in range(len(frame_history) - 1):
+                alpha = (i + 1) / weight_sum
+                cv2.addWeighted(frame_history[i], alpha, blended_img, 1 - alpha, 0, blended_img)
+
+            tile_img[update_mask_3d] = blended_img[update_mask_3d]
+        else:
+            tile_img[update_mask] = warped_img[update_mask]
+
+        tile_zb[update_mask] = warped_depth[update_mask]  # Update z-buffer
+
+    def warp_frame_into_tiles(self, frame_cur, H):
+        depth_map, sharpness_map = self.compute_depth_map(H, frame_cur), self.compute_sharpness(frame_cur)
+
+        # Compute once, reuse results
+        corners = self.get_transformed_corners(frame_cur, H)
+        x_min, x_max = np.floor(corners[:, 0, 0].min()), np.ceil(corners[:, 0, 0].max())
+        y_min, y_max = np.floor(corners[:, 0, 1].min()), np.ceil(corners[:, 0, 1].max())
+
+        tx_min, ty_min = self._global_to_tile_coords(x_min, y_min)
+        tx_max, ty_max = self._global_to_tile_coords(x_max - 1, y_max - 1)
+
+        tile_tasks = [(tx, ty, frame_cur, depth_map, sharpness_map, H, self.tile_size)
+                    for ty in range(ty_min, ty_max + 1)
+                    for tx in range(tx_min, tx_max + 1)]
+
+        if not tile_tasks:
+            print("Warning: No tiles were scheduled for processing!")
+
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.process_tile, *args) for args in tile_tasks]
+
+            # Ensure all tasks finish before continuing
+            for future in futures:
+                future.result()
+
+    def get_full_map(self):
+        """Reconstructs the full stitched map from all tiles."""
+        with self.lock:
+            if not self.tiles:
+                print("No tiles found! Returning empty map.")
+                return np.zeros((self.tile_size, self.tile_size, self.channels), dtype=np.uint8)
+
+            all_coords = list(self.tiles.keys())
+
+        tx_min, tx_max = min(c[0] for c in all_coords), max(c[0] for c in all_coords)
+        ty_min, ty_max = min(c[1] for c in all_coords), max(c[1] for c in all_coords)
+
+        big_width, big_height = (tx_max - tx_min + 1) * self.tile_size, (ty_max - ty_min + 1) * self.tile_size
+        big_map = np.zeros((big_height, big_width, self.channels), dtype=np.uint8)
+
+        with self.lock:
+            for (tx, ty), tile_data in self.tiles.items():
+                offset_x, offset_y = (tx - tx_min) * self.tile_size, (ty - ty_min) * self.tile_size
+                big_map[offset_y:offset_y + self.tile_size, offset_x:offset_x + self.tile_size] = tile_data['image']
+
+        return big_map
 
     def compute_relative_odometry(self, odom_matrix_prev, odom_matrix_cur, image_width, image_height, scale):
         relative_transform = np.linalg.inv(odom_matrix_prev) @ odom_matrix_cur
@@ -220,20 +219,20 @@ class GlobalMap:
             return
 
         if odom_data is not None and self.odom_previous is not None:
-            # Compute relative odometry transformation
-            relative_transform = np.linalg.inv(self.odom_previous) @ odom_data
+            # Solve for the relative transformation instead of inverting the matrix
+            relative_transform = solve(self.odom_previous, odom_data)  # Faster than np.linalg.inv() @ odom_data
 
             # Compute translation and rotation differences
             tx, ty = relative_transform[0, 3], relative_transform[1, 3]
-            translation_distance = np.sqrt(tx**2 + ty**2)  # Translation in meters
-            rotation_angle = np.arctan2(relative_transform[1, 0], relative_transform[0, 0])  # Rotation in radians
+            translation_distance = np.hypot(tx, ty)  # Faster Euclidean distance
+            rotation_angle = np.arctan2(relative_transform[1, 0], relative_transform[0, 0])  # Faster rotation calc
 
-            # Skip the frame if movement is below the threshold
+            # Skip frame if below movement threshold
             if translation_distance < translation_threshold and abs(rotation_angle) < rotation_threshold:
-                print(f"Skipping timestep {timestep}: No significant movement detected (translation={translation_distance:.3f}, rotation={rotation_angle:.3f})")
+                print(f"Skipping timestep {timestep}: No significant movement (translation={translation_distance:.3f}, rotation={rotation_angle:.3f})")
                 return
 
-            # Compute relative homography based on odometry
+            # Compute relative homography only if movement is significant
             H_relative = self.compute_relative_odometry(
                 self.odom_previous, odom_data, frame_cur.shape[1], frame_cur.shape[0], scale
             )
@@ -241,154 +240,27 @@ class GlobalMap:
             print(f"Missing odometry data at timestep {timestep}")
             return
 
-        # Optionally refine H_relative using your SSD approach with self.frame_history
-        # Let's call that H_refined:
-        H_refined = self.refine_homography_with_ssd(frame_cur, list(self.frame_history), H_relative)
-
         # Update global homography
-        self.H_old = self.H_old @ H_refined
+        self.H_old = self.H_old @ H_relative
         self.H_old /= self.H_old[2,2]
 
         # Warp into tile map
-        self.warp(frame_cur, self.H_old, depth=timestep)
+        self.warp_frame_into_tiles(frame_cur, self.H_old)
 
         # Update references
         self.odom_previous = odom_data
         self.frame_previous = frame_cur
         self.frame_history.append(frame_cur)
 
-        # Visualize only every 100 steps
-        if self.visualize:
-            # 1. Reconstruct a single large map from all tiles
-            big_map = self.tiled_mapper.get_full_map()
-            if big_map is not None:
-                cv2.namedWindow('output', cv2.WINDOW_NORMAL)
-                cv2.imshow('output', big_map)
-                cv2.waitKey(1)
+        # Ensure tiles finish processing before visualization
+        cv2.waitKey(1)
 
-    def warp(self, frame_cur, H, depth):
-        """
-        Warp the current frame into the tile map using the TiledMapper.
-        """
-        self.tiled_mapper.warp_frame_into_tiles(frame_cur, H, depth)
-
-    def refine_homography_with_ssd(self, frame_cur, prev_frames, H_initial, patch_size=32):
-        """
-        Refine the homography matrix using SSD loss across the last 3 frames.
-        
-        Args:
-            frame_cur (np.ndarray): Current BEV frame (H, W, C).
-            prev_frames (list of np.ndarray): List of last 3 previous frames (each H, W, C).
-            H_initial (np.ndarray): Initial homography matrix.
-            patch_size (int): Size of patches for SSD computation.
-        
-        Returns:
-            np.ndarray: Refined homography matrix.
-        """
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Convert current frame and all previous frame to PyTorch tensor
-        frame_cur_tensor = torch.tensor(frame_cur.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0  # (C, H, W)
-        prev_frames_tensor = [
-            torch.tensor(f.transpose(2, 0, 1), dtype=torch.float32, device=device) / 255.0 for f in prev_frames
-        ]  # List of (C, H, W) tensors
-
-        # Retrieve height and width
-        _, H, W = frame_cur_tensor.shape
-
-        # Cache a coordinate grid once (normalized [-1,1] range)
-        #    shape of coords => (3, H*W)
-        y_coords, x_coords = torch.meshgrid(
-            torch.linspace(-1, 1, H, device=device),
-            torch.linspace(-1, 1, W, device=device),
-            indexing='ij'  # For PyTorch 1.10+; omit if on older PyTorch
-        )
-        coords = torch.stack([x_coords, y_coords, torch.ones_like(x_coords)], dim=-1)
-        coords = coords.view(-1, 3).T  # (3, H*W)
-        
-        # A local function to warp with a cached grid
-        def warp_with_homography_cached(image, H_mat):
-            """
-            Warp 'image' using homography 'H_mat', reusing the cached 'coords'.
-            image shape: (C, H, W)
-            H_mat shape: (3, 3)
-            returns: warped image (C, H, W)
-            """
-            # Transform the base coords => (3, H*W)
-            warped_coords = H_mat @ coords
-            # Normalize by z
-            warped_coords = warped_coords / warped_coords[2, :]
-            # Drop z => (2, H*W)
-            warped_coords = warped_coords[:2, :].T.view(H, W, 2)  # (H, W, 2)
-            
-            # grid_sample expects shape (N, H, W, 2)
-            warped_coords = warped_coords.unsqueeze(0)  # (1, H, W, 2)
-
-            # Add batch dimension to image => (1, C, H, W)
-            image_for_sampling = image.unsqueeze(0)
-
-            # Sample
-            warped = F.grid_sample(
-                image_for_sampling,
-                warped_coords,
-                mode='bilinear',
-                align_corners=True,
-                padding_mode='zeros'
-            )
-            return warped.squeeze(0)  # => (C, H, W)
-
-        # 4. Efficient patchwise SSD using pooling
-        def compute_patchwise_ssd_pool(a, b, patch):
-            """
-            Compute patchwise sum of squared differences between 'a' and 'b'.
-            a, b: (C, H, W)
-            """
-            diff_sq = (a - b)**2
-            # Use average pooling over each patch, then multiply back patch_size**2 to get the sum.
-            patch_sum = F.avg_pool2d(diff_sq, kernel_size=patch, stride=patch) * (patch**2)
-            return patch_sum.sum()  # scalar
-
-        # Convert initial homography to torch (we only optimize 6 parameters => top 2 rows)
-        H_initial_tensor = torch.tensor(H_initial, dtype=torch.float32, device=device)
-        initial_params = H_initial_tensor[:2, :].reshape(-1).cpu().numpy()  # shape (6,)
-
-        # 5. Define the loss function for SciPy
-        def ssd_loss(params):
-            """
-            Given the 6 homography parameters (top two rows),
-            compute average patchwise SSD over 'prev_frames_tensor'.
-            """
-            # Rebuild a 3x3 homography
-            H_mat = torch.tensor([
-                [params[0], params[1], params[2]],
-                [params[3], params[4], params[5]],
-                [0.0,       0.0,       1.0]
-            ], device=device, dtype=torch.float32)
-
-            total_loss = 0.0
-            for prev_frame_tensor in prev_frames_tensor:
-                # Warp current frame to the "prev_frame" coordinates
-                warped_cur = warp_with_homography_cached(frame_cur_tensor, H_mat)
-                # Compute patchwise SSD
-                total_loss += compute_patchwise_ssd_pool(prev_frame_tensor, warped_cur, patch_size)
-
-            # Return the average as a Python float
-            avg_loss = total_loss / len(prev_frames_tensor)
-            return avg_loss.item()
-
-        # 6. Use scipy to minimize
-        result = minimize(ssd_loss, initial_params, method='L-BFGS-B', options={"maxiter": 100})
-        refined_params = result.x
-
-        # 7. Rebuild the full 3x3 homography from the refined params
-        refined_H_tensor = torch.tensor([
-            [refined_params[0], refined_params[1], refined_params[2]],
-            [refined_params[3], refined_params[4], refined_params[5]],
-            [0.0,               0.0,               1.0]
-        ], device=device, dtype=torch.float32)
-
-        # Return as numpy on CPU
-        return refined_H_tensor.cpu().numpy()
+        # Display full map (Only every 100 frames)
+        if self.visualize and timestep % 100 == 0:
+            big_map = self.get_full_map()
+            if big_map is not None and big_map.size > 0:
+                cv2.imshow("Stitched Map", big_map)
+                cv2.waitKey(10)
 
 class MapViewer:
     def __init__(self, global_map):
@@ -569,74 +441,6 @@ def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_mat
     return meters_to_pixels
 
 
-def remove_lines(image, 
-                canny_threshold1=25, 
-                canny_threshold2=125,
-                hough_threshold=40,
-                min_line_length=75,
-                max_line_gap=5,
-                line_thickness=2,
-                inpaint_radius=1):
-    """
-    Detects lines of any orientation using Canny + Hough transform, 
-    then inpaints them out of the original image.
-
-    Args:
-        image (np.ndarray): BGR or grayscale input image.
-        canny_threshold1 (int): Lower threshold for Canny edge detection.
-        canny_threshold2 (int): Upper threshold for Canny edge detection.
-        hough_threshold (int): Minimum number of intersecting 'votes' 
-                               to detect a line in Hough space.
-        min_line_length (int): Minimum length of a line to accept (in pixels).
-        max_line_gap (int): Max allowed gap between segments to link them (HoughLinesP).
-        line_thickness (int): Thickness (in pixels) used to draw lines on the mask.
-        inpaint_radius (int): Radius for OpenCV inpainting.
-
-    Returns:
-        np.ndarray: The input image with detected lines removed via inpainting.
-    """
-    
-    # 1. Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
-    
-    # 2. Detect edges
-    edges = cv2.Canny(gray, canny_threshold1, canny_threshold2)
-
-    # 3. Run Hough line transform (probabilistic version HoughLinesP)
-    lines = cv2.HoughLinesP(edges, 
-                            1, 
-                            np.pi / 180, 
-                            threshold=hough_threshold,
-                            minLineLength=min_line_length,
-                            maxLineGap=max_line_gap)
-
-    if lines is None:
-        # No lines found => return original
-        return image
-
-    # 4. Create a mask of detected lines
-    line_mask = np.zeros_like(gray)  # single channel, same size
-
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        # Draw white lines on black mask
-        cv2.line(line_mask, (x1, y1), (x2, y2), 255, thickness=line_thickness)
-
-    # 5. Inpaint lines in the original color image
-    #    If the image is grayscale, inpainting will also be grayscale
-    if len(image.shape) == 2:  
-        # grayscale inpaint
-        inpainted = cv2.inpaint(image, line_mask, inpaint_radius, cv2.INPAINT_TELEA)
-    else:
-        # color BGR inpaint
-        inpainted = cv2.inpaint(image, line_mask, inpaint_radius, cv2.INPAINT_TELEA)
-
-    return inpainted
-
-
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
@@ -649,10 +453,6 @@ if __name__ == "__main__":
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
     #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
     H, dsize,_ = chessboard_homography.plot_BEV_full(image)
-    RT = chessboard_homography.get_rigid_transform()
-    plane_normal = chessboard_homography.get_plane_norm()
-    plane_distance = chessboard_homography.get_plane_dist()
-    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
         os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
@@ -661,16 +461,12 @@ if __name__ == "__main__":
     scale_start = 490
     bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
     bev_image_cur = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start+1), H, dsize)
-
     meters_to_pixels = calculate_meters_to_pixels(bev_image_prev, bev_image_cur,
                                                   robot_data.getOdomAtTimestep(scale_start),
                                                   robot_data.getOdomAtTimestep(scale_start+1))
     # Initialize the global map
     global_map = GlobalMap(tile_size = 1024, visualize=False)
-
-    start = 0
-    end = 4000
-    #robot_data.getNTimesteps()
+    start, end = 0, 4000
 
     # Check if an image path is provided
     image_path = "full_map.png"  # Change this to None if no image path is given
@@ -698,10 +494,15 @@ if __name__ == "__main__":
                     continue
 
             # Retrieve and save the final stitched map
-            final_map = global_map.get_map()
-            clean_map = remove_lines(final_map)
-            # Ensure the map is properly scaled for viewing
-            viewer = MapViewer(clean_map)
+            final_map = global_map.get_full_map()
+
+            if final_map is None or final_map.size == 0:
+                print("⚠️ Error: Final map is empty!")
+            else:
+                print("✅ Final map successfully retrieved.")
+
+            # Pass `final_map` to `MapViewer`, NOT `clean_map`
+            viewer = MapViewer(final_map)
             viewer.show_map()
             viewer.save_full_map()
 # Add Z buffer, so that pixels off in the distance are replaced with the most recent. 
