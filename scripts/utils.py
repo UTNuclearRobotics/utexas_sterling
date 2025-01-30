@@ -172,14 +172,6 @@ def cart_to_hom(points):
     return_value = np.vstack((points, ones))
     return return_value
 
-
-# def cart_to_hom_pt(points):
-#     """Convert Cartesian coordinates to homogeneous coordinates."""
-#     ones = np.ones((1, points.shape[1]))
-#     return_value = np.vstack((points, ones))
-#     return return_value
-
-
 def hom_to_cart(points):
     """Convert homogeneous coordinates to Cartesian coordinates."""
     points /= points[-1, :]
