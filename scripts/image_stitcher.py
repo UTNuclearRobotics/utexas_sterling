@@ -41,7 +41,7 @@ class GlobalMap:
         if (tile_x, tile_y) not in self.tiles:
             with self.lock:  # Only lock when modifying shared state
                 if (tile_x, tile_y) not in self.tiles:  # Double-check inside lock
-                    self.tiles[(tile_x, tile_y)] = {  # ✅ Ensure it's a dictionary
+                    self.tiles[(tile_x, tile_y)] = {  # Ensure it's a dictionary
                         'image': np.zeros((self.tile_size, self.tile_size, self.channels), dtype=np.uint8),
                         'z_buffer': np.full((self.tile_size, self.tile_size), -np.inf, dtype=np.float32),
                         'frame_history': deque(maxlen=3)
@@ -178,7 +178,7 @@ class GlobalMap:
         return big_map
 
     def compute_relative_odometry(self, odom_matrix_prev, odom_matrix_cur, image_width, image_height, scale):
-        relative_transform = np.linalg.inv(odom_matrix_prev) @ odom_matrix_cur
+        relative_transform = solve(odom_matrix_prev,odom_matrix_cur)
         tx = relative_transform[1, 3] * scale
         ty = relative_transform[0, 3] * scale
         cos_theta = relative_transform[0, 0]
@@ -226,12 +226,12 @@ class GlobalMap:
             tx, ty = relative_transform[0, 3], relative_transform[1, 3]
             translation_distance = np.hypot(tx, ty)  # Faster Euclidean distance
             rotation_angle = np.arctan2(relative_transform[1, 0], relative_transform[0, 0])  # Faster rotation calc
-
+            """
             # Skip frame if below movement threshold
             if translation_distance < translation_threshold and abs(rotation_angle) < rotation_threshold:
                 print(f"Skipping timestep {timestep}: No significant movement (translation={translation_distance:.3f}, rotation={rotation_angle:.3f})")
                 return
-
+            """
             # Compute relative homography only if movement is significant
             H_relative = self.compute_relative_odometry(
                 self.odom_previous, odom_data, frame_cur.shape[1], frame_cur.shape[0], scale
@@ -259,6 +259,7 @@ class GlobalMap:
         if self.visualize and timestep % 100 == 0:
             big_map = self.get_full_map()
             if big_map is not None and big_map.size > 0:
+                cv2.namedWindow("Stitched Map", cv2.WINDOW_NORMAL)
                 cv2.imshow("Stitched Map", big_map)
                 cv2.waitKey(10)
 
@@ -497,9 +498,9 @@ if __name__ == "__main__":
             final_map = global_map.get_full_map()
 
             if final_map is None or final_map.size == 0:
-                print("⚠️ Error: Final map is empty!")
+                print("Error: Final map is empty!")
             else:
-                print("✅ Final map successfully retrieved.")
+                print("Final map successfully retrieved.")
 
             # Pass `final_map` to `MapViewer`, NOT `clean_map`
             viewer = MapViewer(final_map)

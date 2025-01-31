@@ -2,15 +2,17 @@ import argparse
 import os
 import pickle
 import torch
-
 import cv2
 import numpy as np
+import joblib
 from homography_from_chessboard import HomographyFromChessboardImage
 from robot_data_at_timestep import RobotDataAtTimestep
 from termcolor import cprint
 from tqdm import tqdm
 from cluster import Cluster
 import joblib
+from sklearn.cluster import KMeans
+from train_representation import SterlingRepresentation
 
 
 # GCD of 1280 and 720: 1,2,4,5,8,10,16,20,40,80
@@ -22,94 +24,95 @@ class BEVCostmap:
     An overview of the cost inference process for local planning at deployment.
     """
 
-    def __init__(self, synced_pkl_path, homography_cb, model_path, preferences):
-        self.synced_pkl_path = synced_pkl_path
-        self.homography_cb = homography_cb
-        self.model_path = model_path
-        self.preferences = preferences
+    def __init__(self, viz_encoder_path, kmeans_path, scaler_path, preferences):
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Load visual encoder model weights
+        self.sterling = SterlingRepresentation(device).to(device)
+        if not os.path.exists(viz_encoder_path):
+            raise FileNotFoundError(f"Model file not found at: {viz_encoder_path}")
+        self.sterling.load_state_dict(torch.load(viz_encoder_path, weights_only=True))
+
+        # Load K-means model
+        if not os.path.exists(kmeans_path):
+            raise FileNotFoundError(f"K-means model not found at {kmeans_path}")
+        self.kmeans = joblib.load(kmeans_path)
+
+        # Load scaler
+        if not os.path.exists(scaler_path):
+            raise FileNotFoundError(f"Scaler not found at {scaler_path}")
+        self.scaler = joblib.load(scaler_path)
+
+        self.preferences = preferences
         self.processed_imgs = {"bev": [], "cost": []}
         self.SAVE_PATH = "/".join(synced_pkl_path.split("/")[:-1])
 
-        self.cluster = Cluster(data_pkl_path=os.path.join(script_dir, "../datasets/ahg_courtyard_1_vicreg.pkl"),
-                               model_path=os.path.join(script_dir, "../models/vis_rep.pt"))
+    def predict_clusters(self, cells):
+        """Predict clusters for a batch of cells."""
+        if isinstance(cells, np.ndarray):
+            cells = torch.tensor(cells, dtype=torch.float32)
 
-    def process_images(self):
-        robot_data = RobotDataAtTimestep(self.synced_pkl_path)
+        if len(cells.shape) == 4:  # [B, C, H, W]
+            pass  
+        elif len(cells.shape) == 3:  # [C, H, W] -> [1, C, H, W]
+            cells = cells.unsqueeze(0)
+        
+        with torch.no_grad():
+            representations = self.sterling.encode_single_patch(cells)
 
-        with tqdm(total=robot_data.getNTimesteps(), desc="Processing images to cost BEV") as pbar:
-            for i in range(robot_data.getNTimesteps()):
-                # Get the image
-                img = robot_data.getImageAtTimestep(i)
+        representations_np = representations.detach().cpu().numpy()
+        scaled_representations = self.scaler.transform(representations_np)
+        cluster_labels = self.kmeans.predict(scaled_representations)
 
-                # Convert image to BEV
-                bev_img = self.image_to_BEV(img)
+        return cluster_labels
 
-                # TODO: Verify/calculate cell size to be GCD of image dimensions
-
-                # Convert BEV image to costmap
-                costmap = self.BEV_to_costmap(bev_img, CELL_SIZE)
-
-                # Visualize costmap
-                costmap_img = self.visualize_costmap(costmap, CELL_SIZE)
-
-                self.processed_imgs["bev"].append(bev_img)
-                self.processed_imgs["cost"].append(costmap_img)
-                pbar.update(1)
-
-    def image_to_BEV(self, img):
-        """
-        Plots the bird's-eye view (BEV) image using optimized rectangle parameters.
-        """
-        bev_img = self.homography_cb.plot_BEV_full(img)
-
-        return bev_img
+    def calculate_cell_costs(self, cells):
+        """Batch process cell costs."""
+        cluster_labels = self.predict_clusters(cells)
+        costs = [self.preferences.get(label, 0) for label in cluster_labels]
+        return costs
 
     def BEV_to_costmap(self, bev_img, cell_size):
-        """
-        Convert BEV image to costmap.
-        Splits the BEV image into a grid and assigns a cost to each cell.
-        Returns:
-            costmap: A 2D numpy array representing the costmap.
-        """
+        """Convert BEV image to costmap using batch processing."""
         height, width = bev_img.shape[:2]
         num_cells_y, num_cells_x = height // cell_size, width // cell_size
-
-
-        # Initialize the costmap with zeros
         costmap = np.zeros((num_cells_y, num_cells_x), dtype=np.uint8)
 
-        def calculate_cell_cost(cell):
+        # Precompute all cells as a batch
+        cells = [
+            bev_img[i * cell_size : (i + 1) * cell_size, j * cell_size : (j + 1) * cell_size]
+            for i in range(num_cells_y)
+            for j in range(num_cells_x)
+        ]
 
-            # Convert cell to required format
-            if len(cell.shape) == 2:  # Grayscale
-                cell = np.expand_dims(cell, axis=0)  # [H, W] -> [1, H, W]
-            elif len(cell.shape) == 3 and cell.shape[2] == 3:  # RGB
-                cell = np.transpose(cell, (2, 0, 1))  # [H, W, C] -> [C, H, W]
+        # Convert cells to tensors in batch
+        processed_cells = []
+        for cell in cells:
+            if np.all(cell == 0):  
+                processed_cells.append(None)  # Mark black cells separately
+            else:
+                if len(cell.shape) == 2:  # Grayscale
+                    cell = np.expand_dims(cell, axis=0)
+                elif len(cell.shape) == 3 and cell.shape[2] == 3:  # RGB
+                    cell = np.transpose(cell, (2, 0, 1))
+                processed_cells.append(cell)
 
-            # Convert cell to torch tensor
-            cell_tensor = torch.tensor(cell, dtype=torch.float32)
+        # Convert to tensor batch
+        valid_cells = [cell for cell in processed_cells if cell is not None]
+        if valid_cells:
+            valid_cells = np.stack(valid_cells, axis=0)
+            costs = self.calculate_cell_costs(valid_cells)
 
-            cluster_label = self.cluster.predict_cluster(cell_tensor, self.model_path)
-            # Match image cell to a cluster using "predict_cluster" function
-            # Assign grayscale value (0, 255) based on preference
-            cost_value = self.preferences.get(cluster_label, 0)
-            return cost_value
-
-        # Iterate over each cell in the grid
+        # Assign costs back to the costmap
+        idx = 0
         for i in range(num_cells_y):
             for j in range(num_cells_x):
-                # Extract the cell from the BEV image
-                cell = bev_img[i * cell_size : (i + 1) * cell_size, j * cell_size : (j + 1) * cell_size]
-                # Check if the cell is already black
-                if np.all(cell == 0):  # All pixel values in the cell are black
-                    cost = 255  # Assign maximum cost
+                if processed_cells[i * num_cells_x + j] is None:
+                    costmap[i, j] = 255  # Assign maximum cost to black cells
                 else:
-                    # Calculate the cost for the cell using the clustering method
-                    cost = calculate_cell_cost(cell)
-
-                # Assign the cost to the corresponding cell in the costmap
-                costmap[i, j] = cost
+                    costmap[i, j] = costs[idx]
+                    idx += 1
 
         return costmap
 
@@ -173,7 +176,6 @@ if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Get BEV cost visual.")
     parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronzied pickle file inside.")
-    # TODO: Add args for other files you need
     args = parser.parse_args()
 
     # Check if the bag file exists
@@ -187,27 +189,45 @@ if __name__ == "__main__":
     synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
 
     # Get chessboard calibration image
+if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
+
+    # Load the image
     image_dir = script_dir + "/homography/"
     image_file = "raw_image.jpg"
-    chessboard_calibration_image = cv2.imread(os.path.join(image_dir, image_file))
-    homography_cb = HomographyFromChessboardImage(chessboard_calibration_image, 8, 6)
+    image = cv2.imread(os.path.join(image_dir, image_file))
 
-    # TODO: Hardcode files so that you can test the script
-    model_path = "scripts/clusters/kmeans_model.pkl"
+    chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
+    #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    H, dsize,_ = chessboard_homography.plot_BEV_full(image)
+    robot_data = RobotDataAtTimestep(synced_pkl_path)
+
+    viz_encoder_path = "models/vis_rep.pt"
+    kmeans_path = "scripts/clusters/kmeans_model.pkl"
     scaler_path = "scripts/clusters/scaler.pkl"
+
     preferences = {
         # Black: 0, White: 255
-        0: 200,      #Cluster 0: Grass
-        1: 0,        #Cluster 1: Smooth Concrete
-        2: 100,      #Cluster 2: Aggregate Concrete
-        3: 0,     #Cluster 3: Smooth concrete
-        4: 0       #Cluster 4: Smooth Concrete
-
+        0: 225,      #Cluster 0: Aggregate Concrete
+        1: 0,      #Cluster 1: Smooth concrete
+        2: 100,      #Cluster 2: Bricks
+        3: 150,      #Cluster 3: Aggregate Concrete, Leaves
+        4: 255,      #Cluster 4: Grass
+        5: 0,      # Cluster 5: Smooth Concrete
+        6: 50      # Cluster 6: Aggregate concrete, bricks
     }
-    bev_costmap = BEVCostmap(
-        synced_pkl_path=synced_pkl_path, homography_cb=homography_cb, model_path=model_path, preferences=preferences
-    )
-    bev_costmap.process_images()
-    bev_costmap.save_data()
+
+    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, scaler_path, preferences)
+
+    for timestep in tqdm(range(0, 4000), desc="Processing patches at timesteps"):
+        cur_img = robot_data.getImageAtTimestep(timestep)
+        cur_rt = robot_data.getOdomAtTimestep(timestep)
+        bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
+        visualize = bev_costmap.visualize_costmap(costmap, 64)
+        combined_frame = cv2.vconcat([visualize, bev_img])
+        cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
+        cv2.imshow("Cost Map", combined_frame)
+        cv2.waitKey(10)
+

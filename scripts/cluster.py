@@ -125,7 +125,7 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -193,7 +193,7 @@ class Cluster:
             print(images)
 
         # Plot clusters only for the best k
-        # self.plot_clusters(representation_vectors, torch.tensor(min_indices), k)
+        self.plot_clusters(representation_vectors, torch.tensor(min_indices), k)
 
         return all_cluster_image_indices
 
@@ -205,7 +205,7 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -408,7 +408,7 @@ if __name__ == "__main__":
     pkl_path = os.path.join(bag_path, pkl[0])
 
     # Validate the pickle file exists
-    pt = [file for file in os.listdir(bag_path) if file.endswith("terrain_rep.pt")]
+    pt = [file for file in os.listdir(bag_path) if file.endswith(".pt")]
     if len(pt) != 1:
         raise FileNotFoundError(f"Terrain representation PyTorch model file not found in: {bag_path}")
     pt_path = os.path.join(bag_path, pt[0])
@@ -419,12 +419,9 @@ if __name__ == "__main__":
         model_path=pt_path,
     )
 
-    # k_values = range(2, 10)
-    k_values = 5
+    #k_values = range(2, 10)
+    k_values = 7
     iterations = 1000
-
-    # cluster_labels = cluster.predict_cluster(model_path="scripts/clusters/kmeans_model.pkl", scaler_path="scripts/clusters/scaler.pkl")
-    # print(cluster_labels)
 
     if isinstance(k_values, range):
         k_best_cluster_image_indices, best_k = cluster.iterate_generate_clusters(k_values, iterations)
