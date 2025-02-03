@@ -209,13 +209,13 @@ if __name__ == "__main__":
 
     preferences = {
         # Black: 0, White: 255
-        0: 225,      #Cluster 0: Aggregate Concrete
-        1: 0,      #Cluster 1: Smooth concrete
-        2: 100,      #Cluster 2: Bricks
-        3: 150,      #Cluster 3: Aggregate Concrete, Leaves
-        4: 255,      #Cluster 4: Grass
-        5: 0,      # Cluster 5: Smooth Concrete
-        6: 50      # Cluster 6: Aggregate concrete, bricks
+        0: 50,      #Cluster 0: Aggregate Concrete
+        1: 225,      #Cluster 1: Metal thing
+        2: 0,      #Cluster 2: Smooth concrete
+        3: 225,      #Cluster 3: Grass
+        4: 100,      #Cluster 4: Aggregate concrete, leaves
+        5: 225,      # Cluster 5: Grass
+        6: 0      # Cluster 6: Smooth concrete
     }
 
     bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, scaler_path, preferences)
