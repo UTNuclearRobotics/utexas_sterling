@@ -46,7 +46,7 @@ class BEVCostmap:
 
         self.preferences = preferences
         self.processed_imgs = {"bev": [], "cost": []}
-        self.SAVE_PATH = "/".join(synced_pkl_path.split("/")[:-1])
+        #self.SAVE_PATH = "/".join(synced_pkl_path.split("/")[:-1])
 
     def predict_clusters(self, cells):
         """Predict clusters for a batch of cells."""

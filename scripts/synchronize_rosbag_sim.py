@@ -18,7 +18,7 @@ import numpy as np
 import rosbag2_py
 from nav_msgs.msg import Odometry
 from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
+from sensor_msgs.msg import CameraInfo, Image, Imu
 from termcolor import cprint
 from tqdm import tqdm
 from collections import deque
@@ -176,7 +176,7 @@ class SynchronizeRosbag:
 
                 match topic_type:
                     case "sensor_msgs/msg/Image":
-                        msg = deserialize_message(msg, CompressedImage)
+                        msg = deserialize_message(msg, Image)
                         self.image_callback(msg)
                     case "sensor_msgs/msg/CameraInfo":
                         msg = deserialize_message(msg, CameraInfo)

@@ -226,12 +226,12 @@ class GlobalMap:
             tx, ty = relative_transform[0, 3], relative_transform[1, 3]
             translation_distance = np.hypot(tx, ty)  # Faster Euclidean distance
             rotation_angle = np.arctan2(relative_transform[1, 0], relative_transform[0, 0])  # Faster rotation calc
-            """
+            
             # Skip frame if below movement threshold
             if translation_distance < translation_threshold and abs(rotation_angle) < rotation_threshold:
                 print(f"Skipping timestep {timestep}: No significant movement (translation={translation_distance:.3f}, rotation={rotation_angle:.3f})")
                 return
-            """
+            
             # Compute relative homography only if movement is significant
             H_relative = self.compute_relative_odometry(
                 self.odom_previous, odom_data, frame_cur.shape[1], frame_cur.shape[0], scale
