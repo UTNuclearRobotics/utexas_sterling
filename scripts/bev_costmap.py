@@ -229,5 +229,5 @@ if __name__ == "__main__":
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
         cv2.imshow("Cost Map", combined_frame)
-        cv2.waitKey(10)
+        cv2.waitKey(0)
 
