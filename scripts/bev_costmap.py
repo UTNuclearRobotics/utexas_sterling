@@ -125,26 +125,11 @@ class BEVCostmap:
         Returns:
             Grayscale image of the costmap.
         """
-        height, width = costmap.shape
-        img_height = height * cell_size
-        img_width = width * cell_size
+        # Directly resize the costmap using nearest interpolation
+        costmap_img = cv2.resize(costmap, None, fx=cell_size, fy=cell_size, interpolation=cv2.INTER_NEAREST)
 
-        # Create an empty grayscale image
-        costmap_img = np.zeros((img_height, img_width), dtype=np.uint8)
-
-        for i in range(height):
-            for j in range(width):
-                cell_value = costmap[i, j]
-                cv2.rectangle(
-                    costmap_img,
-                    (j * cell_size, i * cell_size),
-                    ((j + 1) * cell_size, (i + 1) * cell_size),
-                    int(cell_value),
-                    thickness=cv2.FILLED,
-                )
-
-        color_costmap_img = cv2.cvtColor(costmap_img, cv2.COLOR_GRAY2BGR)
-        return color_costmap_img
+        # Convert grayscale to BGR for consistency
+        return cv2.cvtColor(costmap_img, cv2.COLOR_GRAY2BGR)
 
     def save_data(self):
         # Initialize the video writer
@@ -229,5 +214,5 @@ if __name__ == "__main__":
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
         cv2.imshow("Cost Map", combined_frame)
-        cv2.waitKey(0)
+        cv2.waitKey(10)
 

@@ -10,232 +10,156 @@ import numpy as np
 import cv2
 from image_stitcher import MapViewer
 
+
 class GlobalCostmap:
-    def __init__(self, map_size=(10000, 10000), cell_size=32, meters_per_pixel=0.0038, expansion_buffer=1280):
+    def __init__(self, tile_size=1280, cell_size=32, meters_per_pixel=0.0038):
         """
-        Initializes a large global cost map.
+        Initializes a tiled global costmap.
 
         Args:
-            map_size: (height, width) of the global map in pixels.
+            tile_size: The size of each tile (square) in pixels.
             cell_size: Size of each cell in the costmap.
             meters_per_pixel: Conversion factor from real-world meters to pixels.
-            expansion_buffer: Extra space to add when expanding, reducing frequent expansions.
         """
-        self.map_size = list(map_size)  # Allow dynamic resizing
+        self.tile_size = tile_size
         self.cell_size = cell_size
         self.meters_per_pixel = meters_per_pixel
-        self.expansion_buffer = expansion_buffer  # Extra buffer for expanding
 
-        # Initialize costmap, mask, and depth buffer
-        self.global_costmap = np.full(self.map_size, 255, dtype=np.uint8)  # Max cost
-        self.global_mask = np.zeros(self.map_size, dtype=bool)  # Track updates
-        self.z_buffer = np.copy(self.global_costmap)  # Depth buffer
-        self.global_origin_x = self.map_size[1] // 2
-        self.global_origin_y = self.map_size[0] // 2
+        self.tiles = {}  # Store tiles as {(tile_x, tile_y): np.array}
+        self.global_origin_x = 0
+        self.global_origin_y = 0
 
-    def expand_canvas(self, new_x, new_y):
+    def get_tile(self, x, y):
         """
-        Expands the global costmap only when an update is within 128 pixels of the boundary.
-        When expanding, it increases by 1280 pixels instead of small increments.
-        Prevents visual jumps when expanding upward by adjusting the origin instead of shifting the image.
-        
-        Args:
-            new_x: X coordinate (in pixels) of the incoming cell.
-            new_y: Y coordinate (in pixels) of the incoming cell.
+        Retrieves the tile containing (x, y). If the tile does not exist, create it.
         """
-        h, w = self.map_size
-        buffer_threshold = 128  # Start expansion when within 128 pixels
-        expansion_amount = 1280  # Expand by 1280 pixels at a time
+        tile_x = x // self.tile_size
+        tile_y = y // self.tile_size
 
-        expand_left = new_x < buffer_threshold
-        expand_top = new_y < buffer_threshold
-        expand_right = new_x + self.cell_size > w - buffer_threshold
-        expand_bottom = new_y + self.cell_size > h - buffer_threshold
+        if (tile_x, tile_y) not in self.tiles:
+            self.tiles[(tile_x, tile_y)] = np.full((self.tile_size, self.tile_size), 255, dtype=np.uint8)
 
-        # Calculate required new dimensions
-        new_w = w
-        new_h = h
-        shift_x = 0
-        shift_y = 0
-
-        if expand_left:
-            shift_x = expansion_amount  # Move everything right
-            new_w += expansion_amount
-
-        if expand_top:
-            shift_y = expansion_amount  # Instead of shifting image, shift the reference point
-            new_h += expansion_amount
-
-        if expand_right:
-            new_w += expansion_amount  # Expand to the right
-
-        if expand_bottom:
-            new_h += expansion_amount  # Expand downward
-
-        # Check if expansion is required
-        if new_w > w or new_h > h:
-            print(f"Expanding map from ({h}, {w}) to ({new_h}, {new_w}) with shift ({shift_y}, {shift_x})")
-
-            # Create new expanded arrays with the same default values
-            new_costmap = np.full((new_h, new_w), 255, dtype=np.uint8)
-            new_mask = np.zeros((new_h, new_w), dtype=bool)
-            new_z_buffer = np.full((new_h, new_w), 255, dtype=np.uint8)
-
-            # Copy old data into the new expanded arrays at the correct position
-            # If expanding LEFT or BOTTOM, shift old map in new space
-            y_offset = shift_y if expand_top else 0
-            x_offset = shift_x if expand_left else 0
-
-            new_costmap[y_offset:y_offset+h, x_offset:x_offset+w] = self.global_costmap
-            new_mask[y_offset:y_offset+h, x_offset:x_offset+w] = self.global_mask
-            new_z_buffer[y_offset:y_offset+h, x_offset:x_offset+w] = self.z_buffer
-
-            # Assign new expanded arrays
-            self.global_costmap = new_costmap
-            self.global_mask = new_mask
-            self.z_buffer = new_z_buffer
-            self.map_size = [new_h, new_w]
-
-            # Instead of shifting the whole costmap, adjust the global origin reference
-            self.global_origin_x += shift_x
-            self.global_origin_y += shift_y
-
+        return self.tiles[(tile_x, tile_y)], tile_x, tile_y
 
     def update_cell(self, cell, global_position):
         """
-        Updates a 64x64 cell in the global costmap without overwriting previous information.
-        
-        Args:
-            cell: 2D numpy array (64x64) representing a costmap cell.
-            global_position: (x, y) pixel coordinates in the global costmap.
+        Updates a 64x64 cell in the appropriate tile of the global costmap.
         """
         y_offset, x_offset = global_position
 
-        # Expand the canvas with buffer before updating
-        self.expand_canvas(x_offset, y_offset)
+        # Compute tile indices
+        tile_x = x_offset // self.tile_size
+        tile_y = y_offset // self.tile_size
 
-        # Ensure cell remains within valid bounds after expansion
-        x_end = min(x_offset + self.cell_size, self.map_size[1])
-        y_end = min(y_offset + self.cell_size, self.map_size[0])
-        x_start = max(x_offset, 0)
-        y_start = max(y_offset, 0)
+        # Retrieve or create the required tile
+        if (tile_x, tile_y) not in self.tiles:
+            self.tiles[(tile_x, tile_y)] = np.full((self.tile_size, self.tile_size), 255, dtype=np.uint8)
 
-        # Extract the region of interest (ROI) from the global costmap
-        global_roi = self.global_costmap[y_start:y_end, x_start:x_end]
-        new_cell_roi = cell[:(y_end - y_start), :(x_end - x_start)]
+        tile = self.tiles[(tile_x, tile_y)]
 
-        # Mask out regions that have already been written (not 255)
-        empty_mask = global_roi == 255  # True where global_costmap is still uninitialized
+        # Compute position within the tile
+        local_x = x_offset % self.tile_size
+        local_y = y_offset % self.tile_size
 
-        # Apply updates only to previously uninitialized cells
-        update_mask = empty_mask & (new_cell_roi != 255)  # Ensure new data is valid
+        # Ensure updates fit within tile bounds
+        x_end = min(local_x + self.cell_size, self.tile_size)
+        y_end = min(local_y + self.cell_size, self.tile_size)
 
-        # Apply updates
-        global_roi[update_mask] = new_cell_roi[update_mask]
+        # Compute valid update region
+        tile_roi = tile[local_y:y_end, local_x:x_end]
+        new_cell_roi = cell[:(y_end - local_y), :(x_end - local_x)]
 
+        # **Preserve existing data instead of overwriting everything**
+        update_mask = (tile_roi == 255) | (new_cell_roi < tile_roi)  # Keep lowest cost
+        tile_roi[update_mask] = new_cell_roi[update_mask]
 
-    def get_global_costmap(self):
-        """Returns the global costmap."""
-        return self.global_costmap
+    def process_odometry_and_update(self, local_costmap, odom_matrix):
+        """
+        Processes odometry data, places local costmap into the correct tile, and updates accordingly.
+        """
+        # Extract translation from odometry
+        t_x, t_y = -odom_matrix[1, 3], odom_matrix[0, 3]
 
+        # Convert meters to pixels
+        x_pixel = int(t_x / self.meters_per_pixel) + self.global_origin_x
+        y_pixel = int(t_y / self.meters_per_pixel) + self.global_origin_y
 
-def process_odometry_and_update(global_map, local_costmap, odom_matrix):
-    """
-    Extracts (x, y) position and rotation from odometry and updates the global costmap.
+        # Extract yaw
+        cos_theta = odom_matrix[0, 0]
+        sin_theta = odom_matrix[1, 0]
+        theta_degrees = np.degrees(np.arctan2(sin_theta, cos_theta))
 
-    Args:
-        global_map: Instance of GlobalBEVCostmap.
-        local_costmap: 2D numpy array (costmap).
-        odom_matrix: 4x4 numpy array representing the robot's odometry.
-    """
-    # Extract translation (negated for correct costmap alignment)
-    t_x, t_y = odom_matrix[1, 3], odom_matrix[0, 3]
+        # Convert local costmap to grayscale if needed
+        if len(local_costmap.shape) == 3:
+            local_costmap = cv2.cvtColor(local_costmap, cv2.COLOR_BGR2GRAY)
 
-    # Convert meters to pixels
-    x_pixel = int(t_x / global_map.meters_per_pixel)
-    y_pixel = int(t_y / global_map.meters_per_pixel)
+        # Get costmap dimensions
+        h, w = local_costmap.shape
+        num_cells_x = w // self.cell_size
+        num_cells_y = h // self.cell_size
 
-    # Shift origin to center of global map
-    global_center_x = global_map.global_costmap.shape[0] // 2
-    global_center_y = global_map.global_costmap.shape[1] // 2
+        # Rotation matrix
+        rotation_matrix = np.array([
+            [cos_theta, sin_theta],  
+            [-sin_theta, cos_theta]
+        ])
 
-    x_pixel += global_center_x
-    y_pixel += global_center_y
+        # Process and update costmap in tiles
+        for i in range(num_cells_y):
+            for j in range(num_cells_x):
+                cell = local_costmap[i * self.cell_size: (i + 1) * self.cell_size,
+                                     j * self.cell_size: (j + 1) * self.cell_size]
 
-    # Correct yaw extraction
-    theta = np.arctan2(odom_matrix[1, 0], odom_matrix[0, 0])  
-    theta_degrees = np.degrees(theta)
+                local_pos = np.array([
+                    (j - num_cells_x // 2) * self.cell_size,  
+                    (i - num_cells_y // 2) * self.cell_size
+                ])
+                rotated_pos = rotation_matrix @ local_pos
+                cell_x = x_pixel + int(rotated_pos[0])
+                cell_y = y_pixel - int(rotated_pos[1])
 
-    # Convert local costmap to grayscale if needed
-    if len(local_costmap.shape) == 3:
-        local_costmap = cv2.cvtColor(local_costmap, cv2.COLOR_BGR2GRAY)
+                cell_x = (cell_x // self.cell_size) * self.cell_size
+                cell_y = (cell_y // self.cell_size) * self.cell_size
 
-    # Get costmap dimensions
-    h, w = local_costmap.shape
-    num_cells_x = w // global_map.cell_size
-    num_cells_y = h // global_map.cell_size
+                rotated_cell = self.rotate_cell_bottom_center(cell, theta_degrees)
 
-    # Use correct rotation matrix (Negate theta and fix Y-axis flipping)
-    rotation_matrix = np.array([
-        [np.cos(-theta), np.sin(-theta)],  # Fix Y flipping
-        [-np.sin(-theta), np.cos(-theta)]
-    ])
+                # Update the correct tile
+                self.update_cell(rotated_cell, (cell_x, cell_y))
 
-    # Loop through each 64x64 cell
-    for i in range(num_cells_y):
-        for j in range(num_cells_x):
-            # Extract 64x64 cell
-            cell = local_costmap[i * global_map.cell_size: (i + 1) * global_map.cell_size,
-                                 j * global_map.cell_size: (j + 1) * global_map.cell_size]
+    def rotate_cell_bottom_center(self, cell, theta_degrees):
+        """
+        Rotates a 64x64 cell around its bottom-center point.
+        """
+        h, w = cell.shape
+        center = (w // 2, h)
 
-            # Correct Local Position Calculation (Remove extra negation on Y)
-            local_pos = np.array([
-                -(j - num_cells_x // 2) * global_map.cell_size,  
-                (i - num_cells_y // 2) * global_map.cell_size  # Remove negation
-            ])
+        rotation_matrix = cv2.getRotationMatrix2D(center, theta_degrees, 1.0)
+        rotated_cell = cv2.warpAffine(cell, rotation_matrix, (w, h), flags=cv2.INTER_NEAREST)
 
-            # Apply Corrected Rotation
-            rotated_pos = rotation_matrix @ local_pos
-            rotated_pos[1] *= -1
+        rotated_cell[rotated_cell == 0] = np.max(rotated_cell)
+        return rotated_cell
 
-            # Compute the global position
-            cell_x = global_map.global_costmap.shape[0] - (x_pixel + int(rotated_pos[0]))  # Flipping X
-            cell_y = y_pixel + int(rotated_pos[1])
+    def get_combined_costmap(self):
+        """
+        Returns a combined view of all active tiles.
+        """
+        if not self.tiles:
+            return None
 
-            # Snap to 64-pixel grid
-            cell_x = (cell_x // global_map.cell_size) * global_map.cell_size
-            cell_y = (cell_y // global_map.cell_size) * global_map.cell_size
+        min_x = min(tile_x for tile_x, _ in self.tiles) * self.tile_size
+        min_y = min(tile_y for _, tile_y in self.tiles) * self.tile_size
+        max_x = (max(tile_x for tile_x, _ in self.tiles) + 1) * self.tile_size
+        max_y = (max(tile_y for _, tile_y in self.tiles) + 1) * self.tile_size
 
-            # Rotate the cell before adding (Ensures local structure is aligned)
-            rotated_cell = rotate_cell_bottom_center(cell, theta_degrees)
+        # Create combined costmap
+        combined_map = np.full((max_y - min_y, max_x - min_x), 255, dtype=np.uint8)
 
-            # Update the global map with the rotated cell
-            global_map.update_cell(rotated_cell, (cell_x, cell_y))
+        for (tile_x, tile_y), tile in self.tiles.items():
+            x_start = (tile_x * self.tile_size) - min_x
+            y_start = (tile_y * self.tile_size) - min_y
+            combined_map[y_start:y_start + self.tile_size, x_start:x_start + self.tile_size] = tile
 
-def rotate_cell_bottom_center(cell, angle):
-    """
-    Rotates a 64x64 cell around the bottom center while keeping alignment.
-
-    Args:
-        cell: 2D numpy array (grayscale) representing a single cell.
-        angle: Rotation angle in degrees.
-
-    Returns:
-        Rotated cell.
-    """
-    h, w = cell.shape
-    # Set rotation center to the bottom center of the cell
-    center = (w // 2, h)  # Bottom center (x, y)
-
-    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-
-    # Apply rotation with nearest-neighbor to avoid blurring
-    rotated_cell = cv2.warpAffine(cell, rotation_matrix, (w, h), flags=cv2.INTER_NEAREST)
-    
-    # Remove tiny gaps by setting all near-empty pixels to the closest non-empty value
-    rotated_cell[rotated_cell == 0] = np.max(rotated_cell)
-
-    return rotated_cell
+        return combined_map
 
 
 if __name__ == "__main__":
@@ -294,15 +218,15 @@ if __name__ == "__main__":
         costmap = bev_costmap.BEV_to_costmap(bev_img, 32)
         visualize_cost = bev_costmap.visualize_costmap(costmap, 32)
 
-        process_odometry_and_update(global_costmap, visualize_cost, odom_cur)
+        global_costmap.process_odometry_and_update(visualize_cost, odom_cur)
 
         if timestep % 5 == 0:
-            updated_costmap = global_costmap.get_global_costmap()
+            updated_costmap = global_costmap.get_combined_costmap()
             cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
             cv2.imshow("Global Cost Map", updated_costmap)
             cv2.waitKey(10)
 
-    final_map = global_costmap.get_global_costmap()
+    final_map = global_costmap.get_combined_costmap()
     cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
     cv2.imshow("Global Cost Map", updated_costmap)
     key = cv2.waitKey(0)
