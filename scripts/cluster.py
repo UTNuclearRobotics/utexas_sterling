@@ -125,7 +125,7 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
+        scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -205,7 +205,7 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
+        scaler = StandardScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -344,46 +344,6 @@ class Cluster:
         plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
         plt.show()
 
-    def predict_cluster(self, cell, model_path):
-        """
-        Predict cluster for new test data using the saved K-means model and scaler.
-        Args:
-            cell (torch.Tensor or np.ndarray): New test data to classify into clusters.
-                                            Should have shape [C, H, W] or [1, C, H, W].
-            model_path (str): Path to the saved K-means model.
-            scaler_path (str): Path to the saved scaler.
-        Returns:
-            int: Cluster label for the new data.
-        """
-        # Load the K-means model and scaler
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"K-means model not found at {model_path}")
-
-        kmeans = joblib.load(model_path)
-
-        # Ensure the cell is a tensor
-        if isinstance(cell, np.ndarray):
-            cell = torch.tensor(cell, dtype=torch.float32)
-
-        # Add batch dimension if not present
-        if len(cell.shape) == 3:  # [C, H, W]
-            cell = cell.unsqueeze(0)  # [1, C, H, W]
-
-        # Set model to evaluation mode
-        self.model.eval()
-
-        # Extract representation vector for the cell
-        with torch.no_grad():
-            representation_vector = self.model.encode_single_patch(cell)
-
-        # Preprocess the representation vector
-        representation_np = representation_vector.detach().cpu().numpy()
-        # scaled_representation = scaler.transform(representation_np)
-
-        # Predict cluster label
-        cluster_label = kmeans.predict(representation_np)
-        return cluster_label[0]
-
 
 if __name__ == "__main__":
     # Save directory
@@ -419,7 +379,7 @@ if __name__ == "__main__":
         model_path=pt_path,
     )
 
-    #k_values = range(2, 10)
+    #k_values = range(2, 12)
     k_values = 7
     iterations = 1000
 

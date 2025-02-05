@@ -99,7 +99,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create dataset and dataloader
-    data_pkl = load_bag_pkl(parser.bag, "vicreg")
+    data_pkl = load_bag_pkl(args.bag, "vicreg")
     # Define the augmentation pipeline
     augment_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),  # Flips tensor horizontally
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     # Initialize model
     model = SterlingRepresentation(device).to(device)
-    save_path = load_bag_pt_model(parser.bag, "terrain_rep", model)
+    save_path = load_bag_pt_model(args.bag, "terrain_rep", model)
 
     # Define optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)

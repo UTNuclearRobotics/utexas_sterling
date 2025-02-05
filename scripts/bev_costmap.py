@@ -46,7 +46,7 @@ class BEVCostmap:
 
         self.preferences = preferences
         self.processed_imgs = {"bev": [], "cost": []}
-        self.SAVE_PATH = "/".join(synced_pkl_path.split("/")[:-1])
+        #self.SAVE_PATH = "/".join(synced_pkl_path.split("/")[:-1])
 
     def predict_clusters(self, cells):
         """Predict clusters for a batch of cells."""
@@ -125,26 +125,11 @@ class BEVCostmap:
         Returns:
             Grayscale image of the costmap.
         """
-        height, width = costmap.shape
-        img_height = height * cell_size
-        img_width = width * cell_size
+        # Directly resize the costmap using nearest interpolation
+        costmap_img = cv2.resize(costmap, None, fx=cell_size, fy=cell_size, interpolation=cv2.INTER_NEAREST)
 
-        # Create an empty grayscale image
-        costmap_img = np.zeros((img_height, img_width), dtype=np.uint8)
-
-        for i in range(height):
-            for j in range(width):
-                cell_value = costmap[i, j]
-                cv2.rectangle(
-                    costmap_img,
-                    (j * cell_size, i * cell_size),
-                    ((j + 1) * cell_size, (i + 1) * cell_size),
-                    int(cell_value),
-                    thickness=cv2.FILLED,
-                )
-
-        color_costmap_img = cv2.cvtColor(costmap_img, cv2.COLOR_GRAY2BGR)
-        return color_costmap_img
+        # Convert grayscale to BGR for consistency
+        return cv2.cvtColor(costmap_img, cv2.COLOR_GRAY2BGR)
 
     def save_data(self):
         # Initialize the video writer
@@ -209,13 +194,13 @@ if __name__ == "__main__":
 
     preferences = {
         # Black: 0, White: 255
-        0: 225,      #Cluster 0: Aggregate Concrete
-        1: 0,      #Cluster 1: Smooth concrete
-        2: 100,      #Cluster 2: Bricks
-        3: 150,      #Cluster 3: Aggregate Concrete, Leaves
-        4: 255,      #Cluster 4: Grass
-        5: 0,      # Cluster 5: Smooth Concrete
-        6: 50      # Cluster 6: Aggregate concrete, bricks
+        0: 50,      #Cluster 0: Aggregate Concrete
+        1: 225,      #Cluster 1: Metal thing
+        2: 0,      #Cluster 2: Smooth concrete
+        3: 225,      #Cluster 3: Grass
+        4: 100,      #Cluster 4: Aggregate concrete, leaves
+        5: 225,      # Cluster 5: Grass
+        6: 0      # Cluster 6: Smooth concrete
     }
 
     bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, scaler_path, preferences)
