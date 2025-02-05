@@ -9,10 +9,11 @@ from robot_data_at_timestep import RobotDataAtTimestep
 import numpy as np
 import cv2
 from image_stitcher import MapViewer
+from collections import defaultdict
 
 
 class GlobalCostmap:
-    def __init__(self, tile_size=1280, cell_size=32, meters_per_pixel=0.0038):
+    def __init__(self, tile_size=1280, cell_size=64, meters_per_pixel=0.0038):
         """
         Initializes a tiled global costmap.
 
@@ -26,6 +27,7 @@ class GlobalCostmap:
         self.meters_per_pixel = meters_per_pixel
 
         self.tiles = {}  # Store tiles as {(tile_x, tile_y): np.array}
+        self.tile_histograms = {}
         self.global_origin_x = 0
         self.global_origin_y = 0
 
@@ -43,7 +45,8 @@ class GlobalCostmap:
 
     def update_cell(self, cell, global_position):
         """
-        Updates a 64x64 cell in the appropriate tile of the global costmap.
+        Updates a 64x64 cell in the appropriate tile of the global costmap based on the most frequently occurring value,
+        ensuring that existing values are not overwritten by 255.
         """
         y_offset, x_offset = global_position
 
@@ -54,8 +57,10 @@ class GlobalCostmap:
         # Retrieve or create the required tile
         if (tile_x, tile_y) not in self.tiles:
             self.tiles[(tile_x, tile_y)] = np.full((self.tile_size, self.tile_size), 255, dtype=np.uint8)
+            self.tile_histograms[(tile_x, tile_y)] = defaultdict(lambda: np.zeros((self.tile_size, self.tile_size), dtype=int))
 
         tile = self.tiles[(tile_x, tile_y)]
+        histogram = self.tile_histograms[(tile_x, tile_y)]
 
         # Compute position within the tile
         local_x = x_offset % self.tile_size
@@ -69,9 +74,26 @@ class GlobalCostmap:
         tile_roi = tile[local_y:y_end, local_x:x_end]
         new_cell_roi = cell[:(y_end - local_y), :(x_end - local_x)]
 
-        # **Preserve existing data instead of overwriting everything**
-        update_mask = (tile_roi == 255) | (new_cell_roi < tile_roi)  # Keep lowest cost
-        tile_roi[update_mask] = new_cell_roi[update_mask]
+        # Update frequency histogram (EXCLUDE 255)
+        unique_values = np.unique(new_cell_roi)
+        unique_values = unique_values[unique_values != 255]  # Ignore 255 in histogram updates
+
+        for value in unique_values:
+            mask = (new_cell_roi == value)
+            histogram[value][local_y:y_end, local_x:x_end] += mask.astype(int)
+
+        # Assign each cell its most frequent value
+        max_counts = np.zeros_like(tile_roi)
+        most_frequent_values = tile_roi.copy()  # Start with existing values instead of filling with 255
+
+        for value, count_map in histogram.items():
+            mask = count_map[local_y:y_end, local_x:x_end] > max_counts
+            most_frequent_values[mask] = value
+            max_counts[mask] = count_map[local_y:y_end, local_x:x_end][mask]
+
+        # Apply most frequent values to the tile (ENSURE 255 DOES NOT OVERWRITE EXISTING DATA)
+        mask_255 = most_frequent_values != 255  # Only update where new value is not 255
+        tile[local_y:y_end, local_x:x_end][mask_255] = most_frequent_values[mask_255]
 
     def process_odometry_and_update(self, local_costmap, odom_matrix):
         """
@@ -215,25 +237,18 @@ if __name__ == "__main__":
         robot_x, robot_y = -odom_cur[1, 3], -odom_cur[0, 3]
 
         bev_img = cv2.warpPerspective(cur_img, H, dsize)
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 32)
-        visualize_cost = bev_costmap.visualize_costmap(costmap, 32)
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
+        visualize_cost = bev_costmap.visualize_costmap(costmap, 64)
 
         global_costmap.process_odometry_and_update(visualize_cost, odom_cur)
 
-        if timestep % 5 == 0:
-            updated_costmap = global_costmap.get_combined_costmap()
-            cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
-            cv2.imshow("Global Cost Map", updated_costmap)
-            cv2.waitKey(10)
+        #if timestep % 5 == 0:
+            #updated_costmap = global_costmap.get_combined_costmap()
+            #cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
+            #cv2.imshow("Global Cost Map", updated_costmap)
+            #cv2.waitKey(10)
 
     final_map = global_costmap.get_combined_costmap()
-    cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
-    cv2.imshow("Global Cost Map", updated_costmap)
-    key = cv2.waitKey(0)
-
-    # Check if the pressed key is 'q'
-    if key == ord('q'):
-        cv2.destroyAllWindows()
-    #viewer = MapViewer(final_map)
-    #viewer.show_map()
-    #viewer.save_full_map()
+    viewer = MapViewer(final_map)
+    viewer.show_map()
+    viewer.save_full_map(filename="full_costmap.png")

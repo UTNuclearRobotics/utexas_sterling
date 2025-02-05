@@ -13,6 +13,7 @@ import math
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from scipy.linalg import solve
+from collections import Counter
 
 class GlobalMap:
     def __init__(self, tile_size=1024, channels=3, visualize=True):
@@ -266,26 +267,39 @@ class GlobalMap:
 class MapViewer:
     def __init__(self, global_map):
         self.global_map = global_map
-        self.view_window = self.get_non_black_bounding_box()
+        self.view_window = self.get_non_background_bounding_box()
         self.dragging = False
         self.start_x = 0
         self.start_y = 0
         self.zoom_factor = 1.2
         self.scale = 1.0  # Start with 100% scale
 
-    def get_non_black_bounding_box(self):
+    def get_non_background_bounding_box(self):
         """
-        Calculate the bounding box of the non-black area in the global map.
+        Calculate the bounding box of the non-background area in the global map.
+        It dynamically detects the most common color (background) and removes it.
         """
-        gray_map = cv2.cvtColor(self.global_map, cv2.COLOR_BGR2GRAY)
-        non_black_pixels = np.argwhere(gray_map > 0)
+        if len(self.global_map.shape) == 2:  # Already grayscale
+            gray_map = self.global_map
+        else:
+            gray_map = cv2.cvtColor(self.global_map, cv2.COLOR_BGR2GRAY)
 
-        if non_black_pixels.size == 0:
+
+        # Detect most frequent color (background color)
+        pixel_counts = Counter(gray_map.flatten())
+        background_color = max(pixel_counts, key=pixel_counts.get)
+
+        # Find pixels that are NOT the background color
+        non_background_pixels = np.argwhere(gray_map != background_color)
+
+        if non_background_pixels.size == 0:
             return (0, 0, min(1920, self.global_map.shape[1]), min(1280, self.global_map.shape[0]))
 
-        y_min, x_min = non_black_pixels.min(axis=0)
-        y_max, x_max = non_black_pixels.max(axis=0)
+        # Bounding box calculation
+        y_min, x_min = non_background_pixels.min(axis=0)
+        y_max, x_max = non_background_pixels.max(axis=0)
 
+        # Add some margin for better visibility
         margin = 50
         x_min = max(0, x_min - margin)
         y_min = max(0, y_min - margin)
@@ -370,7 +384,10 @@ class MapViewer:
             scaled_map = cv2.resize(self.global_map, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_LINEAR)
 
             # Extract the viewport from the resized image
-            scaled_h, scaled_w, _ = scaled_map.shape
+            if len(scaled_map.shape) == 2:  # Grayscale image (no channel dimension)
+                scaled_h, scaled_w = scaled_map.shape
+            else:
+                scaled_h, scaled_w, _ = scaled_map.shape
             x = np.clip(int(x * self.scale), 0, max(0, scaled_w - w))
             y = np.clip(int(y * self.scale), 0, max(0, scaled_h - h))
 
