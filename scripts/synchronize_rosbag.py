@@ -14,18 +14,15 @@ import os
 import pickle
 
 import cv2
+from cv_bridge import CvBridge
 import numpy as np
 import rosbag2_py
 from nav_msgs.msg import Odometry
 from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
+from sensor_msgs.msg import CameraInfo, Image, CompressedImage, Imu
 from termcolor import cprint
 from tqdm import tqdm
 from collections import deque
-
-# ROS2 topics
-ODOMETRY_TOPIC = "/panther/odometry/filtered"
-IMU_TOPIC = "/panther/imu/data"
 
 
 class SynchronizeRosbag:
@@ -34,10 +31,21 @@ class SynchronizeRosbag:
     based on odometry information.
     """
 
-    def __init__(self, bag_path, visual):
+    def __init__(self, bag_path, visual, simulation):
         self.BAG_PATH = bag_path
         self.SAVE_PATH = bag_path
         self.VISUAL = visual
+        self.SIM = simulation
+
+        if self.SIM:
+            self.odometry_topic = "/odometry/filtered"
+            self.imu_topic = "/imu/data"
+        else:
+            self.odometry_topic = "/panther/odometry/filtered"
+            self.imu_topic = "/panther/imu/data"
+
+        # Bridge for conversions between Image and CompressedImage
+        self.br = CvBridge()
 
         # Initialize queues
         self.image_msgs = deque()
@@ -50,6 +58,11 @@ class SynchronizeRosbag:
         self.camera_info = None
 
     def image_callback(self, msg):
+        if self.SIM:
+            image = msg
+            msg = self.br.imgmsg_to_cv2(image, desired_encoding="bgr8")
+            msg = self.br.cv2_to_compressed_imgmsg(msg)
+            msg.header = image.header
         self.image_msgs.append(msg)
         self.sync_messages()
 
@@ -175,6 +188,9 @@ class SynchronizeRosbag:
                 topic_type = type_map.get(topic)
 
                 match topic_type:
+                    case "sensor_msgs/msg/Image":
+                        msg = deserialize_message(msg, Image)
+                        self.image_callback(msg)
                     case "sensor_msgs/msg/CompressedImage":
                         msg = deserialize_message(msg, CompressedImage)
                         self.image_callback(msg)
@@ -182,11 +198,11 @@ class SynchronizeRosbag:
                         msg = deserialize_message(msg, CameraInfo)
                         self.camera_info = msg
                     case "nav_msgs/msg/Odometry":
-                        if topic == ODOMETRY_TOPIC:
+                        if topic == self.odometry_topic:
                             msg = deserialize_message(msg, Odometry)
                             self.odom_callback(msg)
                     case "sensor_msgs/msg/Imu":
-                        if topic == IMU_TOPIC:
+                        if topic == self.imu_topic:
                             msg = deserialize_message(msg, Imu)
                             self.imu_callback(msg)
 
@@ -231,10 +247,12 @@ if __name__ == "__main__":
         help="Path to save the processed data.",
     )
     parser.add_argument("--visual", "-v", action="store_true", default=False, help="Save video of processed rosbag.")
+
+    parser.add_argument("--simulation", "-sim", action="store_true", default=False, help="Rosbag is from a Gazebo simulation.")
     args = parser.parse_args()
 
     cprint(
-        f"Bag Path: {args.bag_path}\n" f"Save Path: {args.save_path}\n" f"Visualization: {args.visual}",
+        f"Bag Path: {args.bag_path}\n" f"Save Path: {args.save_path}\n" f"Visualization: {args.visual}" f"Simulation: {args.simulation}",
         "blue",
     )
 
@@ -242,6 +260,7 @@ if __name__ == "__main__":
     processor = SynchronizeRosbag(
         bag_path=os.path.normpath(args.bag_path),
         visual=args.visual,
+        simulation=args.simulation
     )
     processor.read_rosbag()
     processor.save_data()
