@@ -14,11 +14,12 @@ import os
 import pickle
 
 import cv2
+from cv_bridge import CvBridge
 import numpy as np
 import rosbag2_py
 from nav_msgs.msg import Odometry
 from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
+from sensor_msgs.msg import CameraInfo, Image, Imu
 from termcolor import cprint
 from tqdm import tqdm
 from collections import deque
@@ -49,7 +50,13 @@ class SynchronizeRosbag:
 
         self.camera_info = None
 
+        self.br = CvBridge()
+
     def image_callback(self, msg):
+        image = msg
+        msg = self.br.imgmsg_to_cv2(image, desired_encoding="bgr8")
+        msg = self.br.cv2_to_compressed_imgmsg(msg)
+        msg.header = image.header
         self.image_msgs.append(msg)
         self.sync_messages()
 
@@ -176,7 +183,7 @@ class SynchronizeRosbag:
 
                 match topic_type:
                     case "sensor_msgs/msg/Image":
-                        msg = deserialize_message(msg, CompressedImage)
+                        msg = deserialize_message(msg, Image)
                         self.image_callback(msg)
                     case "sensor_msgs/msg/CameraInfo":
                         msg = deserialize_message(msg, CameraInfo)
