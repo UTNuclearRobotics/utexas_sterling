@@ -231,7 +231,7 @@ if __name__ == "__main__":
     robot_data = RobotDataAtTimestep(synced_pkl_path)
     odom_prev = np.eye(4, dtype=np.float32)  # Initial odometry is identity
 
-    for timestep in tqdm(range(0, 4000), desc="Processing costmaps"):
+    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing costmaps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         odom_cur = robot_data.getOdomAtTimestep(timestep)
         robot_x, robot_y = -odom_cur[1, 3], -odom_cur[0, 3]

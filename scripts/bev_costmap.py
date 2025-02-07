@@ -205,7 +205,7 @@ if __name__ == "__main__":
 
     bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, scaler_path, preferences)
 
-    for timestep in tqdm(range(0, 4000), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
@@ -216,3 +216,13 @@ if __name__ == "__main__":
         cv2.imshow("Cost Map", combined_frame)
         cv2.waitKey(10)
 
+# Building costmap from global map only
+"""
+    global_img = cv2.imread("full_map.png")
+    costmap = bev_costmap.BEV_to_costmap(global_img, 64)
+    visualize = bev_costmap.visualize_costmap(costmap, 64)
+    cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
+    cv2.imshow("Cost Map", visualize)
+    cv2.waitKey(0)
+    cv2.imwrite("costmap_from_global.png", visualize)
+"""

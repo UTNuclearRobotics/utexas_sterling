@@ -14,9 +14,11 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 from scipy.linalg import solve
 from collections import Counter
+import torch
+import torch.nn.functional as F
 
 class GlobalMap:
-    def __init__(self, tile_size=1024, channels=3, visualize=True):
+    def __init__(self, tile_size=1024, channels=3, visualize=False):
         """
         A global mapping system using a tiled structure for efficient large-scale stitching.
 
@@ -36,6 +38,7 @@ class GlobalMap:
         self.frame_previous = None
         self.odom_previous = None
         self.frame_history = deque(maxlen=3)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     def _get_or_create_tile(self, tile_x, tile_y):
         """Thread-safe function to retrieve or initialize a tile."""
@@ -56,24 +59,24 @@ class GlobalMap:
     def get_transformed_corners(self, frame_cur, H):
         """Transforms image corners using a homography matrix."""
         h, w = frame_cur.shape[:2]
-        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32).reshape(-1, 1, 2)
-        return cv2.perspectiveTransform(corners, H)
+        corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
+        return cv2.perspectiveTransform(corners.reshape(-1, 1, 2), H)
     
     def compute_depth_map(self, H, image):
         """Computes a depth map using the homography matrix."""
         h, w, _ = image.shape
-        x, y = np.meshgrid(np.arange(w), np.arange(h), indexing="xy")
-        depth_values = (H[2, 0] * x + H[2, 1] * y + H[2, 2]).astype(np.float32)
-        depth_values -= depth_values.min()  # In-place min subtraction
-        depth_values *= 255.0 / (depth_values.max() + 1e-5)  # Avoid division by zero
-        return depth_values.astype(np.uint8)
+        coords = np.indices((h, w), dtype=np.float32).reshape(2, -1)  # Faster than meshgrid
+        depth_values = H[2, 0] * coords[1] + H[2, 1] * coords[0] + H[2, 2]
+        depth_values = ((depth_values - depth_values.min()) * (255.0 / (depth_values.max() + 1e-5))).astype(np.uint8)
+        return depth_values.reshape(h, w)
 
     def compute_sharpness(self, image):
+        """Computes image sharpness using Sobel filters."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        sharpness = np.hypot(sobel_x, sobel_y)  # Faster than Laplacian
-        sharpness /= sharpness.max() + 1e-5  # Normalize
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        sharpness = cv2.magnitude(sobel_x, sobel_y)  # Faster than hypot()
+        sharpness = ((sharpness / (sharpness.max() + 1e-5)) * 255).astype(np.uint8)
         return sharpness
 
     def process_tile(self, tx, ty, frame_cur, depth_map, sharpness_map, H, tile_size):
@@ -94,7 +97,7 @@ class GlobalMap:
         # Warp images to the tile
         warped_img = cv2.warpPerspective(
             frame_cur, H_tile, (tile_size, tile_size),
-            flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT
+            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT
         )
         warped_depth = cv2.warpPerspective(
             depth_map, H_tile, (tile_size, tile_size),
@@ -105,11 +108,8 @@ class GlobalMap:
             flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
         )
 
-        mask = (warped_img > 0).any(axis=2).astype(np.uint8)
-        valid_indices = mask == 1
-        depth_mask = warped_depth >= tile_zb
-        sharpness_mask = warped_sharpness > 0
-        update_mask = valid_indices & depth_mask & sharpness_mask
+        mask = (warped_img > 0).any(axis=2)
+        update_mask = mask & (warped_depth >= tile_zb) & (warped_sharpness > 0)
 
         if tile_img.ndim == 3:
             update_mask_3d = np.repeat(update_mask[:, :, np.newaxis], 3, axis=2)
@@ -179,25 +179,99 @@ class GlobalMap:
         return big_map
 
     def compute_relative_odometry(self, odom_matrix_prev, odom_matrix_cur, image_width, image_height, scale):
-        relative_transform = solve(odom_matrix_prev,odom_matrix_cur)
-        tx = relative_transform[1, 3] * scale
-        ty = relative_transform[0, 3] * scale
+        # Compute relative transform
+        relative_transform = solve(odom_matrix_prev, odom_matrix_cur)
+
+        # Extract translation and rotation
+        tx = relative_transform[1, 3] * scale  # X-direction (forward/backward)
+        ty = relative_transform[0, 3] * scale  # Y-direction (left/right)
         cos_theta = relative_transform[0, 0]
         sin_theta = relative_transform[1, 0]
 
+        # Camera offset (only X matters, forward direction)
+        camera_offset_x = -0.2286  # Camera is in front (-X direction)
+
+        # Adjust translation based on camera offset
+        tx += -sin_theta * camera_offset_x * scale  # Corrected sign
+        ty += sin_theta * camera_offset_x * scale  # Corrected sign
+
+        # Transformations to bottom center
         to_bottom_center = np.array([
             [1, 0, -image_width / 2],
             [0, 1, -image_height],
-            [0, 0, 1]])
+            [0, 0, 1]
+        ])
+
+        # Updated relative homography including camera offset
         relative_homography = np.array([
             [cos_theta, sin_theta, -tx],
             [-sin_theta, cos_theta, -ty],
-            [0, 0, 1]])
+            [0, 0, 1]
+        ])
+
+        # Transform back to the original image coordinates
         to_original = np.array([
             [1, 0, image_width / 2],
             [0, 1, image_height],
-            [0, 0, 1]])
+            [0, 0, 1]
+        ])
+
         return to_original @ relative_homography @ to_bottom_center
+
+    def warp_image(self, frame, H):
+        """Warp an image using a homography matrix in PyTorch."""
+        b, c, h, w = frame.shape  # Ensure shape is [batch, channels, height, width]
+
+        # Create normalized grid
+        y, x = torch.meshgrid(torch.linspace(-1, 1, h, device=self.device),
+                            torch.linspace(-1, 1, w, device=self.device),
+                            indexing="ij")
+
+        ones = torch.ones_like(x)
+        grid = torch.stack([x, y, ones], dim=-1).reshape(-1, 3, 1)  # [h*w, 3, 1]
+
+        # Apply homography
+        H = H.to(self.device)
+        warped_coords = (H @ grid).squeeze(-1)  # [h*w, 3]
+        warped_coords = warped_coords[:, :2] / warped_coords[:, 2:3]  # Normalize
+
+        # Reshape to [h, w, 2] and flip for (x, y)
+        warped_coords = warped_coords.view(h, w, 2).flip(-1)
+
+        # Perform sampling
+        warped_image = F.grid_sample(frame, warped_coords.unsqueeze(0), align_corners=True, mode="bilinear")
+        
+        return warped_image
+
+    def ssd_loss(self, H, frame_cur):
+        """Computes SSD loss using multiple past frames."""
+        if isinstance(frame_cur, np.ndarray):
+            frame_cur = torch.tensor(frame_cur, dtype=torch.float32, device=self.device).permute(2, 0, 1).unsqueeze(0)
+
+        H = H.reshape(3, 3)
+        warped = self.warp_image(frame_cur, H)  # [1, C, H, W]
+
+        total_loss = 0
+        for frame_prev in self.frame_history:
+            frame_prev_tensor = torch.tensor(frame_prev, dtype=torch.float32, device=self.device).permute(2, 0, 1).unsqueeze(0)
+            total_loss += torch.sum((warped - frame_prev_tensor) ** 2)
+
+        return total_loss / len(self.frame_history)  # Normalize loss
+
+    def refine_homography(self, H_init, frame_cur):
+        """Optimizes the homography matrix using past frames."""
+        H_opt = torch.tensor(H_init, dtype=torch.float32, device=self.device, requires_grad=True)
+        optimizer = torch.optim.LBFGS([H_opt], lr=0.1)
+
+        def closure():
+            optimizer.zero_grad()
+            loss = self.ssd_loss(H_opt, frame_cur)
+            loss.backward()
+            return loss
+
+        optimizer.step(closure)
+        return H_opt.detach().cpu().numpy()
+
 
     def process_frame(self, frame_cur, timestep, odom_data=None, scale=100):
         """
@@ -232,17 +306,15 @@ class GlobalMap:
             if translation_distance < translation_threshold and abs(rotation_angle) < rotation_threshold:
                 print(f"Skipping timestep {timestep}: No significant movement (translation={translation_distance:.3f}, rotation={rotation_angle:.3f})")
                 return
-            
-            # Compute relative homography only if movement is significant
             H_relative = self.compute_relative_odometry(
                 self.odom_previous, odom_data, frame_cur.shape[1], frame_cur.shape[0], scale
             )
         else:
             print(f"Missing odometry data at timestep {timestep}")
             return
-
-        # Update global homography
-        self.H_old = self.H_old @ H_relative
+        
+        H_refined = self.refine_homography(H_relative, frame_cur)
+        self.H_old = self.H_old @ H_refined
         self.H_old /= self.H_old[2,2]
 
         # Warp into tile map
@@ -253,11 +325,8 @@ class GlobalMap:
         self.frame_previous = frame_cur
         self.frame_history.append(frame_cur)
 
-        # Ensure tiles finish processing before visualization
-        cv2.waitKey(1)
-
         # Display full map (Only every 100 frames)
-        if self.visualize and timestep % 100 == 0:
+        if self.visualize:
             big_map = self.get_full_map()
             if big_map is not None and big_map.size > 0:
                 cv2.namedWindow("Stitched Map", cv2.WINDOW_NORMAL)
@@ -483,7 +552,7 @@ if __name__ == "__main__":
                                                   robot_data.getOdomAtTimestep(scale_start),
                                                   robot_data.getOdomAtTimestep(scale_start+1))
     # Initialize the global map
-    global_map = GlobalMap(tile_size = 1024, visualize=False)
+    global_map = GlobalMap(visualize=False)
     start, end = 0, 4000
 
     # Check if an image path is provided
