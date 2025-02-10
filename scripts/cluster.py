@@ -11,12 +11,13 @@ from sklearn.manifold import TSNE
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
 from train_representation import SterlingRepresentation
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, PowerTransformer, normalize, RobustScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import numpy as np
 import joblib
 import cv2
+import hdbscan
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -96,7 +97,7 @@ class Cluster:
             data_pkl = pickle.load(file)
 
         # Load model weights
-        self.model = SterlingRepresentation(device).to(device)
+        self.model = SterlingRepresentation("cpu").to("cpu")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
         self.model.load_state_dict(torch.load(model_path, weights_only=True))
@@ -105,17 +106,18 @@ class Cluster:
         dataset = TerrainDataset(patches=data_pkl)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
+        # TODO: actually batch this so we don't run out of memory
         batch = next(iter(dataloader))
         patch1, _ = batch
 
-        self.patches = patch1.to(device)
+        self.patches = patch1.to("cpu")
 
     def generate_clusters(
         self,
         k,
         iterations,
-        save_model_path="scripts/clusters/kmeans_model.pkl",
-        save_scaler_path="scripts/clusters/scaler.pkl",
+        save_model_path="scripts/clusters/sim_kmeans_model.pkl",
+        save_scaler_path="scripts/clusters/sim_scaler.pkl",
     ):
         """
         Generate clusters using K-means algorithm.
@@ -125,12 +127,12 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
         # Apply K-means clustering with sklearn
-        kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
+        kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=25, random_state=42)
         kmeans.fit(representation_vectors_np)
         min_indices = kmeans.labels_
 
@@ -181,10 +183,13 @@ class Cluster:
         # Map back to image indices
         all_cluster_image_indices = []
         for cluster in cluster_rep_vectors:
-            cluster_image_indices = [
-                torch.nonzero(torch.all(representation_vectors == row, dim=1), as_tuple=True)[0].item()
-                for row in cluster
-            ]
+            cluster_image_indices = []
+            for row in cluster:
+                indices = torch.nonzero(torch.all(representation_vectors == row, dim=1), as_tuple=True)[0]
+                if indices.numel() > 0:  # Ensure there is at least one match
+                    cluster_image_indices.append(indices[0].item())  # Use the first match
+                else:
+                    print("Warning: No matching representation vector found for a cluster representative.")
             all_cluster_image_indices.append(cluster_image_indices)
 
         # Display clusters
@@ -205,7 +210,7 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         representation_vectors_np = scaler.fit_transform(representation_vectors_np)
 
@@ -219,7 +224,7 @@ class Cluster:
 
         for k in k_values:
             # Initialize and fit KMeans with k-means++
-            kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
+            kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=25, random_state=42)
             cluster_labels = kmeans.fit_predict(representation_vectors_np)
 
             # WCSS Calculation
@@ -261,7 +266,7 @@ class Cluster:
         print(f"Best k according to silhouette score: {best_k}")
 
         # Plot clusters only for the best k
-        self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), best_k)
+        #self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), best_k)
 
         return all_k_cluster_indices[best_k], best_k
 
@@ -295,7 +300,7 @@ class Cluster:
         plt.grid(True)
         plt.legend()
         # Save the plot to the specified directory
-        plt.savefig(os.path.join(save_dir, "wcss_vs_k.png"))
+        plt.savefig(os.path.join(save_dir, "sim_wcss_vs_k.png"))
         plt.close()  # Close the plot to avoid memory overload
         plt.show()
 
@@ -306,7 +311,7 @@ class Cluster:
         plt.title("Silhouette Score vs. k-clusters")
         plt.grid(True)
         # Save the plot to the specified directory
-        plt.savefig(os.path.join(save_dir, "silhouette_score_vs_k.png"))
+        plt.savefig(os.path.join(save_dir, "sim_silhouette_score_vs_k.png"))
         plt.close()  # Close the plot to avoid memory overload
         plt.show()
 
@@ -316,9 +321,14 @@ class Cluster:
         using PCA.
         """
         # Reduce the dimensionality of the representation vectors for visualization
-        pca = PCA(n_components=2, random_state=42)  # Use PCA for dimensionality reduction
         representation_vectors_np = representation_vectors.detach().cpu().numpy()  # Convert to numpy for PCA
-        reduced_vectors = pca.fit_transform(representation_vectors_np)  # Convert to numpy for PCA
+
+        pca_high = PCA(n_components=20, random_state=42)  # Use PCA for dimensionality reduction
+        intermediate_vectors = pca_high.fit_transform(representation_vectors_np)  # Convert to numpy for PCA
+
+        pca_final = PCA(n_components=2, whiten=True, random_state=42)
+        reduced_vectors = pca_final.fit_transform(intermediate_vectors)
+
         # Set up the plot
         plt.figure(figsize=(8, 6))
 
@@ -329,9 +339,11 @@ class Cluster:
 
         # Plot centroids
         centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
-        reduced_centroids = pca.transform(centroids.detach().cpu().numpy())  # Reduce dimensionality of centroids
+        centroids_np = centroids.detach().cpu().numpy()
+        centroids_20d = pca_high.transform(centroids_np)  # Apply first PCA to 20D
+        reduced_centroids = pca_final.transform(centroids_20d)  # Final PCA to 2D
+        
         plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c="black", marker="x", label="Centroids")
-
         plt.title(f"K-means Clusters with k={k}")
         plt.xlabel("PCA Component 1")
         plt.ylabel("PCA Component 2")
@@ -341,7 +353,7 @@ class Cluster:
         # Save the plot
         save_dir = os.path.join(script_dir, "clusters")
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
+        plt.savefig(os.path.join(save_dir, f"sim_clusters_k{k}.png"))
         plt.show()
 
 
@@ -368,10 +380,11 @@ if __name__ == "__main__":
     pkl_path = os.path.join(bag_path, pkl[0])
 
     # Validate the pickle file exists
-    pt = [file for file in os.listdir(bag_path) if file.endswith(".pt")]
+    model_path = os.path.join(bag_path, "models")
+    pt = [file for file in os.listdir(model_path) if file.endswith(".pt")]
     if len(pt) != 1:
-        raise FileNotFoundError(f"Terrain representation PyTorch model file not found in: {bag_path}")
-    pt_path = os.path.join(bag_path, pt[0])
+        raise FileNotFoundError(f"Terrain representation PyTorch model file not found in: {model_path}")
+    pt_path = os.path.join(model_path, pt[0])
 
     # Generate clusters
     cluster = Cluster(
@@ -392,13 +405,13 @@ if __name__ == "__main__":
         for i, cluster in enumerate(rendered_clusters):
             grid_image = PatchRenderer.image_grid(cluster, 10)
             # Define the save path for the grid
-            save_path = os.path.join(save_dir, f"cluster_{i}.png")
+            save_path = os.path.join(save_dir, f"sim_cluster_{i}.png")
             # Save the grid image to the specified path
             cv2.imwrite(save_path, grid_image)
 
     elif isinstance(k_values, int):
         all_cluster_image_indices = cluster.generate_clusters(
-            k_values, iterations, save_model_path="scripts/clusters/kmeans_model.pkl"
+            k_values, iterations
         )
 
         # Render clusters
@@ -406,7 +419,7 @@ if __name__ == "__main__":
 
         for i, cluster in enumerate(rendered_clusters):
             grid_image = PatchRenderer.image_grid(cluster, 10)
-            save_path = os.path.join(save_dir, f"cluster_{i}.png")
+            save_path = os.path.join(save_dir, f"sim_cluster_{i}.png")
             # Save the grid image to the specified path
             cv2.imwrite(save_path, grid_image)
 

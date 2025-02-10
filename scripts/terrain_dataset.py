@@ -30,7 +30,7 @@ class TerrainDataset(Dataset):
             raise ValueError(f"Sample {idx} has fewer than 2 patches.")
 
         patch1_idx = 0
-        patch2_idx = torch.randint(1, num_patches, (1,)).item()
+        patch2_idx = 1 #torch.randint(1, num_patches, (1,)).item()
         patch1 = sample[patch1_idx]  # torch.Size([3, 128, 128])
         patch2 = sample[patch2_idx]  # torch.Size([3, 128, 128])
 

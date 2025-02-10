@@ -194,7 +194,7 @@ if __name__ == "__main__":
     else:
         history_size = 10
         vicreg_data = ComputeVicRegData(
-            H, K, plane_normal, plane_distance, robot_data, history_size, patch_size=(128, 128)
+            H, K, plane_normal, plane_distance, robot_data, history_size, patch_size=(256, 256)
         )
         with open(vicreg_data_path, "wb") as f:
             pickle.dump(vicreg_data, f)

@@ -15,7 +15,7 @@ class SterlingRepresentation(nn.Module):
     def __init__(self, device):
         super(SterlingRepresentation, self).__init__()
         self.device = device
-        self.latent_size = 256
+        self.latent_size = 128
         self.visual_encoder = VisualEncoderModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.visual_encoder.rep_size, self.latent_size),

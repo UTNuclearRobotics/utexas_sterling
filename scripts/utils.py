@@ -133,13 +133,13 @@ def load_bag_pt_model(bag_path, suffix, model=None):
     pt_model = [file for file in os.listdir(model_path) if file.endswith(f"{suffix}.pt")]
     if len(pt_model) != 1:
         cprint("Existing model weights not found", "yellow")
-        return None
-
-    pt_model_path = os.path.join(model_path, pt_model[0])
-    model.load_state_dict(torch.load(pt_model_path, weights_only=True))
-    cprint("Existing model weights loaded successfully", "green")
+        
+    else:
+        pt_model_path = os.path.join(model_path, pt_model[0])
+        model.load_state_dict(torch.load(pt_model_path, weights_only=True))
+        cprint("Existing model weights loaded successfully", "green")
     
-    return os.path.join(model_path, f"${bag_path.rstrip('/').split('/')[-1]}_{suffix}.pt")
+    return os.path.join(model_path, f"{bag_path.rstrip('/').split('/')[-1]}_{suffix}.pt")
 
 
 def fixedWarpPerspective(H, image):

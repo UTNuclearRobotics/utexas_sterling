@@ -188,19 +188,19 @@ if __name__ == "__main__":
     H, dsize,_ = chessboard_homography.plot_BEV_full(image)
     robot_data = RobotDataAtTimestep(synced_pkl_path)
 
-    viz_encoder_path = "models/vis_rep.pt"
-    kmeans_path = "scripts/clusters/kmeans_model.pkl"
-    scaler_path = "scripts/clusters/scaler.pkl"
+    viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
+    kmeans_path = "scripts/clusters/sim_kmeans_model.pkl"
+    scaler_path = "scripts/clusters/sim_scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
-        0: 50,      #Cluster 0: Aggregate Concrete
-        1: 225,      #Cluster 1: Metal thing
+        0: 225,      #Cluster 0: Grass, Leaves
+        1: 225,      #Cluster 1: Smooth concrete
         2: 0,      #Cluster 2: Smooth concrete
-        3: 225,      #Cluster 3: Grass
-        4: 100,      #Cluster 4: Aggregate concrete, leaves
-        5: 225,      # Cluster 5: Grass
-        6: 0      # Cluster 6: Smooth concrete
+        3: 0,      #Cluster 3: Aggregate concrete
+        4: 225,      #Cluster 4: Aggregate concrete
+        #5: 225,      # Cluster 5: Dark Grass, grass
+        #6: 0         # Cluster 6: Smooth concrete
     }
 
     bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, scaler_path, preferences)
