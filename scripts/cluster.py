@@ -117,6 +117,7 @@ class Cluster:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
         self.model.load_state_dict(torch.load(model_path, weights_only=True))
+        self.model.eval()  # Set model to evaluation mode
 
         # Create dataset and dataloader
         dataset = TerrainDataset(patches=data_pkl)
@@ -142,7 +143,8 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         # K Means
-        representation_vectors = self.model.visual_encoder(self.patches)
+        with torch.no_grad():
+            representation_vectors = self.model.visual_encoder(self.patches)
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #scaler = StandardScaler()
         #representation_vectors_np = scaler.fit_transform(combined_features)
@@ -226,7 +228,8 @@ class Cluster:
             k_values (range): Range of k-values to iterate over.
             iterations (int): Number of iterations for K-means.
         """
-        representation_vectors = self.model.visual_encoder(self.patches)
+        with torch.no_grad():
+            representation_vectors = self.model.visual_encoder(self.patches)
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #scaler =StandardScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
@@ -480,7 +483,7 @@ if __name__ == "__main__":
     #cluster.check_gaussianity()
 
     #k_values = range(2, 12)
-    k_values = 4
+    k_values = 5
     iterations = 1000
 
     if isinstance(k_values, range):

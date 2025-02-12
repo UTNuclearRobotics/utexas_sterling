@@ -195,7 +195,7 @@ if __name__ == "__main__":
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_recording_sim_loop/panther_recording_sim_loop_synced.pkl")
+        os.path.join(script_dir, "../bags/panther_recording_20250211_031823/panther_recording_20250211_031823_synced.pkl")
     )
 
     output_dimensions = (
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 325
+    index = 1000
     history_size = 10
     vicreg_data = ComputeVicRegData(
         H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(256,256), start=index

@@ -64,7 +64,7 @@ class BEVCostmap:
         representations_np = representations.detach().cpu().numpy()
         #scaled_representations = self.scaler.transform(representations_np)
         scaled_representations = normalize(representations_np, norm='l2', axis=1)
-        cluster_labels = self.kmeans.predict(representations_np)
+        cluster_labels = self.kmeans.predict(scaled_representations)
 
         return cluster_labels
 
@@ -76,7 +76,7 @@ class BEVCostmap:
         return costs
 
     def BEV_to_costmap(self, bev_img, cell_size):
-        """Convert BEV image to costmap ensuring correct indexing."""
+        """Convert BEV image to costmap using batch processing with contextual patches."""
         height, width = bev_img.shape[:2]
         num_cells_y, num_cells_x = height // cell_size, width // cell_size
         costmap = np.zeros((num_cells_y, num_cells_x), dtype=np.uint8)
@@ -86,10 +86,11 @@ class BEVCostmap:
 
         for i in range(num_cells_y):
             for j in range(num_cells_x):
-                cell = self.extract_patch_with_context(bev_img, i, j, cell_size, context_size=10)
+                # Extract patch with surrounding context
+                cell = self.extract_patch_with_context(bev_img, i, j, cell_size, 10)
 
-                # Check for black cells more robustly
-                if np.mean(cell) < 10:  # Adjust threshold if necessary
+                # Check for black cells
+                if np.all(cell == 0):  
                     costmap[i, j] = 255  # Assign max cost to black cells
                 else:
                     if len(cell.shape) == 2:  # Grayscale
@@ -206,12 +207,12 @@ if __name__ == "__main__":
     robot_data = RobotDataAtTimestep(synced_pkl_path)
 
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
-    kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
+    kmeans_path = "scripts/clusters/kmeans_model.pkl"
     #scaler_path = "scripts/clusters/scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
-        0: 100,      #Cluster 0: Aggregate concrete
+        0: 150,      #Cluster 0: Aggregate concrete
         1: 225,      #Cluster 1: Dark bricks, grass
         2: 50,      #Cluster 2: Aggregate concrete
         3: 0,      #Cluster 3: Smooth concrete
@@ -235,14 +236,14 @@ if __name__ == "__main__":
         #8: 225,         # Cluster 8: Dark grass, leaves, grass
     }
 
-    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences=sim_preferences)
+    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences=preferences)
 
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 80)
-        visualize = bev_costmap.visualize_costmap(costmap, 80)
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 40)
+        visualize = bev_costmap.visualize_costmap(costmap, 40)
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
         cv2.imshow("Cost Map", combined_frame)
