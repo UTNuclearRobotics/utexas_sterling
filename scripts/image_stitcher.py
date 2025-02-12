@@ -192,8 +192,8 @@ class GlobalMap:
         camera_offset_x = -0.2286  # Camera is in front (-X direction)
 
         # Adjust translation based on camera offset
-        tx += -sin_theta * camera_offset_x * scale  # Corrected sign
-        ty += sin_theta * camera_offset_x * scale  # Corrected sign
+        #tx += -sin_theta * camera_offset_x * scale  # Corrected sign
+        #ty += sin_theta * camera_offset_x * scale  # Corrected sign
 
         # Transformations to bottom center
         to_bottom_center = np.array([
@@ -542,7 +542,7 @@ if __name__ == "__main__":
     H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
+        os.path.join(script_dir, "../bags/panther_recording_20250211_031823/panther_recording_20250211_031823_synced.pkl")
     )
 
     scale_start = 490
@@ -552,7 +552,7 @@ if __name__ == "__main__":
                                                   robot_data.getOdomAtTimestep(scale_start),
                                                   robot_data.getOdomAtTimestep(scale_start+1))
     # Initialize the global map
-    global_map = GlobalMap(visualize=False)
+    global_map = GlobalMap(visualize=True)
     start, end = 0, 4000
 
     # Check if an image path is provided
@@ -565,7 +565,7 @@ if __name__ == "__main__":
             viewer.show_map()
         else:
             # Process subsequent BEV images
-            for timestep in tqdm(range(start+1, end), desc="Processing patches at timesteps"):
+            for timestep in tqdm(range(start+1, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
                 try:
                     cur_img = robot_data.getImageAtTimestep(timestep)
                     cur_rt = robot_data.getOdomAtTimestep(timestep)
@@ -574,7 +574,7 @@ if __name__ == "__main__":
                         continue
 
                     bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-                    global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
+                    global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=500)
 
                 except Exception as e:
                     print(f"Error at timestep {timestep}: {e}")

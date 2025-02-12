@@ -17,7 +17,10 @@ from sklearn.metrics import silhouette_score
 import numpy as np
 import joblib
 import cv2
-import hdbscan
+from scipy.stats import skew, kurtosis, shapiro, kstest, anderson
+import seaborn as sns
+import math
+from skimage.feature import local_binary_pattern
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -60,27 +63,40 @@ class PatchRenderer:
         return rendered_clusters
 
     @staticmethod
-    def image_grid(images, grid_size=5):
+    def image_grid(cluster_images):
         """
-        Create a 5x5 image grid using OpenCV.
+        Creates a dynamically sized image grid containing all images in a cluster.
+
         Args:
-            images (list): A list of images (NumPy arrays) to be arranged in a grid.
+            cluster_images (list): A list of images (NumPy arrays) belonging to the cluster.
+
         Returns:
             A NumPy array representing the image grid.
         """
-        # Grid and image parameters
-        image_size = (128, 128)  # Desired size for each patch
+        if not cluster_images:
+            raise ValueError("No images provided for the cluster grid.")
 
-        # Resize each image to the target size
-        resized_images = [cv2.resize(img, image_size) for img in images]
+        # Image parameters
+        image_size = (64, 64)  # Resize all images to a uniform size
+        resized_images = [cv2.resize(img, image_size) for img in cluster_images]
 
-        # Build the grid row by row
+        # Compute optimal grid dimensions (square-like shape)
+        num_images = len(resized_images)
+        grid_cols = math.ceil(math.sqrt(num_images))  # Approximate square grid
+        grid_rows = math.ceil(num_images / grid_cols)  # Compute needed rows
+
+        # Create the grid row by row
         rows = []
-        for i in range(grid_size):
-            row = np.hstack(resized_images[i * grid_size : (i + 1) * grid_size])
-            rows.append(row)
+        for i in range(grid_rows):
+            row_images = resized_images[i * grid_cols : (i + 1) * grid_cols]
+            
+            # Fill missing slots with black images if needed
+            while len(row_images) < grid_cols:
+                row_images.append(np.zeros((image_size[1], image_size[0], 3), dtype=np.uint8))
+            
+            rows.append(np.hstack(row_images))
 
-        # Stack rows vertically to form the full grid
+        # Stack rows vertically to form the final grid
         grid = np.vstack(rows)
 
         return grid
@@ -116,8 +132,8 @@ class Cluster:
         self,
         k,
         iterations,
-        save_model_path="scripts/clusters/sim_kmeans_model.pkl",
-        save_scaler_path="scripts/clusters/sim_scaler.pkl",
+        save_model_path,
+        save_scaler_path,
     ):
         """
         Generate clusters using K-means algorithm.
@@ -127,9 +143,10 @@ class Cluster:
         """
         # K Means
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        #scaler = StandardScaler()
+        #representation_vectors_np = scaler.fit_transform(combined_features)
+        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
 
         # Apply K-means clustering with sklearn
         kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=25, random_state=42)
@@ -138,7 +155,7 @@ class Cluster:
 
         # Save the K-means model and scaler
         joblib.dump(kmeans, save_model_path)
-        joblib.dump(scaler, save_scaler_path)
+        #joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
         print("Number of items in each cluster:")
@@ -167,7 +184,7 @@ class Cluster:
             selected[first_idx] = True
 
             # Iteratively select the farthest vector
-            while len(cluster_indices) < min(100, cluster_size):
+            while len(cluster_indices) < cluster_size:
                 # Compute distances from already selected indices
                 distances = clusterSim[~selected][:, selected]
                 max_dist_idx = distances.max(dim=0).indices[0].item()  # Find farthest unselected index
@@ -210,9 +227,10 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         representation_vectors = self.model.visual_encoder(self.patches)
-        scaler = MinMaxScaler()
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        #scaler =StandardScaler()
+        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
 
         silhouette_scores = []
         wcss_values = []
@@ -300,7 +318,7 @@ class Cluster:
         plt.grid(True)
         plt.legend()
         # Save the plot to the specified directory
-        plt.savefig(os.path.join(save_dir, "sim_wcss_vs_k.png"))
+        plt.savefig(os.path.join(save_dir, "wcss_vs_k.png"))
         plt.close()  # Close the plot to avoid memory overload
         plt.show()
 
@@ -311,7 +329,7 @@ class Cluster:
         plt.title("Silhouette Score vs. k-clusters")
         plt.grid(True)
         # Save the plot to the specified directory
-        plt.savefig(os.path.join(save_dir, "sim_silhouette_score_vs_k.png"))
+        plt.savefig(os.path.join(save_dir, "silhouette_score_vs_k.png"))
         plt.close()  # Close the plot to avoid memory overload
         plt.show()
 
@@ -320,29 +338,31 @@ class Cluster:
         Visualizes the k-means clusters after performing dimensionality reduction
         using PCA.
         """
-        # Reduce the dimensionality of the representation vectors for visualization
-        representation_vectors_np = representation_vectors.detach().cpu().numpy()  # Convert to numpy for PCA
+        # Step 1: Normalize the representation vectors
+        representation_vectors_np = representation_vectors.detach().cpu().numpy()
+        #scaler = StandardScaler()
+        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
 
-        pca_high = PCA(n_components=20, random_state=42)  # Use PCA for dimensionality reduction
-        intermediate_vectors = pca_high.fit_transform(representation_vectors_np)  # Convert to numpy for PCA
+        # Step 2: Apply PCA for dimensionality reduction (First to 20D, then to 2D)
+        pca_high = PCA(n_components=20, random_state=42)
+        intermediate_vectors = pca_high.fit_transform(representation_vectors_np)
 
         pca_final = PCA(n_components=2, whiten=True, random_state=42)
         reduced_vectors = pca_final.fit_transform(intermediate_vectors)
 
-        # Set up the plot
-        plt.figure(figsize=(8, 6))
+        # Step 3: Compute centroids in PCA-reduced space (Fixing the issue)
+        reduced_centroids = np.array([
+            reduced_vectors[min_indices == i].mean(axis=0) for i in range(k)
+        ])
 
-        # Plot each cluster with a different color
+        # Step 4: Plot clusters
+        plt.figure(figsize=(8, 6))
         for cluster_idx in range(k):
             cluster_points = reduced_vectors[min_indices == cluster_idx]
             plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=f"Cluster {cluster_idx}", alpha=0.6)
 
-        # Plot centroids
-        centroids = torch.stack([representation_vectors[min_indices == i].mean(dim=0) for i in range(k)])
-        centroids_np = centroids.detach().cpu().numpy()
-        centroids_20d = pca_high.transform(centroids_np)  # Apply first PCA to 20D
-        reduced_centroids = pca_final.transform(centroids_20d)  # Final PCA to 2D
-        
+        # Step 5: Plot centroids correctly
         plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c="black", marker="x", label="Centroids")
         plt.title(f"K-means Clusters with k={k}")
         plt.xlabel("PCA Component 1")
@@ -351,15 +371,80 @@ class Cluster:
         plt.grid(True)
 
         # Save the plot
-        save_dir = os.path.join(script_dir, "clusters")
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f"sim_clusters_k{k}.png"))
+        plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
         plt.show()
+
+    def check_gaussianity(self):
+        """
+        Checks if the given PyTorch tensor follows a Gaussian distribution 
+        using skewness, kurtosis, and statistical tests.
+        
+        Args:
+            tensor (torch.Tensor): Input tensor of shape (batch_size, 128)
+        
+        Returns:
+            dict: Results containing skewness, kurtosis, p-values, and recommended scaler
+        """
+        representation_vectors = self.model.visual_encoder(self.patches)
+        # Convert tensor to NumPy (detach if needed)
+        tensor_np = representation_vectors.detach().cpu().numpy()
+        print(tensor_np.shape)
+
+        # Select a random feature to analyze
+        feature_idx = np.random.randint(0, tensor_np.shape[1])
+        
+        # Compute skewness & kurtosis for each feature (axis=0 → across batch)
+        skewness = skew(tensor_np, axis=0, nan_policy='omit')
+        kurt = kurtosis(tensor_np, axis=0, nan_policy='omit')
+
+        # Compute mean skewness & kurtosis across all features
+        mean_skewness = np.mean(skewness)
+        mean_kurtosis = np.mean(kurt)
+
+        # Shapiro-Wilk Test (Small Batches, <5000 samples)
+        shapiro_p = shapiro(tensor_np[:, feature_idx])[1]
+
+        # Kolmogorov-Smirnov Test (For larger datasets)
+        ks_p = kstest(tensor_np[:, feature_idx], 'norm')[1]
+
+        # Anderson-Darling Test
+        ad_result = anderson(tensor_np[:, feature_idx], dist='norm')
+
+        # Determine best scaler based on results
+        if abs(mean_skewness) > 1:
+            best_scaler = "PowerTransformer (Yeo-Johnson)"
+        elif mean_kurtosis > 3:
+            best_scaler = "RobustScaler"
+        elif shapiro_p > 0.05 and ks_p > 0.05:
+            best_scaler = "StandardScaler"
+        else:
+            best_scaler = "RobustScaler or PowerTransformer"
+
+        # Plot feature distribution
+        sns.histplot(tensor_np[:, feature_idx], kde=True, bins=60)
+        plt.title(f"Feature {feature_idx} Distribution")
+        plt.show()
+
+        # Print results
+        results = {
+            "Mean Skewness": mean_skewness,
+            "Mean Kurtosis": mean_kurtosis,
+            "Shapiro-Wilk p-value": shapiro_p,
+            "Kolmogorov-Smirnov p-value": ks_p,
+            "Anderson-Darling Statistic": ad_result.statistic,
+            "Recommended Scaler": best_scaler
+        }
+
+        for key, value in results.items():
+            print(f"{key}: {value}")
+
+        return results
 
 
 if __name__ == "__main__":
     # Save directory
-    save_dir = os.path.join(script_dir, "clusters")
+    save_dir = os.path.join(script_dir, "clusters_sim")
     os.makedirs(save_dir, exist_ok=True)
 
     # Parse command line arguments
@@ -391,9 +476,11 @@ if __name__ == "__main__":
         data_pkl_path=pkl_path,
         model_path=pt_path,
     )
+    
+    #cluster.check_gaussianity()
 
     #k_values = range(2, 12)
-    k_values = 7
+    k_values = 4
     iterations = 1000
 
     if isinstance(k_values, range):
@@ -403,23 +490,23 @@ if __name__ == "__main__":
         rendered_clusters = PatchRenderer.render_clusters(k_best_cluster_image_indices, cluster.patches)
 
         for i, cluster in enumerate(rendered_clusters):
-            grid_image = PatchRenderer.image_grid(cluster, 10)
+            grid_image = PatchRenderer.image_grid(cluster)
             # Define the save path for the grid
-            save_path = os.path.join(save_dir, f"sim_cluster_{i}.png")
+            save_path = os.path.join(save_dir, f"cluster_{i}.png")
             # Save the grid image to the specified path
             cv2.imwrite(save_path, grid_image)
 
     elif isinstance(k_values, int):
         all_cluster_image_indices = cluster.generate_clusters(
-            k_values, iterations
+            k_values, iterations, save_model_path="scripts/clusters_sim/sim_kmeans_model.pkl", save_scaler_path="scripts/clusters_sim/sim_scaler.pkl"
         )
 
         # Render clusters
         rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)
 
         for i, cluster in enumerate(rendered_clusters):
-            grid_image = PatchRenderer.image_grid(cluster, 10)
-            save_path = os.path.join(save_dir, f"sim_cluster_{i}.png")
+            grid_image = PatchRenderer.image_grid(cluster)
+            save_path = os.path.join(save_dir, f"cluster_{i}.png")
             # Save the grid image to the specified path
             cv2.imwrite(save_path, grid_image)
 

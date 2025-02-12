@@ -183,7 +183,7 @@ class HomographyFromChessboardImage:
         theta = 0
         x1 = -530
         x2 = 540
-        y1 = -1300
+        y1 = -1000
         y2 = 325
 
         # Generate optimized 3D rectangle
@@ -198,19 +198,24 @@ class HomographyFromChessboardImage:
         y_dif = abs(y2) + abs(y1)
         aspect_ratio = y_dif/x_dif
         dsize = (1280,720)
-        #dsize = (int(aspect_ratio*720),720)
+        #dsize = (int(720),int(aspect_ratio*720))
         #dsize = (x_dif, y_dif)
 
         # Adjust rectangle for warp perspective
-        src_points = model_rect_2d.T[:, :2]
+        src_points = np.array([
+            model_rect_2d.T[0, :2],  # Top-left
+            model_rect_2d.T[1, :2],  # Top-right
+            model_rect_2d.T[2, :2],  # Bottom-right
+            model_rect_2d.T[3, :2],  # Bottom-left
+        ], dtype=np.float32)
 
-        # Define destination points aligned with the bottom
         
+        # Adjusted destination points for better rectification
         dst_points = np.array([
-            [dsize[0] // 2 - 180, 0],   # Top-left
-            [dsize[0] // 2 + 180, 0],  # Top-right
-            [2 * dsize[0] // 3, dsize[1] - 1],  # Bottom-right
-            [dsize[0] // 3, dsize[1] - 1]  # Bottom-left 
+            [dsize[0] // 4, 0],   # Top-left
+            [3 * dsize[0] // 4, 0],  # Top-right
+            [3 * dsize[0] // 4, dsize[1]],  # Bottom-right
+            [dsize[0] // 4, dsize[1]]  # Bottom-left 
         ], dtype=np.float32)
         
         """

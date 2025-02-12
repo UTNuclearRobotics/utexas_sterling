@@ -9,6 +9,7 @@ from utils import load_bag_pkl, load_bag_pt_model
 from vicreg import VICRegLoss
 from visual_encoder_model import VisualEncoderModel
 from torchvision import transforms
+import torchvision.transforms.v2 as v2
 
 
 class SterlingRepresentation(nn.Module):
@@ -65,7 +66,6 @@ class SterlingRepresentation(nn.Module):
 
         # Encode the patch
         v_encoded = self.visual_encoder(patch)
-        v_encoded = F.normalize(v_encoded, dim=-1)  # Normalize the representation vector
         return v_encoded
 
     def training_step(self, batch, batch_idx):
@@ -100,13 +100,20 @@ if __name__ == "__main__":
 
     # Create dataset and dataloader
     data_pkl = load_bag_pkl(args.bag, "vicreg")
+
     # Define the augmentation pipeline
-    augment_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),  # Flips tensor horizontally
-        transforms.RandomVerticalFlip(),    # Flips tensor vertically
-        transforms.RandomRotation(15),      # Rotates the tensor by ±15 degrees
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalizes RGB channels
+    augment_transform = v2.Compose([
+        v2.RandomHorizontalFlip(p=0.5),  
+        v2.RandomVerticalFlip(p=0.1),  
+        v2.RandomRotation(degrees=5),  # Small rotation (too much will distort patterns)
+        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),  
+        v2.RandomGrayscale(p=0.2),  
+        v2.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 1.0)),  # Light blur to prevent over-reliance on high-frequency textures
+        v2.ToTensor(),
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
+
+
     dataset = TerrainDataset(patches=data_pkl, transform=augment_transform)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
@@ -115,7 +122,10 @@ if __name__ == "__main__":
     save_path = load_bag_pt_model(args.bag, "terrain_rep", model)
 
     # Define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+
+    # Learning Rate Scheduler (Reduces lr when loss stagnates)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # Training loop
     for epoch in range(args.epochs):
@@ -129,6 +139,7 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(dataloader)
+        scheduler.step(avg_loss)
         print(f"Epoch [{epoch+1}/{args.epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model.state_dict(), save_path)

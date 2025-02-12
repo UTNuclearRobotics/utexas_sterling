@@ -58,7 +58,15 @@ class CVBasedCalibrator:
         self.square_size = square_size
         grid_size=(self.cols, self.rows)
         self.imgpoints = find_image_points(grid_size,image_path_pattern)
-        self.img_pts_tensor = torch.tensor(self.imgpoints).squeeze(2).transpose(2,1)
+        # Ensure self.imgpoints is a NumPy array of shape [N, 2]
+        self.imgpoints = np.array(self.imgpoints, dtype=np.float32)  # Convert list to NumPy array
+
+        # Ensure the shape is [N, 2] before converting to a tensor
+        if len(self.imgpoints.shape) == 3:  # [N, 1, 2] -> [N, 2]
+            self.imgpoints = self.imgpoints.squeeze(1)
+
+        # Convert to PyTorch tensor correctly
+        self.img_pts_tensor = torch.tensor(self.imgpoints)  # Remove squeeze(2)
         
         """
         Perform camera calibration using detected points.

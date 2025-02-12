@@ -210,21 +210,24 @@ if __name__ == "__main__":
     synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
 
     # Initialize BEV Costmap
-    viz_encoder_path = "models/vis_rep.pt"
-    kmeans_path = "scripts/clusters/kmeans_model.pkl"
-    scaler_path = "scripts/clusters/scaler.pkl"
+    viz_encoder_path = "bags/panther_recording_20250211_031823/models/panther_recording_20250211_031823_terrain_rep.pt"
+    kmeans_path = "scripts/clusters/sim_kmeans_model.pkl"
+    scaler_path = "scripts/clusters/sim_scaler.pkl"
 
     preferences = {
-        0: 50,   # Aggregate Concrete
-        1: 225,  # Metal
-        2: 0,    # Smooth Concrete
-        3: 225,  # Grass
-        4: 100,  # Aggregate with leaves
-        5: 225,  # Grass
-        6: 0     # Smooth Concrete
+        # Black: 0, White: 255
+        0: 0,      #Cluster 0: Grass
+        1: 225,      #Cluster 1: Pavement, grass, shadow
+        2: 225,      #Cluster 2: Pavement
+        3: 0,      #Cluster 3: Grass in shadow
+        #4: 0,      #Cluster 4: Pavement
+        #5: 0,      # Cluster 5: Smooth concrete
+        #6: 225,         # Cluster 6: Grass
+        #7: 50,         # Cluster 7: Aggregate concrete
+        #8: 225,         # Cluster 8: Dark grass, leaves, grass
     }
 
-    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, scaler_path, preferences)
+    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences)
     global_costmap = GlobalCostmap()
 
     # Process each timestep
@@ -242,11 +245,11 @@ if __name__ == "__main__":
 
         global_costmap.process_odometry_and_update(visualize_cost, odom_cur)
 
-        #if timestep % 5 == 0:
-            #updated_costmap = global_costmap.get_combined_costmap()
-            #cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
-            #cv2.imshow("Global Cost Map", updated_costmap)
-            #cv2.waitKey(10)
+        if timestep % 5 == 0:
+            updated_costmap = global_costmap.get_combined_costmap()
+            cv2.namedWindow("Global Cost Map", cv2.WINDOW_NORMAL)
+            cv2.imshow("Global Cost Map", updated_costmap)
+            cv2.waitKey(10)
 
     final_map = global_costmap.get_combined_costmap()
     viewer = MapViewer(final_map)
