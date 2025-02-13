@@ -18,8 +18,9 @@ class SterlingRepresentation(nn.Module):
         self.device = device
         self.latent_size = 128
         self.visual_encoder = VisualEncoderModel(self.latent_size)
+        self.rep_size = self.latent_size
         self.projector = nn.Sequential(
-            nn.Linear(self.visual_encoder.rep_size, self.latent_size),
+            nn.Linear(self.rep_size, self.latent_size),
             nn.PReLU(),
             nn.Linear(self.latent_size, self.latent_size),
         )
@@ -66,8 +67,9 @@ class SterlingRepresentation(nn.Module):
 
         # Encode the patch
         v_encoded = self.visual_encoder(patch)
+        v_encoded = F.normalize(v_encoded, dim=-1)  # Normalize the representation vector
         return v_encoded
-
+    
     def training_step(self, batch, batch_idx):
         """
         Perform a single training step on the batch of data.
@@ -104,13 +106,12 @@ if __name__ == "__main__":
     # Define the augmentation pipeline
     augment_transform = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),  
-        v2.RandomVerticalFlip(p=0.1),  
-        v2.RandomRotation(degrees=5),  # Small rotation (too much will distort patterns)
-        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),  
-        v2.RandomGrayscale(p=0.2),  
-        v2.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 1.0)),  # Light blur to prevent over-reliance on high-frequency textures
+        #v2.RandomVerticalFlip(p=0.1),  
+        #v2.RandomRotation(degrees=5),  # Small rotation (too much will distort patterns)
+        v2.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.01),  
+        #v2.RandomGrayscale(p=0.1),  
+        #v2.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 0.5)),  # Light blur to prevent over-reliance on high-frequency textures
         v2.ToTensor(),
-        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
 
@@ -122,10 +123,14 @@ if __name__ == "__main__":
     save_path = load_bag_pt_model(args.bag, "terrain_rep", model)
 
     # Define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5, amsgrad=True)
 
-    # Learning Rate Scheduler (Reduces lr when loss stagnates)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, 
+        T_0=5,  
+        T_mult=2, 
+        eta_min=1e-6  # Ensures LR doesn't get too close to zero
+    )
 
     # Training loop
     for epoch in range(args.epochs):
@@ -139,7 +144,7 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(dataloader)
-        scheduler.step(avg_loss)
+        scheduler.step()
         print(f"Epoch [{epoch+1}/{args.epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model.state_dict(), save_path)

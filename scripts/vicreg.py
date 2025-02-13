@@ -19,18 +19,6 @@ class VICRegLoss(nn.Module):
         self.cov_coeff = cov_coeff
         self.gamma = gamma
 
-    def off_diagonal(self, x):
-        """
-        Return a flattened view of the off-diagonal elements of a square matrix.
-        Args:
-            x (torch.Tensor): A square matrix of shape (n, n).
-        Returns:
-            torch.Tensor: A 1D tensor containing the off-diagonal elements of the input matrix.
-        """
-        n, m = x.shape
-        assert n == m
-        return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
-
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> Dict[str, torch.Tensor]:
         # z1 = x
         # z2 = y
@@ -120,12 +108,18 @@ class VICRegLoss(nn.Module):
                 Shape of [1,].
         """
         x = x - x.mean(dim=0)
-        std = x.std(dim=0)
+        std = torch.sqrt(x.var(dim=0, unbiased=False) + 1e-4)
         var_loss = F.relu(gamma - std).mean()
         return var_loss
 
     @staticmethod
-    def covariance_loss(x: torch.Tensor) -> torch.Tensor:
+    def off_diagonal(x: torch.Tensor) -> torch.Tensor:
+        """Returns the off-diagonal elements of a square matrix."""
+        n, m = x.shape
+        assert n == m
+        return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
+
+    def covariance_loss(self, x: torch.Tensor) -> torch.Tensor:
         """Computes the covariance loss.
         Decorrelates the embeddings' dimensions, which pushes
         the model to capture more information per dimension.
@@ -142,5 +136,5 @@ class VICRegLoss(nn.Module):
         """
         x = x - x.mean(dim=0)
         cov = (x.T @ x) / (x.shape[0] - 1)
-        cov_loss = cov.fill_diagonal_(0.0).pow(2).sum() / x.shape[1]
+        cov_loss = self.off_diagonal(cov).pow(2).sum() / x.shape[1]
         return cov_loss

@@ -195,7 +195,7 @@ if __name__ == "__main__":
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/panther_recording_20250211_031823/panther_recording_20250211_031823_synced.pkl")
+        os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
     )
 
     output_dimensions = (
@@ -217,7 +217,7 @@ if __name__ == "__main__":
     index = 1000
     history_size = 10
     vicreg_data = ComputeVicRegData(
-        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(256,256), start=index
+        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
     )
 
     print(len(vicreg_data[0]))

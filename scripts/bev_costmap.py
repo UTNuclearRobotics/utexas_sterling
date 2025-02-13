@@ -13,7 +13,8 @@ from cluster import Cluster
 import joblib
 from sklearn.cluster import KMeans
 from train_representation import SterlingRepresentation
-from sklearn.preprocessing import normalize
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, PowerTransformer, normalize, RobustScaler
+
 
 # GCD of 1280 and 720: 1,2,4,5,8,10,16,20,40,80
 CELL_SIZE = 40
@@ -62,8 +63,8 @@ class BEVCostmap:
             representations = self.sterling.encode_single_patch(cells)
 
         representations_np = representations.detach().cpu().numpy()
-        #scaled_representations = self.scaler.transform(representations_np)
         scaled_representations = normalize(representations_np, norm='l2', axis=1)
+        #scaled_representations = self.scaler.transform(representations_np)
         cluster_labels = self.kmeans.predict(scaled_representations)
 
         return cluster_labels
@@ -72,67 +73,50 @@ class BEVCostmap:
         """Batch process cell costs."""
         cluster_labels = self.predict_clusters(cells)
         costs = [self.preferences.get(label, 0) for label in cluster_labels]
-        
         return costs
 
     def BEV_to_costmap(self, bev_img, cell_size):
-        """Convert BEV image to costmap using batch processing with contextual patches."""
+        """Convert BEV image to costmap using batch processing."""
         height, width = bev_img.shape[:2]
         num_cells_y, num_cells_x = height // cell_size, width // cell_size
         costmap = np.zeros((num_cells_y, num_cells_x), dtype=np.uint8)
 
+        # Precompute all cells as a batch
+        cells = [
+            bev_img[i * cell_size : (i + 1) * cell_size, j * cell_size : (j + 1) * cell_size]
+            for i in range(num_cells_y)
+            for j in range(num_cells_x)
+        ]
+
+        # Convert cells to tensors in batch
         processed_cells = []
-        cell_indices = []
+        for cell in cells:
+            if np.all(cell == 0):  
+                processed_cells.append(None)  # Mark black cells separately
+            else:
+                if len(cell.shape) == 2:  # Grayscale
+                    cell = np.expand_dims(cell, axis=0)
+                elif len(cell.shape) == 3 and cell.shape[2] == 3:  # RGB
+                    cell = np.transpose(cell, (2, 0, 1))
+                processed_cells.append(cell)
 
-        for i in range(num_cells_y):
-            for j in range(num_cells_x):
-                # Extract patch with surrounding context
-                cell = self.extract_patch_with_context(bev_img, i, j, cell_size, 10)
-
-                # Check for black cells
-                if np.all(cell == 0):  
-                    costmap[i, j] = 255  # Assign max cost to black cells
-                else:
-                    if len(cell.shape) == 2:  # Grayscale
-                        cell = np.expand_dims(cell, axis=0)
-                    elif len(cell.shape) == 3 and cell.shape[2] == 3:  # RGB
-                        cell = np.transpose(cell, (2, 0, 1))
-
-                    processed_cells.append(cell)
-                    cell_indices.append((i, j))
-
-        # Convert valid cells to tensor batch
-        if processed_cells:
-            valid_cells = np.stack(processed_cells, axis=0)
+        # Convert to tensor batch
+        valid_cells = [cell for cell in processed_cells if cell is not None]
+        if valid_cells:
+            valid_cells = np.stack(valid_cells, axis=0)
             costs = self.calculate_cell_costs(valid_cells)
 
-            # Assign costs back correctly using tracked indices
-            for idx, (i, j) in enumerate(cell_indices):
-                costmap[i, j] = costs[idx]
+        # Assign costs back to the costmap
+        idx = 0
+        for i in range(num_cells_y):
+            for j in range(num_cells_x):
+                if processed_cells[i * num_cells_x + j] is None:
+                    costmap[i, j] = 255  # Assign maximum cost to black cells
+                else:
+                    costmap[i, j] = costs[idx]
+                    idx += 1
 
         return costmap
-
-    def extract_patch_with_context(self, image, i, j, cell_size, context_size=2):
-        """
-        Extracts a patch with context around the given (i, j) cell.
-        Ensures all extracted patches have the same size.
-        """
-        height, width = image.shape[:2]
-
-        x_start = max(j * cell_size - context_size, 0)
-        x_end = min((j + 1) * cell_size + context_size, width)
-        y_start = max(i * cell_size - context_size, 0)
-        y_end = min((i + 1) * cell_size + context_size, height)
-
-        patch = image[y_start:y_end, x_start:x_end]
-
-        # Ensure all patches have the same shape
-        fixed_size = (cell_size + 2 * context_size, cell_size + 2 * context_size)
-        
-        if patch.shape[:2] != fixed_size:
-            patch = cv2.resize(patch, fixed_size, interpolation=cv2.INTER_LINEAR)
-
-        return patch
 
     @staticmethod
     def visualize_costmap(costmap, cell_size):
@@ -208,42 +192,27 @@ if __name__ == "__main__":
 
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
-    #scaler_path = "scripts/clusters/scaler.pkl"
+    scaler_path = "scripts/clusters/scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
-        0: 150,      #Cluster 0: Aggregate concrete
-        1: 225,      #Cluster 1: Dark bricks, grass
-        2: 50,      #Cluster 2: Aggregate concrete
-        3: 0,      #Cluster 3: Smooth concrete
-        4: 150,      #Cluster 4: Leaves
-        #5: 225,      # Cluster 5: Dark grass, dark bricks
-        #6: 225,         # Cluster 6: Leaves, grass
-        #7: 50,         # Cluster 7: Aggregate concrete
-        #8: 225,         # Cluster 8: Dark grass, leaves, grass
+        0: 50,      #Cluster 0: Agg, leaves
+        1: 0,      #Cluster 1: Smooth concrete
+        2: 100,      #Cluster 2: Smooth concrete
+        3: 0,      #Cluster 3: Agg
+        4: 225,      #Cluster 4: Aggregate concrete, leaves
+        5: 50,      # Cluster 5: Grass
+        6: 50      # Cluster 6: Smooth concrete
     }
 
-    sim_preferences = {
-        # Black: 0, White: 255
-        0: 225,      #Cluster 0: Grass
-        1: 225,      #Cluster 1: Dark Grass
-        2: 0,      #Cluster 2: Pavement
-        3: 0,      #Cluster 3: Pavement, partial grass
-        #4: 150,      #Cluster 4: Leaves
-        #5: 225,      # Cluster 5: Dark grass, dark bricks
-        #6: 225,         # Cluster 6: Leaves, grass
-        #7: 50,         # Cluster 7: Aggregate concrete
-        #8: 225,         # Cluster 8: Dark grass, leaves, grass
-    }
-
-    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences=preferences)
+    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences)
 
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 40)
-        visualize = bev_costmap.visualize_costmap(costmap, 40)
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
+        visualize = bev_costmap.visualize_costmap(costmap, 64)
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
         cv2.imshow("Cost Map", combined_frame)

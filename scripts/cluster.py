@@ -17,10 +17,7 @@ from sklearn.metrics import silhouette_score
 import numpy as np
 import joblib
 import cv2
-from scipy.stats import skew, kurtosis, shapiro, kstest, anderson
-import seaborn as sns
 import math
-from skimage.feature import local_binary_pattern
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -117,7 +114,6 @@ class Cluster:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
         self.model.load_state_dict(torch.load(model_path, weights_only=True))
-        self.model.eval()  # Set model to evaluation mode
 
         # Create dataset and dataloader
         dataset = TerrainDataset(patches=data_pkl)
@@ -133,8 +129,8 @@ class Cluster:
         self,
         k,
         iterations,
-        save_model_path,
-        save_scaler_path,
+        save_model_path="scripts/clusters/kmeans_model.pkl",
+        save_scaler_path="scripts/clusters/scaler.pkl",
     ):
         """
         Generate clusters using K-means algorithm.
@@ -143,20 +139,19 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         # K Means
-        with torch.no_grad():
-            representation_vectors = self.model.visual_encoder(self.patches)
+        representation_vectors = self.model.encode_single_patch(self.patches)
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        #scaler = StandardScaler()
-        #representation_vectors_np = scaler.fit_transform(combined_features)
-        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
+        #scaler = MinMaxScaler()
+        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        #representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         # Apply K-means clustering with sklearn
-        kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=25, random_state=42)
+        kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
         kmeans.fit(representation_vectors_np)
         min_indices = kmeans.labels_
 
         # Save the K-means model and scaler
-        joblib.dump(kmeans, save_model_path)
+        #joblib.dump(kmeans, save_model_path)
         #joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
@@ -228,12 +223,11 @@ class Cluster:
             k_values (range): Range of k-values to iterate over.
             iterations (int): Number of iterations for K-means.
         """
-        with torch.no_grad():
-            representation_vectors = self.model.visual_encoder(self.patches)
+        representation_vectors = self.model.encode_single_patch(self.patches)
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        #scaler =StandardScaler()
+        #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
+        #representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         silhouette_scores = []
         wcss_values = []
@@ -245,7 +239,7 @@ class Cluster:
 
         for k in k_values:
             # Initialize and fit KMeans with k-means++
-            kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=25, random_state=42)
+            kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
             cluster_labels = kmeans.fit_predict(representation_vectors_np)
 
             # WCSS Calculation
@@ -343,9 +337,9 @@ class Cluster:
         """
         # Step 1: Normalize the representation vectors
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
-        #scaler = StandardScaler()
+        #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
+        #representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
 
         # Step 2: Apply PCA for dimensionality reduction (First to 20D, then to 2D)
         pca_high = PCA(n_components=20, random_state=42)
@@ -378,76 +372,10 @@ class Cluster:
         plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
         plt.show()
 
-    def check_gaussianity(self):
-        """
-        Checks if the given PyTorch tensor follows a Gaussian distribution 
-        using skewness, kurtosis, and statistical tests.
-        
-        Args:
-            tensor (torch.Tensor): Input tensor of shape (batch_size, 128)
-        
-        Returns:
-            dict: Results containing skewness, kurtosis, p-values, and recommended scaler
-        """
-        representation_vectors = self.model.visual_encoder(self.patches)
-        # Convert tensor to NumPy (detach if needed)
-        tensor_np = representation_vectors.detach().cpu().numpy()
-        print(tensor_np.shape)
-
-        # Select a random feature to analyze
-        feature_idx = np.random.randint(0, tensor_np.shape[1])
-        
-        # Compute skewness & kurtosis for each feature (axis=0 → across batch)
-        skewness = skew(tensor_np, axis=0, nan_policy='omit')
-        kurt = kurtosis(tensor_np, axis=0, nan_policy='omit')
-
-        # Compute mean skewness & kurtosis across all features
-        mean_skewness = np.mean(skewness)
-        mean_kurtosis = np.mean(kurt)
-
-        # Shapiro-Wilk Test (Small Batches, <5000 samples)
-        shapiro_p = shapiro(tensor_np[:, feature_idx])[1]
-
-        # Kolmogorov-Smirnov Test (For larger datasets)
-        ks_p = kstest(tensor_np[:, feature_idx], 'norm')[1]
-
-        # Anderson-Darling Test
-        ad_result = anderson(tensor_np[:, feature_idx], dist='norm')
-
-        # Determine best scaler based on results
-        if abs(mean_skewness) > 1:
-            best_scaler = "PowerTransformer (Yeo-Johnson)"
-        elif mean_kurtosis > 3:
-            best_scaler = "RobustScaler"
-        elif shapiro_p > 0.05 and ks_p > 0.05:
-            best_scaler = "StandardScaler"
-        else:
-            best_scaler = "RobustScaler or PowerTransformer"
-
-        # Plot feature distribution
-        sns.histplot(tensor_np[:, feature_idx], kde=True, bins=60)
-        plt.title(f"Feature {feature_idx} Distribution")
-        plt.show()
-
-        # Print results
-        results = {
-            "Mean Skewness": mean_skewness,
-            "Mean Kurtosis": mean_kurtosis,
-            "Shapiro-Wilk p-value": shapiro_p,
-            "Kolmogorov-Smirnov p-value": ks_p,
-            "Anderson-Darling Statistic": ad_result.statistic,
-            "Recommended Scaler": best_scaler
-        }
-
-        for key, value in results.items():
-            print(f"{key}: {value}")
-
-        return results
-
 
 if __name__ == "__main__":
     # Save directory
-    save_dir = os.path.join(script_dir, "clusters_sim")
+    save_dir = os.path.join(script_dir, "clusters")
     os.makedirs(save_dir, exist_ok=True)
 
     # Parse command line arguments
@@ -479,8 +407,6 @@ if __name__ == "__main__":
         data_pkl_path=pkl_path,
         model_path=pt_path,
     )
-    
-    #cluster.check_gaussianity()
 
     #k_values = range(2, 12)
     k_values = 5
@@ -501,7 +427,7 @@ if __name__ == "__main__":
 
     elif isinstance(k_values, int):
         all_cluster_image_indices = cluster.generate_clusters(
-            k_values, iterations, save_model_path="scripts/clusters_sim/sim_kmeans_model.pkl", save_scaler_path="scripts/clusters_sim/sim_scaler.pkl"
+            k_values, iterations
         )
 
         # Render clusters
@@ -511,7 +437,7 @@ if __name__ == "__main__":
             grid_image = PatchRenderer.image_grid(cluster)
             save_path = os.path.join(save_dir, f"cluster_{i}.png")
             # Save the grid image to the specified path
-            cv2.imwrite(save_path, grid_image)
+            #cv2.imwrite(save_path, grid_image)
 
     else:
         print("k_values is neither a range nor an integer")
