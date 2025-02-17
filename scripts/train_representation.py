@@ -88,10 +88,12 @@ class SterlingPaternRepresentation(nn.Module):
         zv1, zv2, zi, _, _ = self.forward(patch1, patch2)
 
         # Compute VICReg loss
-        vicreg_loss = self.vicreg_loss(zv1, zv2)
+        loss_vpt_inv = self.vicreg_loss(zv1, zv2)
         loss_vi = 0.5 * self.vicreg_loss(zv1,zi) + 0.5 * self.vicreg_loss(zv2,zi)
 
-        return vicreg_loss
+        loss = self.l1_coeff * loss_vpt_inv + (1.0-self.l1_coeff) * loss_vi
+
+        return loss
 
 if __name__ == "__main__":
     """
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model
-    model = SterlingRepresentation(device).to(device)
+    model = SterlingPaternRepresentation(device).to(device)
     save_path = load_bag_pt_model(args.bag, "terrain_rep", model)
 
     # Define optimizer
