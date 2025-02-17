@@ -8,17 +8,19 @@ from torch.utils.data import DataLoader
 from utils import load_bag_pkl, load_bag_pt_model
 from vicreg import VICRegLoss
 from visual_encoder_model import VisualEncoderModel
+from proprioception_model import ProprioceptionModel
 from torchvision import transforms
 import torchvision.transforms.v2 as v2
 
 
-class SterlingRepresentation(nn.Module):
+class SterlingPaternRepresentation(nn.Module):
     def __init__(self, device):
-        super(SterlingRepresentation, self).__init__()
+        super(SterlingPaternRepresentation, self).__init__()
         self.device = device
         self.latent_size = 128
-        self.visual_encoder = VisualEncoderModel(self.latent_size)
         self.rep_size = self.latent_size
+        self.visual_encoder = VisualEncoderModel(self.latent_size)
+        self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.rep_size, self.latent_size),
             nn.PReLU(),
@@ -29,7 +31,7 @@ class SterlingRepresentation(nn.Module):
 
         self.l1_coeff = 0.5
 
-    def forward(self, patch1, patch2):
+    def forward(self, patch1, patch2, inertial_data):
         """
         Args:
             patch1 (torch.Tensor): First patch image of shape (3, 128, 128)
@@ -48,11 +50,14 @@ class SterlingRepresentation(nn.Module):
         v_encoded_2 = self.visual_encoder(patch2)
         v_encoded_2 = F.normalize(v_encoded_2, dim=-1)
 
+        i_encoded = self.proprioceptive_encoder(inertial_data.float())
+
         # Project encoded representations to latent space
         zv1 = self.projector(v_encoded_1)
         zv2 = self.projector(v_encoded_2)
+        zi = self.projector(i_encoded)
 
-        return zv1, zv2, v_encoded_1, v_encoded_2
+        return zv1, zv2, zi, v_encoded_1, v_encoded_2
     
     def encode_single_patch(self, patch):
         """
@@ -80,10 +85,11 @@ class SterlingRepresentation(nn.Module):
             torch.Tensor: The computed loss value.
         """
         patch1, patch2 = batch
-        zv1, zv2, _, _ = self.forward(patch1, patch2)
+        zv1, zv2, zi, _, _ = self.forward(patch1, patch2)
 
         # Compute VICReg loss
         vicreg_loss = self.vicreg_loss(zv1, zv2)
+        loss_vi = 0.5 * self.vicreg_loss(zv1,zi) + 0.5 * self.vicreg_loss(zv2,zi)
 
         return vicreg_loss
 
@@ -101,7 +107,8 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Create dataset and dataloader
-    data_pkl = load_bag_pkl(args.bag, "vicreg")
+    patches_pkl = load_bag_pkl(args.bag, "vicreg")
+    IPT_pkl = load_bag_pkl(args.bag, "synced")
 
     # Define the augmentation pipeline
     augment_transform = v2.Compose([
@@ -115,7 +122,7 @@ if __name__ == "__main__":
     ])
 
 
-    dataset = TerrainDataset(patches=data_pkl, transform=augment_transform)
+    dataset = TerrainDataset(patches=patches_pkl, synced_data=IPT_pkl, transform=augment_transform)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model

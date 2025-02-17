@@ -188,12 +188,12 @@ class GlobalMap:
         cos_theta = relative_transform[0, 0]
         sin_theta = relative_transform[1, 0]
 
-        # Camera offset (only X matters, forward direction)
+        # Camera offset from odom (only X matters, forward direction)
         camera_offset_x = -0.2286  # Camera is in front (-X direction)
 
         # Adjust translation based on camera offset
-        #tx += -sin_theta * camera_offset_x * scale  # Corrected sign
-        #ty += sin_theta * camera_offset_x * scale  # Corrected sign
+        tx += -sin_theta * camera_offset_x * scale  # Corrected sign
+        ty += sin_theta * camera_offset_x * scale  # Corrected sign
 
         # Transformations to bottom center
         to_bottom_center = np.array([
@@ -281,8 +281,8 @@ class GlobalMap:
         4. Warp into tile map
         5. Optional: visualize
         """
-        translation_threshold = 0.01
-        rotation_threshold = 0.01
+        translation_threshold = 0.004
+        rotation_threshold = 0.004
 
         if self.H_old is None:
             # First frame: set identity transform, etc.
@@ -314,7 +314,7 @@ class GlobalMap:
             return
         
         H_refined = self.refine_homography(H_relative, frame_cur)
-        self.H_old = self.H_old @ H_refined
+        self.H_old = self.H_old @ H_relative
         self.H_old /= self.H_old[2,2]
 
         # Warp into tile map
@@ -541,9 +541,8 @@ if __name__ == "__main__":
     #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
     H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
-    robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
-    )
+    #robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl"))
+    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_sim_loop_2/panther_recording_sim_loop_2_synced.pkl"))
 
     scale_start = 490
     bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
@@ -556,42 +555,43 @@ if __name__ == "__main__":
     start, end = 0, 4000
 
     # Check if an image path is provided
-    image_path = "full_map.png"  # Change this to None if no image path is given
+    image_path = None#"full_map.png"  # Change this to None if no image path is given
 
     if image_path:  # Show image if path exists
         clean_map = cv2.imread(image_path)
         if clean_map is not None:
             viewer = MapViewer(clean_map)
             viewer.show_map()
-        else:
-            # Process subsequent BEV images
-            for timestep in tqdm(range(start+1, end), desc="Processing patches at timesteps"):
-                try:
-                    cur_img = robot_data.getImageAtTimestep(timestep)
-                    cur_rt = robot_data.getOdomAtTimestep(timestep)
-                    if cur_img is None:
-                        print(f"Missing image data at timestep {timestep}")
-                        continue
-
-                    bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-                    global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
-
-                except Exception as e:
-                    print(f"Error at timestep {timestep}: {e}")
+    else:
+        # Process subsequent BEV images
+        for timestep in tqdm(range(start+1, end), desc="Processing patches at timesteps"):
+            try:
+                cur_img = robot_data.getImageAtTimestep(timestep)
+                cur_rt = robot_data.getOdomAtTimestep(timestep)
+                if cur_img is None:
+                    print(f"Missing image data at timestep {timestep}")
                     continue
 
-            # Retrieve and save the final stitched map
-            final_map = global_map.get_full_map()
+                bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
+                #global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
+                global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=261)
 
-            if final_map is None or final_map.size == 0:
-                print("Error: Final map is empty!")
-            else:
-                print("Final map successfully retrieved.")
+            except Exception as e:
+                print(f"Error at timestep {timestep}: {e}")
+                continue
 
-            # Pass `final_map` to `MapViewer`, NOT `clean_map`
-            viewer = MapViewer(final_map)
-            viewer.show_map()
-            viewer.save_full_map()
+        # Retrieve and save the final stitched map
+        final_map = global_map.get_full_map()
+
+        if final_map is None or final_map.size == 0:
+            print("Error: Final map is empty!")
+        else:
+            print("Final map successfully retrieved.")
+
+        # Pass `final_map` to `MapViewer`, NOT `clean_map`
+        viewer = MapViewer(final_map)
+        viewer.show_map()
+        viewer.save_full_map()
 # Add Z buffer, so that pixels off in the distance are replaced with the most recent. 
 # We can get pixel and depth of the pixel using homography, once we reach that pixel, replace that portion of the image with most current
 

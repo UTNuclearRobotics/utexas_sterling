@@ -129,8 +129,8 @@ class Cluster:
         self,
         k,
         iterations,
-        save_model_path="scripts/clusters/kmeans_model.pkl",
-        save_scaler_path="scripts/clusters/scaler.pkl",
+        save_model_path="scripts/clusters_sim/sim_kmeans_model.pkl",
+        save_scaler_path="scripts/clusters_sim/scaler.pkl",
     ):
         """
         Generate clusters using K-means algorithm.
@@ -151,7 +151,7 @@ class Cluster:
         min_indices = kmeans.labels_
 
         # Save the K-means model and scaler
-        #joblib.dump(kmeans, save_model_path)
+        joblib.dump(kmeans, save_model_path)
         #joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
@@ -375,7 +375,7 @@ class Cluster:
 
 if __name__ == "__main__":
     # Save directory
-    save_dir = os.path.join(script_dir, "clusters")
+    save_dir = os.path.join(script_dir, "clusters_sim")
     os.makedirs(save_dir, exist_ok=True)
 
     # Parse command line arguments
@@ -409,7 +409,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 12)
-    k_values = 5
+    k_values = 3
     iterations = 1000
 
     if isinstance(k_values, range):
@@ -437,7 +437,7 @@ if __name__ == "__main__":
             grid_image = PatchRenderer.image_grid(cluster)
             save_path = os.path.join(save_dir, f"cluster_{i}.png")
             # Save the grid image to the specified path
-            #cv2.imwrite(save_path, grid_image)
+            cv2.imwrite(save_path, grid_image)
 
     else:
         print("k_values is neither a range nor an integer")

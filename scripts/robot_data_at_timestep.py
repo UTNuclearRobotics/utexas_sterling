@@ -32,28 +32,8 @@ class RobotDataAtTimestep:
         """Return the IMU data as a 4x4 matrix at the given timestep index."""
         if 0 <= idx < self.nTimesteps:
             imu_data = self.data["imu"][idx]
-
-            # Extract relevant data from the dictionary
-            orientation = np.array(imu_data["orientation"], dtype=np.float32)  # Should be a 4-element vector
-            angular_velocity = np.array(imu_data["angular_velocity"], dtype=np.float32)  # Should be a 3-element vector
-            linear_acceleration = np.array(
-                imu_data["linear_acceleration"], dtype=np.float32
-            )  # Should be a 3-element vector
-
-            # Pad the angular velocity and linear acceleration arrays with zeros to make them 4-element arrays
-            angular_velocity = np.pad(angular_velocity, (0, 1), mode="constant")
-            linear_acceleration = np.pad(linear_acceleration, (0, 1), mode="constant")
-
-            # Combine the arrays into a 4x4 matrix (by stacking them row-wise)
-            imu_matrix = np.vstack(
-                [
-                    orientation,
-                    angular_velocity,
-                    linear_acceleration,
-                    np.zeros(4, dtype=np.float32),
-                ]
-            )
-            return imu_matrix
+            imu = imu_data[:, :-4]
+            return imu
         else:
             raise IndexError("Index out of range for timesteps.")
 

@@ -192,7 +192,10 @@ if __name__ == "__main__":
 
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
-    scaler_path = "scripts/clusters/scaler.pkl"
+
+    sim_encoder_path = "bags/panther_recording_sim_loop_2/models/panther_recording_sim_loop_2_terrain_rep.pt"
+    sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
+    #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
@@ -202,17 +205,29 @@ if __name__ == "__main__":
         3: 0,      #Cluster 3: Agg
         4: 225,      #Cluster 4: Aggregate concrete, leaves
         5: 50,      # Cluster 5: Grass
-        6: 50      # Cluster 6: Smooth concrete
+        6: 0      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences)
+    sim_preferences = {
+        # Black: 0, White: 255
+        0: 0,      #Cluster 0: Conc
+        1: 225,      #Cluster 1: Grass
+        2: 0,      #Cluster 2: Conc
+        #3: 225,      #Cluster 3: Agg
+        #4: 0,      #Cluster 4: Aggregate concrete, leaves
+        #5: 50,      # Cluster 5: Grass
+        #6: 50      # Cluster 6: Smooth concrete
+    }
+
+    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
 
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
-        visualize = bev_costmap.visualize_costmap(costmap, 64)
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 32)
+        visualize = bev_costmap.visualize_costmap(costmap, 32)
+
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
         cv2.imshow("Cost Map", combined_frame)
