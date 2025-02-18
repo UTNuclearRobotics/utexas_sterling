@@ -31,22 +31,16 @@ class SynchronizeRosbag:
     based on odometry information.
     """
 
-    def __init__(self, bag_path, visual, simulation):
+    def __init__(self, bag_path, visual):
         self.BAG_PATH = bag_path
         self.SAVE_PATH = bag_path
         self.VISUAL = visual
-        self.SIM = simulation
 
-        if self.SIM:
-            self.odometry_topic = "/odometry/filtered"
-            self.imu_topic = "/imu/data"
-            self.img_topic1 = "/oakd1/oak_d_node/rgb/image_rect_color"
-            self.img_topic2 = "/oakd2/oak_d_node/rgb/image_rect_color"
-            self.img_topic3 = "/oakd3/oak_d_node/rgb/image_rect_color"
-
-        else:
-            self.odometry_topic = "/panther/odometry/filtered"
-            self.imu_topic = "/panther/imu/data"
+        self.odometry_topic = "/odometry/filtered"
+        self.imu_topic = "/imu/data"
+        self.img_topic1 = "/oakd1/oak_d_node/rgb/image_rect_color"
+        self.img_topic2 = "/oakd2/oak_d_node/rgb/image_rect_color"
+        self.img_topic3 = "/oakd3/oak_d_node/rgb/image_rect_color"
 
         # Bridge for conversions between Image and CompressedImage
         self.br = CvBridge()
@@ -64,11 +58,10 @@ class SynchronizeRosbag:
         self.camera_info = None
 
     def image_callback(self, msg, queueNum):
-        if self.SIM:
-            image = msg
-            msg = self.br.imgmsg_to_cv2(image, desired_encoding="bgr8")
-            msg = self.br.cv2_to_compressed_imgmsg(msg)
-            msg.header = image.header
+        image = msg
+        msg = self.br.imgmsg_to_cv2(image, desired_encoding="bgr8")
+        msg = self.br.cv2_to_compressed_imgmsg(msg)
+        msg.header = image.header
             
         if queueNum == 1:
             self.image1_msgs.append(msg)
@@ -95,7 +88,7 @@ class SynchronizeRosbag:
             odom_time = self.odom_msgs[0].header.stamp.sec + self.odom_msgs[0].header.stamp.nanosec * 1e-9
 
             # Find the average timestamp
-            avg_time = (image1_time + image2_time, image3_time, + imu_time + odom_time) / 5.0
+            avg_time = (image1_time + image2_time + image3_time + imu_time + odom_time) / 5.0
 
             # Calculate time differences
             time_diff_image1 = abs(image1_time - avg_time)
@@ -122,7 +115,7 @@ class SynchronizeRosbag:
                 img3 = cv2.imdecode(img3_data, cv2.IMREAD_COLOR)
 
                 # Stitch the images together using panoramic view
-                stitcher = cv2.Stitcher_create()
+                stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
                 status, stitched_img = stitcher.stitch([img1, img2, img3])
 
                 if status != cv2.Stitcher_OK:
@@ -179,12 +172,15 @@ class SynchronizeRosbag:
                 }
                 self.synced_msgs["odom"].append(odom_msg_fields)
             else:
-                # Discard the earliest message to find a better match
-                if image1_time <= imu_time and image1_time <= odom_time:
+                # Discard the message with the earliest timestamp to find a better match
+                min_time = min(image1_time, image2_time, image3_time, imu_time, odom_time)
+                if min_time == image1_time:
                     self.image1_msgs.popleft()
+                elif min_time == image2_time:
                     self.image2_msgs.popleft()
+                elif min_time == image3_time:
                     self.image3_msgs.popleft()
-                elif imu_time <= image1_time and imu_time <= odom_time:
+                elif min_time == imu_time:
                     self.imu_msgs.popleft()
                 else:
                     self.odom_msgs.popleft()
@@ -225,24 +221,23 @@ class SynchronizeRosbag:
                 (topic, msg, t) = reader.read_next()
                 topic_type = type_map.get(topic)
                 
-                if (self.SIM):
-                    if topic == self.img_topic1:
-                        msg = deserialize_message(msg, Image)
-                        self.image_callback(msg, 1)
-                    elif topic == self.img_topic2:
-                        msg = deserialize_message(msg, Image)
-                        self.image_callback(msg, 2)
-                    elif topic == self.img_topic3:
-                        msg = deserialize_message(msg, Image)
-                        self.image_callback(msg, 3)
-                    elif topic == self.odometry_topic:
-                        # Process the odometry messages
-                        msg = deserialize_message(msg, Odometry)
-                        self.odom_callback(msg)
-                    elif topic == self.imu_topic:
-                        # Process the IMU messages
-                        msg = deserialize_message(msg, Imu)
-                        self.imu_callback(msg)
+                if topic == self.img_topic1:
+                    msg = deserialize_message(msg, Image)
+                    self.image_callback(msg, 1)
+                elif topic == self.img_topic2:
+                    msg = deserialize_message(msg, Image)
+                    self.image_callback(msg, 2)
+                elif topic == self.img_topic3:
+                    msg = deserialize_message(msg, Image)
+                    self.image_callback(msg, 3)
+                elif topic == self.odometry_topic:
+                    # Process the odometry messages
+                    msg = deserialize_message(msg, Odometry)
+                    self.odom_callback(msg)
+                elif topic == self.imu_topic:
+                    # Process the IMU messages
+                    msg = deserialize_message(msg, Imu)
+                    self.imu_callback(msg)
 
                 # match topic_type:
                 #     case "sensor_msgs/msg/Image":
@@ -268,7 +263,12 @@ class SynchronizeRosbag:
     def save_data(self):
         if self.VISUAL:
             # Initialize the video writer
-            frame_size = (self.camera_info.width, self.camera_info.height)
+            img_data = self.synced_msgs["image"][0]["data"]
+            img = np.frombuffer(img_data, np.uint8)
+            img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+            height, width, _ = img.shape
+            
+            frame_size = (width, height)
             fps = 10
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             video_save_path = os.path.join(self.BAG_PATH, "original.mp4")
@@ -305,11 +305,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--visual", "-v", action="store_true", default=False, help="Save video of processed rosbag.")
 
-    parser.add_argument("--simulation", "-sim", action="store_true", default=False, help="Rosbag is from a Gazebo simulation.")
+    # parser.add_argument("--simulation", "-sim", action="store_true", default=False, help="Rosbag is from a Gazebo simulation.")
     args = parser.parse_args()
 
     cprint(
-        f"Bag Path: {args.bag_path}\n" f"Save Path: {args.save_path}\n" f"Visualization: {args.visual}" f"Simulation: {args.simulation}",
+        f"Bag Path: {args.bag_path}\n" f"Save Path: {args.save_path}\n" f"Visualization: {args.visual}",
         "blue",
     )
 
@@ -317,7 +317,7 @@ if __name__ == "__main__":
     processor = SynchronizeRosbag(
         bag_path=os.path.normpath(args.bag_path),
         visual=args.visual,
-        simulation=args.simulation
+        # simulation=args.simulation
     )
     processor.read_rosbag()
     processor.save_data()
