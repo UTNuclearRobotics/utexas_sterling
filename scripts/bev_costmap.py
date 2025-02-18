@@ -12,7 +12,7 @@ from tqdm import tqdm
 from cluster import Cluster
 import joblib
 from sklearn.cluster import KMeans
-from train_representation import SterlingRepresentation
+from train_representation import SterlingPaternRepresentation
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, PowerTransformer, normalize, RobustScaler
 
 
@@ -30,7 +30,7 @@ class BEVCostmap:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load visual encoder model weights
-        self.sterling = SterlingRepresentation(device).to(device)
+        self.sterling = SterlingPaternRepresentation(device).to(device)
         if not os.path.exists(viz_encoder_path):
             raise FileNotFoundError(f"Model file not found at: {viz_encoder_path}")
         self.sterling.load_state_dict(torch.load(viz_encoder_path, weights_only=True))
@@ -63,9 +63,9 @@ class BEVCostmap:
             representations = self.sterling.encode_single_patch(cells)
 
         representations_np = representations.detach().cpu().numpy()
-        scaled_representations = normalize(representations_np, norm='l2', axis=1)
+        #scaled_representations = normalize(representations_np, norm='l2', axis=1)
         #scaled_representations = self.scaler.transform(representations_np)
-        cluster_labels = self.kmeans.predict(scaled_representations)
+        cluster_labels = self.kmeans.predict(representations_np)
 
         return cluster_labels
 
@@ -225,8 +225,8 @@ if __name__ == "__main__":
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 32)
-        visualize = bev_costmap.visualize_costmap(costmap, 32)
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
+        visualize = bev_costmap.visualize_costmap(costmap, 64)
 
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)

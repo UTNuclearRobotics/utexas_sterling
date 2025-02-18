@@ -5,16 +5,16 @@ from torchvision import transforms
 
 
 class TerrainDataset(Dataset):
-    def __init__(self, patches, synced_data, transform = None, dtype=torch.float32, incl_orientation = False):
+    def __init__(self, patches, transform = None, dtype=torch.float32, incl_orientation = False):
         # Convert each patch to a tensor and ensure they are resized or padded if necessary
         self.patches = [
             torch.tensor(np.array(patch), dtype=dtype).permute(0, 3, 1, 2)  # (N_PATCHES, 3, 128, 128)
             for patch in patches]
-        self.robot_data = synced_data
+        #self.robot_data = synced_data
         
         # Extract IMU and Odom data
-        self.imu_data = self.robot_data["imu"]
-        self.odom_data = self.robot_data["odom"]  # If needed for further use
+        #self.imu_data = self.robot_data["imu"]
+        #self.odom_data = self.robot_data["odom"]  # If needed for further use
         self.incl_orientation = incl_orientation  # If False, remove last 4 IMU columns
 
         # Ensure number of patches and IMU data match
@@ -23,11 +23,11 @@ class TerrainDataset(Dataset):
 
         self.transform = transform
         # Compute normalization statistics (global min, max, mean, std)
-        imu_array = np.concatenate(self.imu_data, axis=0)  # Flatten all IMU data for global statistics
-        self.imu_min = np.min(imu_array, axis=0)
-        self.imu_max = np.max(imu_array, axis=0)
-        self.imu_mean = np.mean(imu_array, axis=0)
-        self.imu_std = np.std(imu_array, axis=0) + 1e-7  # Avoid division by zero
+        #imu_array = np.concatenate(self.imu_data, axis=0)  # Flatten all IMU data for global statistics
+        #self.imu_min = np.min(imu_array, axis=0)
+        #self.imu_max = np.max(imu_array, axis=0)
+        #self.imu_mean = np.mean(imu_array, axis=0)
+        #self.imu_std = np.std(imu_array, axis=0) + 1e-7  # Avoid division by zero
 
     def normalize_imu(self, imu_sample):
         """Apply normalization to a given IMU sample."""
@@ -38,7 +38,7 @@ class TerrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.patches[idx]
-        imu_sample = self.imu_data[idx]
+        #imu_sample = self.imu_data[idx]
         num_patches = sample.shape[0]
 
         # Ensure there are enough patches to sample from
@@ -57,13 +57,13 @@ class TerrainDataset(Dataset):
             patch2 = self.transform(patch2)
 
         # Remove last 4 columns from IMU data if orientation is excluded
-        if not self.incl_orientation:
-            imu_sample = imu_sample[:, :-4]
+        #if not self.incl_orientation:
+        #    imu_sample = imu_sample[:, :-4]
 
         # Normalize IMU data
-        imu_sample = self.normalize_imu(imu_sample)
+        #imu_sample = self.normalize_imu(imu_sample)
 
         # Convert IMU data to a PyTorch tensor
-        imu_sample = torch.tensor(imu_sample, dtype=torch.float32)
+        #imu_sample = torch.tensor(imu_sample, dtype=torch.float32)
 
-        return patch1, patch2, imu_sample
+        return patch1, patch2

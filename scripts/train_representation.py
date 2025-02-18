@@ -12,7 +12,6 @@ from proprioception_model import ProprioceptionModel
 from torchvision import transforms
 import torchvision.transforms.v2 as v2
 
-
 class SterlingPaternRepresentation(nn.Module):
     def __init__(self, device):
         super(SterlingPaternRepresentation, self).__init__()
@@ -20,7 +19,7 @@ class SterlingPaternRepresentation(nn.Module):
         self.latent_size = 128
         self.rep_size = self.latent_size
         self.visual_encoder = VisualEncoderModel(self.latent_size)
-        self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
+        #self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.rep_size, self.latent_size),
             nn.PReLU(),
@@ -28,19 +27,14 @@ class SterlingPaternRepresentation(nn.Module):
         )
 
         self.vicreg_loss = VICRegLoss()
-
         self.l1_coeff = 0.5
 
-    def forward(self, patch1, patch2, inertial_data):
+    def forward(self, patch1, patch2):
         """
         Args:
             patch1 (torch.Tensor): First patch image of shape (3, 128, 128)
             patch2 (torch.Tensor): Second patch image of shape (3, 128, 128)
         """
-        # Shape should be [batch size, 2, 3, 64, 64]
-        # patch1 = x[:, 0:1, :, :, :]
-        # patch2 = x[:, 1:2, :, :, :]
-        # print("In Shape:    ", patch1.shape)
 
         # Encode visual patches
         patch1 = patch1.to(self.device)
@@ -50,14 +44,14 @@ class SterlingPaternRepresentation(nn.Module):
         v_encoded_2 = self.visual_encoder(patch2)
         v_encoded_2 = F.normalize(v_encoded_2, dim=-1)
 
-        i_encoded = self.proprioceptive_encoder(inertial_data.float())
+        #i_encoded = self.proprioceptive_encoder(inertial_data.float())
 
         # Project encoded representations to latent space
         zv1 = self.projector(v_encoded_1)
         zv2 = self.projector(v_encoded_2)
-        zi = self.projector(i_encoded)
+        #zi = self.projector(i_encoded)
 
-        return zv1, zv2, zi, v_encoded_1, v_encoded_2
+        return zv1, zv2, v_encoded_1, v_encoded_2
     
     def encode_single_patch(self, patch):
         """
@@ -85,15 +79,15 @@ class SterlingPaternRepresentation(nn.Module):
             torch.Tensor: The computed loss value.
         """
         patch1, patch2 = batch
-        zv1, zv2, zi, _, _ = self.forward(patch1, patch2)
+        zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2)
 
         # Compute VICReg loss
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)
-        loss_vi = 0.5 * self.vicreg_loss(zv1,zi) + 0.5 * self.vicreg_loss(zv2,zi)
+        #loss_vi = 0.5 * self.vicreg_loss(zv1,zi) + 0.5 * self.vicreg_loss(zv2,zi)
 
-        loss = self.l1_coeff * loss_vpt_inv + (1.0-self.l1_coeff) * loss_vi
+        #loss = self.l1_coeff * loss_vpt_inv + (1.0-self.l1_coeff) * loss_vi
 
-        return loss
+        return loss_vpt_inv
 
 if __name__ == "__main__":
     """
@@ -124,7 +118,7 @@ if __name__ == "__main__":
     ])
 
 
-    dataset = TerrainDataset(patches=patches_pkl, synced_data=IPT_pkl, transform=augment_transform)
+    dataset = TerrainDataset(patches=patches_pkl, transform=augment_transform)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model

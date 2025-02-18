@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader
-from train_representation import SterlingRepresentation
+from train_representation import SterlingPaternRepresentation
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, PowerTransformer, normalize, RobustScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
@@ -110,7 +110,7 @@ class Cluster:
             data_pkl = pickle.load(file)
 
         # Load model weights
-        self.model = SterlingRepresentation("cpu").to("cpu")
+        self.model = SterlingPaternRepresentation("cpu").to("cpu")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
         self.model.load_state_dict(torch.load(model_path, weights_only=True))
