@@ -28,9 +28,14 @@ def find_image_points(grid_size,image_path_pattern):
     print("find_image_points()")
     print(" Loading Images: ", image_path_pattern)
     images = glob.glob(image_path_pattern)
+    w = 0
+    h = 0
 
     for fname in images:
         img = cv.imread(fname)
+        # print(img.shape)
+        h = img.shape[0]
+        w = img.shape[1]
         gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
         ret, corners = cv.findChessboardCorners(gray, grid_size, None)
@@ -45,7 +50,7 @@ def find_image_points(grid_size,image_path_pattern):
         # else:
         #     print("BAD")
 
-    return imgpoints
+    return imgpoints, h, w
 
             # Draw and display corners
 
@@ -57,7 +62,7 @@ class CVBasedCalibrator:
         self.cols = cols
         self.square_size = square_size
         grid_size=(self.cols, self.rows)
-        self.imgpoints = find_image_points(grid_size,image_path_pattern)
+        self.imgpoints, self.img_height, self.img_width = find_image_points(grid_size,image_path_pattern)
         # Ensure self.imgpoints is a NumPy array of shape [N, 2]
         self.imgpoints = np.array(self.imgpoints, dtype=np.float32)  # Convert list to NumPy array
 
@@ -68,11 +73,6 @@ class CVBasedCalibrator:
         # Convert to PyTorch tensor correctly
         self.img_pts_tensor = torch.tensor(self.imgpoints)  # Remove squeeze(2)
         
-        """
-        Perform camera calibration using detected points.
-        """
-        if not self.imgpoints:
-            raise ValueError("Object points or image points are empty. Run find_image_points() first.")
 
         # Use the shape of the last processed image for calibration
         self.h, self.w = cv.imread(glob.glob(image_path_pattern)[-1]).shape[:2]
@@ -153,13 +153,7 @@ def projection(k_mat_torch, r,t):
 class ZhangNonlinear:
     def __init__(self, calibration_values):
         super().__init__()
-        # , cb_rows, cb_cols, image_path_pattern
-        # grid_size = (cb_rows, cb_cols)
         print("ZhangNonlinear()")
-        # print(" Loading Images: ", image_path_pattern)
-        # images = glob.glob(image_path_pattern)
-        # criteria=(cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 50, 0.0001)
-        # model_chessboard = compute_model_chessboard_2d(cb_rows, cb_cols, 1, center_at_zero=True)
 
         self.calibration_values = calibration_values
         self.model_chessboard = ModelChessboard(
@@ -167,250 +161,96 @@ class ZhangNonlinear:
         self.num_images = len(calibration_values.imgpoints)
         self.num_pts = calibration_values.rows * calibration_values.cols
         
+        #self.calibration_values.dist
+        distortion = np.array([[0.0, 0.0, 0.0, 0.0, 0.0]])
         self.K = CameraCalibration(
             calibration_values.mtx[0,0],
             calibration_values.mtx[1,1],
             calibration_values.mtx[0,2],
             calibration_values.mtx[1,2],
-            self.calibration_values.dist)
+            distortion)
         
         print("num_images: ", self.num_images)
+        print("Image Dimensions:    ", self.calibration_values.img_height, "   ", self.calibration_values.img_width)
         print("DISTORTION COEFFICIENTS: ", self.calibration_values.dist)
-
-        # print("calibration.rvecs[i]:    ", calibration.rvecs[1])
-        # print("calibration.tvecs[i]:    ", calibration.tvecs[1])
 
         rvecs = [calibration.rvecs[i].flatten() for i in range(len(calibration.rvecs))]
         tvecs = [calibration.tvecs[i].flatten() for i in range(len(calibration.tvecs))]
 
-        #Setup residuals_alpha_beta_u0_v0_distortion
-        self.initial_params = np.hstack([
-            ( calibration_values.mtx[0,0] + calibration_values.mtx[1,1]) / 2.0,
-            ( calibration_values.mtx[0,0] + calibration_values.mtx[1,1]) / 2.0,
-            calibration_values.mtx[0,2],
-            calibration_values.mtx[1,2],
-            *self.calibration_values.dist,
-            *rvecs,
-            *tvecs])
-        
-        print("self.initial_params:  ", self.initial_params)
         result = least_squares(
-            self.residuals_alpha_beta_u0_v0_distortion,
-            self.initial_params,
+            self.residuals_alpha_beta_u0_v0_distortion_2_radial,
+            self.init_params_alpha_beta_u0_v0_distortion_2_radial(rvecs, tvecs),
             method='trf', verbose=2, xtol=1e-15)
+        rvecs, tvecs = self.parse_result_alpha_beta_u0_v0_distortion_2_radial(result)
+
+        result = least_squares(
+            self.residuals_f_u0_v0_keep_distortion,
+            self.init_params_f_u0_v0_keep_distortion(rvecs, tvecs),
+            method='trf', verbose=2, xtol=1e-15)
+        rvecs, tvecs = self.parse_result_f_u0_v0_keep_distortion(result)
+
+        #Move u0, v0 to middle of image and retry
+        init_params =  self.init_params_alpha_beta_u0_v0_distortion_2_radial(rvecs, tvecs)
+        init_params[3] = self.calibration_values.img_width / 2.0
+        init_params[4] = self.calibration_values.img_height / 2.0
+        result = least_squares(
+            self.residuals_alpha_beta_u0_v0_distortion_2_radial,
+            init_params,
+            method='trf', verbose=2, xtol=1e-15)
+        rvecs, tvecs = self.parse_result_alpha_beta_u0_v0_distortion_2_radial(result)
+        
+
+    def parse_result_alpha_beta_u0_v0_distortion_2_radial(self, result):
         print("result:  ", result)
 
-        alpha, beta, u0, v0, k1, k2, p1, p2, k3 = result.x[:9]
-        distortion = np.array([k1, k2, p1, p2, k3])
+        alpha, beta, u0, v0, k1, k2 = result.x[:6]
+        distortion = np.array([[k1, k2, 0.0, 0.0, 0.0]])
         self.K.adjust_alpha_beta_u0_v0(alpha, beta, u0, v0)
         self.K.adjust_distortion(distortion)
-        rvecs = result.x[9:9 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = result.x[9 + 3*self.num_images:].reshape(self.num_images, 3)
-        
         print("alpha, beta, u0, v0: ", alpha, beta, u0, v0)
-        print("distortion: ", distortion)
+        print("distortion: ", self.K.distortion)
 
-        #Setup residuals_f_u0_v0_distortion
-        self.initial_params = np.hstack([
-            ( calibration_values.mtx[0,0] + calibration_values.mtx[1,1]) / 2.0,
-            calibration_values.mtx[0,2],
-            calibration_values.mtx[1,2],
-            *self.calibration_values.dist,
-            *rvecs,
-            *tvecs])
-        
-        print("self.initial_params:  ", self.initial_params)
-        result = least_squares(
-            self.residuals_f_u0_v0_distortion,
-            self.initial_params,
-            method='trf', verbose=2, xtol=1e-15)
-        print("result:  ", result)
-
-        f, u0, v0, k1, k2, p1, p2, k3 = result.x[:8]
-        distortion = np.array([k1, k2, p1, p2, k3])
-        self.K.adjust_alpha_beta_u0_v0(f, f, u0, v0)
-        self.K.adjust_distortion(distortion)
-        rvecs = result.x[8:8 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = result.x[8 + 3*self.num_images:].reshape(self.num_images, 3)
-        
-        print("f, u0, v0: ", f, u0, v0)
-        print("distortion: ", distortion)
-
-        #Setup residuals_f_distortion
-        self.initial_params = np.hstack([
-            ( calibration_values.mtx[0,0] + calibration_values.mtx[1,1]) / 2.0,
-            *self.calibration_values.dist,
-            *rvecs,
-            *tvecs])
-        
-        print("self.initial_params:  ", self.initial_params)
-        result = least_squares(
-            self.residuals_f_distortion,
-            self.initial_params,
-            method='trf', verbose=2, xtol=1e-15)
-        print("result:  ", result)
-
-        f, k1, k2, p1, p2, k3 = result.x[:6]
-        distortion = np.array([k1, k2, p1, p2, k3])
-        self.K.adjust_alpha_beta_u0_v0(
-            f, f,
-            self.calibration_values.w / 2.0,
-            self.calibration_values.h / 2.0)
-        self.K.adjust_distortion(distortion)
         rvecs = result.x[6:6 + 3*self.num_images].reshape(self.num_images, 3)
         tvecs = result.x[6 + 3*self.num_images:].reshape(self.num_images, 3)
-        
-        print("f: ", f)
-        print("distortion: ", distortion)
-        print("self.calibration_values.dist: ", self.calibration_values.dist)
+        return rvecs, tvecs
 
-        #Setup residuals_f_distortionx2
-        self.initial_params = np.hstack([
-            ( calibration_values.mtx[0,0] + calibration_values.mtx[1,1]) / 2.0,
-            self.calibration_values.dist[0,0], self.calibration_values.dist[0,1],
-            *rvecs,
-            *tvecs])
-        
-        print("self.initial_params:  ", self.initial_params)
-        result = least_squares(
-            self.residuals_f_distortionx2,
-            self.initial_params,
-            method='trf', verbose=2, xtol=1e-15)
-        print("result:  ", result)
+    def init_params_alpha_beta_u0_v0_distortion_2_radial(self, rvecs, tvecs):
+        return np.hstack([
+            self.K.intrinsic_matrix[0,0], self.K.intrinsic_matrix[1,1],
+            self.K.intrinsic_matrix[0,2], self.K.intrinsic_matrix[1,2],
+            self.K.distortion[0,0], self.K.distortion[0,1],
+            *rvecs, *tvecs])
 
-        f, k1, k2 = result.x[:3]
+    def residuals_alpha_beta_u0_v0_distortion_2_radial(self, params):
+        alpha, beta, u0, v0, k1, k2 = params[:6]
         distortion = np.array([k1, k2, 0.0, 0.0, 0.0])
-        self.K.adjust_alpha_beta_u0_v0(
-            f, f,
-            self.calibration_values.w / 2.0,
-            self.calibration_values.h / 2.0)
-        self.K.adjust_distortion(distortion)
-        rvecs = result.x[3:3 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = result.x[3 + 3*self.num_images:].reshape(self.num_images, 3)
-        
-        print("f: ", f)
-        print("distortion: ", distortion)
-
-        #Setup residuals_f_distortion_only_k3
-        self.initial_params = np.hstack([
-            ( calibration_values.mtx[0,0] + calibration_values.mtx[1,1]) / 2.0,
-            self.calibration_values.dist[0,4],
-            *rvecs,
-            *tvecs])
-        
-        print("residuals_f_distortion_only_k3:  ", self.initial_params)
-        result = least_squares(
-            self.residuals_f_distortion_only_k3,
-            self.initial_params,
-            method='trf', verbose=2, xtol=1e-15)
-        print("result:  ", result)
-
-        f, k3 = result.x[:2]
-        distortion = self.K.distortion
-        distortion[4] = k3
-        self.K.adjust_alpha_beta_u0_v0(
-            f, f,
-            self.calibration_values.w / 2.0,
-            self.calibration_values.h / 2.0)
-        self.K.adjust_distortion(distortion)
-        rvecs = result.x[2:2 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = result.x[2 + 3*self.num_images:].reshape(self.num_images, 3)
-        
-        print("f: ", f)
-        print("distortion: ", distortion)
-
-        # print("self.K.intrinsic_matrix: ", self.K.intrinsic_matrix)
-
-        self.K.adjust_distortion(distortion)
-
-    def residuals_alpha_beta_u0_v0(self, params):
-        alpha, beta, u0, v0 = params[:4]
         self.K.adjust_alpha_beta_u0_v0(alpha, beta, u0, v0)
-        rvecs = params[4:4 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = params[4 + 3*self.num_images:].reshape(self.num_images, 3)
-
-        pts_diff = torch.zeros(2, self.num_images * self.num_pts)
-        for i in range(self.num_images):
-            p = projection(self.K.intrinsic_matrix, rvecs[i], tvecs[i])
-            pts_2d_hom = p @ self.model_chessboard.cb_pts_3D
-            pts_2d_cart = pts_2d_hom[:2] / pts_2d_hom[2]
-            # print("pts_2d_cart: ", pts_2d_cart)
-            # print("self.calibration_values.imgpoints[i]: ", self.calibration_values.imgpoints[i])
-            pts_diff[:, i * self.num_pts:(i + 1) * self.num_pts] = \
-                pts_2d_cart - self.calibration_values.img_pts_tensor[i]
-        pts_diff = pts_diff.flatten()
-        return pts_diff.numpy()
-
-    def residuals_f(self, params):
-        f = params[0]
-        distortion = [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.K.adjust_focal_length(f)
-        rvecs = params[1:1 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = params[1 + 3*self.num_images:].reshape(self.num_images, 3)
-        return self.compute_pts_diff(rvecs, tvecs, distortion)
-
-    def residuals_f_u0_v0_distortion(self, params):
-        f, u0, v0, k1, k2, p1, p2, k3 = params[:8]
-        distortion = np.array([k1, k2, p1, p2, k3])
-        self.K.adjust_alpha_beta_u0_v0(f, f, u0, v0)
-        rvecs = params[8:8 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = params[8 + 3*self.num_images:].reshape(self.num_images, 3)
-        return self.compute_pts_diff(rvecs, tvecs, distortion)
-
-    def residuals_f_distortion(self, params):
-        f, k1, k2, p1, p2, k3 = params[:6]
-        distortion = np.array([k1, k2, p1, p2, k3])
-        self.K.adjust_alpha_beta_u0_v0(
-            f, f,
-            self.calibration_values.w / 2.0,
-            self.calibration_values.h / 2.0)
         rvecs = params[6:6 + 3*self.num_images].reshape(self.num_images, 3)
         tvecs = params[6 + 3*self.num_images:].reshape(self.num_images, 3)
         return self.compute_pts_diff(rvecs, tvecs, distortion)
 
-    def residuals_f_distortionx2(self, params):
-        f, k1, k2 = params[:3]
-        distortion = np.array([k1, k2, 0.0, 0.0, 0.0])
-        self.K.adjust_alpha_beta_u0_v0(
-            f, f,
-            self.calibration_values.w / 2.0,
-            self.calibration_values.h / 2.0)
+    def parse_result_f_u0_v0_keep_distortion(self, result):
+        print("result:  ", result)
+        f, u0, v0 = result.x[:3]
+        self.K.adjust_alpha_beta_u0_v0(f, f, u0, v0)
+        print("f, u0, v0: ", f, f, u0, v0)
+        rvecs = result.x[3:3 + 3*self.num_images].reshape(self.num_images, 3)
+        tvecs = result.x[3 + 3*self.num_images:].reshape(self.num_images, 3)
+        return rvecs, tvecs
+
+    def init_params_f_u0_v0_keep_distortion(self, rvecs, tvecs):
+        return np.hstack([
+            (self.K.intrinsic_matrix[0,0] + self.K.intrinsic_matrix[1,1]) / 2.0,
+            self.K.intrinsic_matrix[0,2], self.K.intrinsic_matrix[1,2],
+            *rvecs, *tvecs])
+
+    def residuals_f_u0_v0_keep_distortion(self, params):
+        f, u0, v0 = params[:3]
+        distortion = self.K.distortion
+        self.K.adjust_alpha_beta_u0_v0(f, f, u0, v0)
         rvecs = params[3:3 + 3*self.num_images].reshape(self.num_images, 3)
         tvecs = params[3 + 3*self.num_images:].reshape(self.num_images, 3)
         return self.compute_pts_diff(rvecs, tvecs, distortion)
-
-    def residuals_f_distortion_only_k3(self, params):
-        f, k3 = params[:2]
-        distortion = self.K.distortion
-        distortion[4] = k3
-        self.K.adjust_alpha_beta_u0_v0(
-            f, f,
-            self.calibration_values.w / 2.0,
-            self.calibration_values.h / 2.0)
-        rvecs = params[2:2 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = params[2 + 3*self.num_images:].reshape(self.num_images, 3)
-        return self.compute_pts_diff(rvecs, tvecs, distortion)
-    
-    def residuals_alpha_beta_u0_v0_distortion(self, params):
-        alpha, beta, u0, v0, k1, k2, p1, p2, k3 = params[:9]
-        distortion = np.array([k1, k2, p1, p2, k3])
-        self.K.adjust_alpha_beta_u0_v0(alpha, beta, u0, v0)
-        rvecs = params[9:9 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = params[9 + 3*self.num_images:].reshape(self.num_images, 3)
-        return self.compute_pts_diff(rvecs, tvecs, distortion)
-    
-    def residuals_alpha_beta_u0_v0_distortion(self, params):
-        alpha, beta, u0, v0, k1, k2, p1, p2, k3 = params[:9]
-        distortion = np.array([k1, k2, p1, p2, k3])
-        self.K.adjust_alpha_beta_u0_v0(alpha, beta, u0, v0)
-        rvecs = params[9:9 + 3*self.num_images].reshape(self.num_images, 3)
-        tvecs = params[9 + 3*self.num_images:].reshape(self.num_images, 3)
-        return self.compute_pts_diff(rvecs, tvecs, distortion)
-
-        # cbr = ChessboardRenderer()
-        # while cbr.running:
-        #     cbr.display_iteration(rt_list)
-        # pygame.quit()        
 
     def compute_pts_diff(self, rvecs, tvecs, distortion):
         pts_diff = torch.zeros(2, self.num_images * self.num_pts)
@@ -423,8 +263,11 @@ class ZhangNonlinear:
                     )
             pts_2d_cart = torch.tensor(pts_2d_cart).squeeze(1).T
             # print("pts_2d_cart: ", pts_2d_cart)
+            image_tensor = self.calibration_values.img_pts_tensor[i].squeeze(1).T
+            # print("image_tensor.shape: ", image_tensor.shape)
+            # print("image_tensor: ", image_tensor)
             pts_diff[:, i * self.num_pts:(i + 1) * self.num_pts] = \
-                pts_2d_cart - self.calibration_values.img_pts_tensor[i]
+                pts_2d_cart - image_tensor
         pts_diff = pts_diff.flatten()
         return pts_diff.numpy()
 
