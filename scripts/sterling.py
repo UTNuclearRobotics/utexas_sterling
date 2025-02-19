@@ -10,7 +10,6 @@ from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
 from utils import *
-from vicreg_dataset import stitch_patches_in_grid
 
 
 class Homography:
@@ -71,81 +70,97 @@ def ComputeVicRegData(
     n_timesteps = robot_data.getNTimesteps()
     if start >= n_timesteps:
         raise ValueError(f"Invalid cur_timestep: {start}. Must be less than {n_timesteps}.")
+    
+    # Define horizontal shifts: 5 left, original, 5 right
+    num_patches = 4
+    shift_step = 128
+    shifts = np.arange(-num_patches, num_patches + 1) * shift_step
 
-    patches = []
-    # Define patch corners in homogeneous coordinates
-    patch_corners = np.array(
-        [
-            [0, patch_size[0], patch_size[0], 0],  # x-coordinates
-            [0, 0, patch_size[1], patch_size[1]],  # y-coordinates
-            [1, 1, 1, 1],  # homogeneous coordinates
-        ]
-    )
+    # Each batch stores patches of the same shift across timesteps
+    patches = [[] for _ in range(len(shifts))]
 
     for timestep in tqdm(range(start, start + history_size), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
-        past_image_test = robot_data.getImageAtTimestep(start - history_size)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
 
         R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3]
 
-        full_bev_scale = 1
-        timestep_patches = []
-        cur_patch = cv2.resize(
-            cv2.warpPerspective(cur_image, H, dsize=patch_size),
-            (patch_size[0] // full_bev_scale, patch_size[1] // full_bev_scale),
-        )
-        if cur_patch.shape != (128,128):
-            cur_patch = cv2.resize(cur_patch,(128,128))
-            timestep_patches.append(cur_patch)
-        else:
-            timestep_patches.append(cur_patch)
+        for shift_idx, shift in enumerate(shifts):
+            # Compute the translated homography
+            T_shift = np.array([[1, 0, shift], [0, 1, 0], [0, 0, 1]])
+            H_shifted = T_shift @ H
 
-        # Copy current image for visualization
-        cur_image_with_patches = cur_image.copy()
+            # Warp and resize the patch
+            cur_patch = cv2.warpPerspective(cur_image, H_shifted, dsize=patch_size)
+            if cur_patch.shape != (128, 128):
+                cur_patch = cv2.resize(cur_patch, (128, 128))
 
-        # --- Draw Past Patches ---
-        for past_hist in range(1, history_size):
-            past_timestep = timestep - past_hist
-            if past_timestep < 0:
-                continue
+            # Store the current patch
+            batch_patches = [cur_patch]
 
-            # Get past image and past odometry data
-            past_image = robot_data.getImageAtTimestep(past_timestep)
-            past_rt = robot_data.getOdomAtTimestep(past_timestep)
-            R_past, T_past = past_rt[:3, :3], past_rt[:3, 3]
+            # --- Draw Past Patches for Each Shifted Homography ---
+            for past_hist in range(1, history_size):
+                past_timestep = timestep - past_hist
+                if past_timestep < 0:
+                    continue
 
-            R_rel = R_cur.T @ R_past  # Past to current rotation
-            T_rel = R_cur.T @ (T_past - T_cur)  # Past to current translation
+                # Get past image and past odometry data
+                past_image = robot_data.getImageAtTimestep(past_timestep)
+                past_rt = robot_data.getOdomAtTimestep(past_timestep)
+                R_past, T_past = past_rt[:3, :3], past_rt[:3, 3]
 
-            # Compute homography for past -> current -> patch
-            H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
-            H_past2patch = H @ H_past2cur
+                R_rel = R_cur.T @ R_past  # Past to current rotation
+                T_rel = R_cur.T @ (T_past - T_cur)  # Past to current translation
 
-            past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
-            
-            if past_patch.shape != (128,128):
-                past_patch = cv2.resize(past_patch,(128,128))
-                timestep_patches.append(past_patch)
-            else:
-                timestep_patches.append(past_patch)
+                # Compute homography for past -> current -> patch
+                H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
+                
+                # Apply past transformation to the *shifted* homography
+                H_past2patch = H_shifted @ H_past2cur  
 
-            # Draw past patch on current image
-            draw_patches_on_image(
-                cur_image_with_patches, np.linalg.inv(H_past2patch), patch_corners, color=(255, 0, 0), thickness=3
-            )
+                past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
+                if past_patch.shape != (128, 128):
+                    past_patch = cv2.resize(past_patch, (128, 128))
+                
+                batch_patches.append(past_patch)
 
-        # Draw current patch on image
-        draw_patches_on_image(cur_image_with_patches, np.linalg.inv(H), patch_corners, color=(0, 255, 0), thickness=2)
-
-        # Show the current image with all patches
-        cv2.imshow("All Patches on Current Image", cur_image_with_patches)
-        cv2.waitKey(1)
-
-        patches.append(timestep_patches)
+            # Store batch (all patches of the same shift)
+            patches[shift_idx].append(batch_patches)
 
     return patches
 
+
+def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
+    # Determine the grid size if not provided
+    if not patches or not patches[0]:  
+        raise ValueError("Patches list is empty or improperly structured.")
+
+    # Extract first actual image from the batch
+    patch_height, patch_width, _ = patches[0][0].shape  # Fix: Use first patch inside batch
+
+    # Determine grid size if not provided
+    if grid_size is None:
+        num_patches = len(patches)  # Include all batches
+        grid_cols = math.ceil(math.sqrt(num_patches))
+        grid_rows = math.ceil(num_patches / grid_cols)
+    else:
+        grid_rows, grid_cols = grid_size
+
+    # Create a blank canvas to hold the grid with gaps
+    grid_height = grid_rows * patch_height + (grid_rows - 1) * gap_size
+    grid_width = grid_cols * patch_width + (grid_cols - 1) * gap_size
+    canvas = np.full((int(grid_height), int(grid_width), 3), gap_color, dtype=np.uint8)
+
+    # Place patches in the grid
+    for idx, batch in enumerate(patches):
+        patch = batch[0]  # Fix: Extract first image from batch
+        row = idx // grid_cols
+        col = idx % grid_cols
+        start_y = row * (patch_height + gap_size)
+        start_x = col * (patch_width + gap_size)
+        canvas[start_y : start_y + patch_height, start_x : start_x + patch_width] = patch
+
+    return canvas
 
 def visualize_pkl(robot_data, H, patch_size=(128, 128)):
     """
@@ -214,20 +229,34 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 1000
+    index = 1800
     history_size = 10
+
+    # Define the translation matrix (shifting 128 pixels to the right in the ground plane)
+    T = np.array([[1, 0, 64], 
+                [0, 1, 0], 
+                [0, 0, 1]])
+    
+    # Compute the new Homography
+    H_new = T @ H  # Apply transformation
+
     vicreg_data = ComputeVicRegData(
-        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
+        H_new, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
     )
 
     print(len(vicreg_data[0]))
 
     # Get the current image from robot_data
     current_image = robot_data.getImageAtTimestep(index + history_size)
-    patch_images = stitch_patches_in_grid(vicreg_data[0])
+    patches0 = stitch_patches_in_grid(vicreg_data[0])
+    patches1 = stitch_patches_in_grid(vicreg_data[1])
+    patches2 = stitch_patches_in_grid(vicreg_data[2])
 
-    cv2.imshow("Original Image", current_image)
-    cv2.imshow("Patches Grid", patch_images)
+    # Display all stitched patch grids dynamically
+    for idx, stitched_image in enumerate(vicreg_data):
+        patches = stitch_patches_in_grid(vicreg_data[idx])
+        cv2.imshow(f"Patches {idx} Grid", patches)
+
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 

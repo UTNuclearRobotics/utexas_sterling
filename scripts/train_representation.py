@@ -79,7 +79,7 @@ class SterlingPaternRepresentation(nn.Module):
             torch.Tensor: The computed loss value.
         """
         patch1, patch2 = batch
-        zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2)
+        zv1, zv2, _, _ = self.forward(patch1, patch2)
 
         # Compute VICReg loss
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)

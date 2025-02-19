@@ -107,7 +107,8 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
         grid_rows, grid_cols = grid_size
 
     # Get the dimensions of the patches (assuming all patches are the same size)
-    patch_height, patch_width, _ = patches[0].shape
+    patch_height, patch_width, _ = patches[0][0].shape  # Extract first patch image
+
 
     # Create a blank canvas to hold the grid with gaps
     grid_height = (grid_rows + 1) * patch_height + grid_rows * gap_size  # +1 for the first patch row

@@ -24,6 +24,68 @@ from termcolor import cprint
 from tqdm import tqdm
 from collections import deque
 
+class ImageStitcher:
+    def estimate_homography(keypoints1, keypoints2, matches, threshold=3):
+        src_points = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        dst_points = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+        H, mask = cv2.findHomography(src_points, dst_points, cv2.RANSAC, threshold)
+        return H, mask
+    
+    def warp_images(img1, img2, H):
+        h1, w1 = img1.shape[:2]
+        h2, w2 = img2.shape[:2]
+
+        corners1 = np.float32([[0, 0], [0, h1], [w1, h1], [w1, 0]]).reshape(-1, 1, 2)
+        corners2 = np.float32([[0, 0], [0, h2], [w2, h2], [w2, 0]]).reshape(-1, 1, 2)
+        warped_corners2 = cv2.perspectiveTransform(corners2, H)
+
+        corners = np.concatenate((corners1, warped_corners2), axis=0)
+        [xmin, ymin] = np.int32(corners.min(axis=0).ravel() - 0.5)
+        [xmax, ymax] = np.int32(corners.max(axis=0).ravel() + 0.5)
+
+        t = [-xmin, -ymin]
+        Ht = np.array([[1, 0, t[0]], [0, 1, t[1]], [0, 0, 1]])
+
+        warped_img2 = cv2.warpPerspective(img2, Ht @ H, (xmax - xmin, ymax - ymin))
+        warped_img2[t[1]:h1 + t[1], t[0]:w1 + t[0]] = img1
+
+        return warped_img2
+    
+    def blend_images(img1, img2):
+        mask = np.where(img1 != 0, 1, 0).astype(np.float32)
+        blended_img = img1 * mask + img2 * (1 - mask)
+        return blended_img.astype(np.uint8)
+
+    def stitch_images(images):
+        # Detect ORB keypoints and descriptors in the images
+        orb = cv2.ORB_create()
+        keypoints1, descriptors1 = orb.detectAndCompute(images[0], None)
+        keypoints2, descriptors2 = orb.detectAndCompute(images[1], None)
+        keypoints3, descriptors3 = orb.detectAndCompute(images[2], None)
+
+        # Match features between the images
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches12 = bf.match(descriptors1, descriptors2)
+        matches23 = bf.match(descriptors2, descriptors3)
+
+        # Sort matches by distance
+        matches12 = sorted(matches12, key=lambda x: x.distance)
+        matches23 = sorted(matches23, key=lambda x: x.distance)
+
+        # Extract location of good matches
+        h12, mask12 = ImageStitcher.estimate_homography(keypoints1, keypoints2, matches12)
+        h23, mask23 = ImageStitcher.estimate_homography(keypoints2, keypoints3, matches23)
+
+        # Warp images
+        warped_img12 = ImageStitcher.warp_images(images[0], images[1], h12)
+        warped_img23 = ImageStitcher.warp_images(images[1], images[2], h23)
+
+        # Combine the two panoramas
+        return warped_img23
+        stitched_img = ImageStitcher.blend_images(warped_img12, images[0])
+
+        return stitched_img
 
 class SynchronizeRosbag:
     """
@@ -115,19 +177,31 @@ class SynchronizeRosbag:
                 img3 = cv2.imdecode(img3_data, cv2.IMREAD_COLOR)
 
                 # Stitch the images together using panoramic view
-                stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-                status, stitched_img = stitcher.stitch([img1, img2, img3])
+<<<<<<< Updated upstream
+                #stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+                #status, stitched_img = stitcher.stitch([img1, img2, img3])
 
+                #if status != cv2.Stitcher_OK:
+                #    print("Error during stitching")
+                #    continue
+
+=======
+                stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+                status, stitched_img = stitcher.stitch([img1, img2])
                 if status != cv2.Stitcher_OK:
                     print("Error during stitching")
                     continue
-
+                
+                # stitched_img = np.hstack((img1, img2, img3))
+                # stitched_img = ImageStitcher.stitch_images([img1, img2, img3])
+                
+>>>>>>> Stashed changes
                 # Encode the stitched image back to compressed format
-                _, stitched_img_encoded = cv2.imencode('.jpg', stitched_img)
+                _, stitched_img_encoded = cv2.imencode('.jpg', img2)
                 stitched_img_data = stitched_img_encoded.tobytes()                
                 
                 # img = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
-                img_msg_fields = {"timestamp": image1_time, "data": stitched_img_data}
+                img_msg_fields = {"timestamp": image1_time, "data": img2_data}
                 self.synced_msgs["image"].append(img_msg_fields)
 
                 # Process IMU message
@@ -184,6 +258,8 @@ class SynchronizeRosbag:
                     self.imu_msgs.popleft()
                 else:
                     self.odom_msgs.popleft()
+
+    
 
     def read_rosbag(self):
         """
@@ -262,6 +338,15 @@ class SynchronizeRosbag:
 
     def save_data(self):
         if self.VISUAL:
+            for i in tqdm(range(len(self.synced_msgs["image"])), desc="Writing video"):
+                img_data = self.synced_msgs["image"][i]["data"]
+                img = np.frombuffer(img_data, np.uint8)
+                img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+                height, width, _ = img.shape
+                img_save_path = os.path.join(self.BAG_PATH, f"image_{i}.jpg")
+                cv2.imwrite(img_save_path, img)
+                print(height, width)
+                
             # Initialize the video writer
             img_data = self.synced_msgs["image"][0]["data"]
             img = np.frombuffer(img_data, np.uint8)

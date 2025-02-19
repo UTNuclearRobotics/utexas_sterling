@@ -16,6 +16,7 @@ from scipy.linalg import solve
 from collections import Counter
 import torch
 import torch.nn.functional as F
+from scipy.optimize import minimize
 
 class GlobalMap:
     def __init__(self, tile_size=1024, channels=3, visualize=False):
@@ -97,37 +98,62 @@ class GlobalMap:
         # Warp images to the tile
         warped_img = cv2.warpPerspective(
             frame_cur, H_tile, (tile_size, tile_size),
-            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT
+            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
         )
         warped_depth = cv2.warpPerspective(
             depth_map, H_tile, (tile_size, tile_size),
-            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=-np.inf
+            flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_REPLICATE
         )
         warped_sharpness = cv2.warpPerspective(
             sharpness_map, H_tile, (tile_size, tile_size),
             flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0
         )
 
+        # Mask Alignment
+        if warped_depth.shape[:2] != warped_img.shape[:2]:
+            warped_depth = cv2.resize(warped_depth, (warped_img.shape[1], warped_img.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+        if warped_sharpness.shape[:2] != warped_img.shape[:2]:
+            warped_sharpness = cv2.resize(warped_sharpness, (warped_img.shape[1], warped_img.shape[0]), interpolation=cv2.INTER_NEAREST)
+
         mask = (warped_img > 0).any(axis=2)
         update_mask = mask & (warped_depth >= tile_zb) & (warped_sharpness > 0)
+
+        # 🔹 **Detect the boundary of update_mask using edge detection**
+        boundary_mask = cv2.Canny(update_mask.astype(np.uint8) * 255, 50, 150)
+        
+        # 🔹 **Adaptive Dilation: Use different kernel sizes based on edge density**
+        close_edges = cv2.dilate(boundary_mask, np.ones((1,1), np.uint8), iterations=1).astype(bool)
+        far_edges = cv2.dilate(boundary_mask, np.ones((3,3), np.uint8), iterations=1).astype(bool)
+        
+        adaptive_mask = np.where(close_edges, close_edges, far_edges)
+
+        # 🔹 **Fix: Ensure `adaptive_mask` is the same size as `warped_img`**
+        if adaptive_mask.shape[:2] != warped_img.shape[:2]:
+            adaptive_mask = cv2.resize(adaptive_mask.astype(np.uint8), (warped_img.shape[1], warped_img.shape[0]), interpolation=cv2.INTER_NEAREST).astype(bool)
+
+        # 🔹 **Expand only boundary pixels from warped_img without blurring**
+        expanded_warped = warped_img.copy()
+        expanded_warped[adaptive_mask] = cv2.dilate(warped_img, np.ones((3,3), np.uint8), iterations=1)[adaptive_mask]
 
         if tile_img.ndim == 3:
             update_mask_3d = np.repeat(update_mask[:, :, np.newaxis], 3, axis=2)
 
-            # 🔹 **Use Past 5 Frames for Blending**
+            # **Use Past Frames for Blending**
             frame_history = tile_data['frame_history']
             frame_history.append(warped_img.copy())  # Store the current frame
 
-            # Compute weighted average of past frames (newer frames get more weight)
+            # Compute weighted average of past frames
             weight_sum = sum((i + 1) for i in range(len(frame_history)))
             blended_img = frame_history[-1].copy()
             for i in range(len(frame_history) - 1):
                 alpha = (i + 1) / weight_sum
                 cv2.addWeighted(frame_history[i], alpha, blended_img, 1 - alpha, 0, blended_img)
 
-            tile_img[update_mask_3d] = blended_img[update_mask_3d]
+            # **Apply expanded_warped only in update_mask regions**
+            tile_img[update_mask_3d] = expanded_warped[update_mask_3d]
         else:
-            tile_img[update_mask] = warped_img[update_mask]
+            tile_img[update_mask] = expanded_warped[update_mask]
 
         tile_zb[update_mask] = warped_depth[update_mask]  # Update z-buffer
 
@@ -188,7 +214,7 @@ class GlobalMap:
         cos_theta = relative_transform[0, 0]
         sin_theta = relative_transform[1, 0]
 
-        # Camera offset from odom (only X matters, forward direction)
+        # Camera offset (only X matters, forward direction)
         camera_offset_x = -0.2286  # Camera is in front (-X direction)
 
         # Adjust translation based on camera offset
@@ -281,8 +307,8 @@ class GlobalMap:
         4. Warp into tile map
         5. Optional: visualize
         """
-        translation_threshold = 0.004
-        rotation_threshold = 0.004
+        translation_threshold = 0.006
+        rotation_threshold = 0.006
 
         if self.H_old is None:
             # First frame: set identity transform, etc.
@@ -314,7 +340,7 @@ class GlobalMap:
             return
         
         H_refined = self.refine_homography(H_relative, frame_cur)
-        self.H_old = self.H_old @ H_relative
+        self.H_old = self.H_old @ H_refined
         self.H_old /= self.H_old[2,2]
 
         # Warp into tile map
@@ -541,8 +567,8 @@ if __name__ == "__main__":
     #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
     H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
-    #robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl"))
-    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_sim_loop_2/panther_recording_sim_loop_2_synced.pkl"))
+    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_20250218_175547/panther_recording_20250218_175547_synced.pkl"))
+    #robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_sim_loop_2/panther_recording_sim_loop_2_synced.pkl"))
 
     scale_start = 490
     bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
@@ -550,8 +576,10 @@ if __name__ == "__main__":
     meters_to_pixels = calculate_meters_to_pixels(bev_image_prev, bev_image_cur,
                                                   robot_data.getOdomAtTimestep(scale_start),
                                                   robot_data.getOdomAtTimestep(scale_start+1))
+    #522 for sim
+    #261 for actual
     # Initialize the global map
-    global_map = GlobalMap(visualize=False)
+    global_map = GlobalMap(visualize=True)
     start, end = 0, 4000
 
     # Check if an image path is provided
@@ -574,7 +602,7 @@ if __name__ == "__main__":
 
                 bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
                 #global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
-                global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=261)
+                global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=522)
 
             except Exception as e:
                 print(f"Error at timestep {timestep}: {e}")
