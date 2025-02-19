@@ -10,6 +10,7 @@ import numpy as np
 import cv2
 from image_stitcher import MapViewer
 from collections import defaultdict
+from scipy.linalg import solve
 
 
 class GlobalCostmap:
@@ -210,25 +211,37 @@ if __name__ == "__main__":
     synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
 
     # Initialize BEV Costmap
-    viz_encoder_path = "bags/panther_recording_20250211_031823/models/panther_recording_20250211_031823_terrain_rep.pt"
-    kmeans_path = "scripts/clusters/sim_kmeans_model.pkl"
-    scaler_path = "scripts/clusters/sim_scaler.pkl"
+    viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
+    kmeans_path = "scripts/clusters/kmeans_model.pkl"
+
+    sim_viz_encoder_path = "bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
+    sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
+    #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
-        0: 0,      #Cluster 0: Grass
-        1: 225,      #Cluster 1: Pavement, grass, shadow
-        2: 225,      #Cluster 2: Pavement
-        3: 0,      #Cluster 3: Grass in shadow
-        #4: 0,      #Cluster 4: Pavement
-        #5: 0,      # Cluster 5: Smooth concrete
-        #6: 225,         # Cluster 6: Grass
-        #7: 50,         # Cluster 7: Aggregate concrete
-        #8: 225,         # Cluster 8: Dark grass, leaves, grass
+        0: 50,      #Cluster 0: Agg, leaves
+        1: 0,      #Cluster 1: Smooth concrete
+        2: 100,      #Cluster 2: Smooth concrete
+        3: 0,      #Cluster 3: Agg
+        4: 225,      #Cluster 4: Aggregate concrete, leaves
+        5: 50,      # Cluster 5: Grass
+        6: 0      # Cluster 6: Smooth concrete
+    }
+    
+    sim_preferences = {
+        # Black: 0, White: 255
+        0: 50,      #Cluster 0: Bricks
+        1: 225,      #Cluster 1: Grass
+        2: 225,      #Cluster 2: Mulch
+        3: 0,      #Cluster 3: Pavement
+        #4: 0,      #Cluster 4: Aggregate concrete, leaves
+        #5: 50,      # Cluster 5: Grass
+        #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences)
-    global_costmap = GlobalCostmap()
+    bev_costmap = BEVCostmap(sim_viz_encoder_path, sim_kmeans_path, sim_preferences)
+    global_costmap = GlobalCostmap(meters_per_pixel=1/(261*2))
 
     # Process each timestep
     robot_data = RobotDataAtTimestep(synced_pkl_path)

@@ -115,19 +115,19 @@ class SynchronizeRosbag:
                 img3 = cv2.imdecode(img3_data, cv2.IMREAD_COLOR)
 
                 # Stitch the images together using panoramic view
-                stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-                status, stitched_img = stitcher.stitch([img1, img2, img3])
+                #stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+                #status, stitched_img = stitcher.stitch([img1, img2, img3])
 
-                if status != cv2.Stitcher_OK:
-                    print("Error during stitching")
-                    continue
+                #if status != cv2.Stitcher_OK:
+                #    print("Error during stitching")
+                #    continue
 
                 # Encode the stitched image back to compressed format
-                _, stitched_img_encoded = cv2.imencode('.jpg', stitched_img)
+                _, stitched_img_encoded = cv2.imencode('.jpg', img2)
                 stitched_img_data = stitched_img_encoded.tobytes()                
                 
                 # img = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
-                img_msg_fields = {"timestamp": image1_time, "data": stitched_img_data}
+                img_msg_fields = {"timestamp": image1_time, "data": img2_data}
                 self.synced_msgs["image"].append(img_msg_fields)
 
                 # Process IMU message

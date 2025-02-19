@@ -163,7 +163,7 @@ class HomographyFromChessboardImage:
             print("RT:  ", RT)
             K = self.get_camera_intrinsics()
             model_rect_3d_hom = compute_model_rectangle_3d_hom(self.theta, self.x0, self.y0, self.x1, self.y1)
-            model_rect_3d_applied_RT = K @ RT @ model_rect_3d_hom.T
+            model_rect_3d_applied_RT = K @ RT[:3] @ model_rect_3d_hom.T
             model_rect_2d = hom_to_cart(model_rect_3d_applied_RT)
             rend_image = draw_points(self.image, model_rect_2d.T, color=(255, 0, 255))
             cv2.imshow("Full BEV", rend_image)
@@ -212,13 +212,13 @@ class HomographyFromChessboardImage:
         
         # Adjusted destination points for better rectification
         dst_points = np.array([
-            [dsize[0] // 2 - 180, 0],   # Top-left
-            [dsize[0] // 2 + 180, 0],  # Top-right
+            [dsize[0] // 2 - 180, 0],           # Top-left
+            [dsize[0] // 2 + 180, 0],           # Top-right
             [2 * dsize[0] // 3, dsize[1] - 1],  # Bottom-right
-            [dsize[0] // 3, dsize[1] - 1]  # Bottom-left 
+            [dsize[0] // 3, dsize[1] - 1]       # Bottom-left 
         ], dtype=np.float32)
         
-        
+
         """
         dst_points = np.array([
             [0, 0],   # Top-left
@@ -235,7 +235,7 @@ class HomographyFromChessboardImage:
         #warped_image = cv2.resize(warped_image, (int(dsize[0] / 2), int(dsize[1] / 2)))
 
         if plot_BEV_full:
-            plot_BEV(self.image, model_rect_2d, warped_image)
+            plot_BEV(image, model_rect_2d, warped_image)
 
         return H, dsize, warped_image
     

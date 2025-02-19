@@ -3,7 +3,6 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-
 class TerrainDataset(Dataset):
     def __init__(self, patches, transform = None, dtype=torch.float32, incl_orientation = False):
         # Convert each patch to a tensor and ensure they are resized or padded if necessary
@@ -18,8 +17,8 @@ class TerrainDataset(Dataset):
         self.incl_orientation = incl_orientation  # If False, remove last 4 IMU columns
 
         # Ensure number of patches and IMU data match
-        if len(self.patches) != len(self.imu_data):
-            raise ValueError(f"Mismatch: {len(self.patches)} patches vs {len(self.imu_data)} IMU samples")
+        #if len(self.patches) != len(self.imu_data):
+        #    raise ValueError(f"Mismatch: {len(self.patches)} patches vs {len(self.imu_data)} IMU samples")
 
         self.transform = transform
         # Compute normalization statistics (global min, max, mean, std)

@@ -348,7 +348,7 @@ class Cluster:
         pca_final = PCA(n_components=2, whiten=True, random_state=42)
         reduced_vectors = pca_final.fit_transform(intermediate_vectors)
 
-        # Step 3: Compute centroids in PCA-reduced space (Fixing the issue)
+        # Step 3: Compute centroids in PCA-reduced space
         reduced_centroids = np.array([
             reduced_vectors[min_indices == i].mean(axis=0) for i in range(k)
         ])
@@ -409,7 +409,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 12)
-    k_values = 3
+    k_values = 4
     iterations = 1000
 
     if isinstance(k_values, range):

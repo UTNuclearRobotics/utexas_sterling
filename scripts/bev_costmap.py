@@ -193,7 +193,7 @@ if __name__ == "__main__":
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
 
-    sim_encoder_path = "bags/panther_recording_sim_loop_2/models/panther_recording_sim_loop_2_terrain_rep.pt"
+    sim_encoder_path = "bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
     #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
@@ -210,10 +210,10 @@ if __name__ == "__main__":
 
     sim_preferences = {
         # Black: 0, White: 255
-        0: 0,      #Cluster 0: Conc
+        0: 50,      #Cluster 0: Bricks
         1: 225,      #Cluster 1: Grass
-        2: 0,      #Cluster 2: Conc
-        #3: 225,      #Cluster 3: Agg
+        2: 225,      #Cluster 2: Mulch
+        3: 0,      #Cluster 3: Pavement
         #4: 0,      #Cluster 4: Aggregate concrete, leaves
         #5: 50,      # Cluster 5: Grass
         #6: 50      # Cluster 6: Smooth concrete
@@ -221,6 +221,14 @@ if __name__ == "__main__":
 
     bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
 
+    global_img = cv2.imread("full_map.png")
+    costmap = bev_costmap.BEV_to_costmap(global_img, 64)
+    visualize = bev_costmap.visualize_costmap(costmap, 64)
+    cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
+    cv2.imshow("Cost Map", visualize)
+    cv2.waitKey(0)
+    cv2.imwrite("costmap_from_global.png", visualize)
+"""
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
@@ -234,12 +242,4 @@ if __name__ == "__main__":
         cv2.waitKey(10)
 
 # Building costmap from global map only
-"""
-    global_img = cv2.imread("full_map.png")
-    costmap = bev_costmap.BEV_to_costmap(global_img, 64)
-    visualize = bev_costmap.visualize_costmap(costmap, 64)
-    cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
-    cv2.imshow("Cost Map", visualize)
-    cv2.waitKey(0)
-    cv2.imwrite("costmap_from_global.png", visualize)
 """
