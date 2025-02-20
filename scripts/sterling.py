@@ -51,7 +51,7 @@ class FiddlyBEVHomography:
 
 
 def ComputeVicRegData(
-    H, K, RT, plane_normal, plane_distance, robot_data, history_size=10, patch_size=(128, 128), start=0
+    H, K, RT, plane_normal, plane_distance, robot_data, history_size=10, patch_size=(128, 128), start=0, visualize = False
 ):
     """
     Preprocesses the robot data to compute multiple viewpoints
@@ -72,12 +72,17 @@ def ComputeVicRegData(
         raise ValueError(f"Invalid cur_timestep: {start}. Must be less than {n_timesteps}.")
     
     # Define horizontal shifts: 5 left, original, 5 right
-    num_patches = 4
+    num_patches = 3
     shift_step = 128
-    shifts = np.arange(-num_patches, num_patches + 1) * shift_step
+    shifts = np.arange(-(num_patches), num_patches + 2) * shift_step
 
     # Each batch stores patches of the same shift across timesteps
     patches = [[] for _ in range(len(shifts))]
+
+    # For visualization, we'll draw patches on the image from the first timestep
+    annotated_image = None
+    if visualize:
+        annotated_image = robot_data.getImageAtTimestep(start).copy()
 
     for timestep in tqdm(range(start, start + history_size), desc="Processing patches at timesteps"):
         cur_image = robot_data.getImageAtTimestep(timestep)
@@ -94,6 +99,10 @@ def ComputeVicRegData(
             cur_patch = cv2.warpPerspective(cur_image, H_shifted, dsize=patch_size)
             if cur_patch.shape != (128, 128):
                 cur_patch = cv2.resize(cur_patch, (128, 128))
+
+            # Visualize the patch on the first timestep's image
+            if visualize and timestep == start:
+                annotated_image = draw_points(annotated_image, H_shifted, patch_size, color=(0, 255, 0), thickness=2)
 
             # Store the current patch
             batch_patches = [cur_patch]
@@ -127,6 +136,9 @@ def ComputeVicRegData(
             # Store batch (all patches of the same shift)
             patches[shift_idx].append(batch_patches)
 
+    if visualize:
+        return patches, annotated_image
+    
     return patches
 
 
@@ -232,31 +244,19 @@ if __name__ == "__main__":
     index = 1800
     history_size = 10
 
-    # Define the translation matrix (shifting 128 pixels to the right in the ground plane)
-    T = np.array([[1, 0, 64], 
-                [0, 1, 0], 
-                [0, 0, 1]])
-    
-    # Compute the new Homography
-    H_new = T @ H  # Apply transformation
-
-    vicreg_data = ComputeVicRegData(
-        H_new, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index
+    vicreg_data, imagewithpatches = ComputeVicRegData(
+        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index, visualize=True
     )
-
-    print(len(vicreg_data[0]))
 
     # Get the current image from robot_data
     current_image = robot_data.getImageAtTimestep(index + history_size)
-    patches0 = stitch_patches_in_grid(vicreg_data[0])
-    patches1 = stitch_patches_in_grid(vicreg_data[1])
-    patches2 = stitch_patches_in_grid(vicreg_data[2])
 
     # Display all stitched patch grids dynamically
     for idx, stitched_image in enumerate(vicreg_data):
         patches = stitch_patches_in_grid(vicreg_data[idx])
         cv2.imshow(f"Patches {idx} Grid", patches)
 
+    cv2.imshow("Current Image with patches", imagewithpatches)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 

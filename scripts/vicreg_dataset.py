@@ -12,85 +12,97 @@ from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
 from utils import *
 
-
 def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_size=10, patch_size=(128, 128)):
+    """
+    Highly optimized version for high-speed processing with numpy vectorization and batch operations.
+    """
     n_timesteps = robot_data.getNTimesteps()
     patches = []
 
-    for timestep in tqdm(range(history_size, n_timesteps), desc="Processing patches at timesteps"):
-        cur_image = robot_data.getImageAtTimestep(timestep)
-        cur_rt = robot_data.getOdomAtTimestep(timestep)
-        timestep_patches = []
+    # Define shifts
+    num_patches = 3  
+    shift_step = 128  
+    shifts = np.arange(-(num_patches), num_patches + 2) * shift_step  
+    n_shifts = len(shifts)
 
-        # Adjust the current translation for the camera offset
-        R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3]
-        camera_offset = np.array([0.2286, 0, 0.5715])  # Static transform offset from odometry to camera frame
+    # Vectorized shift matrices
+    T_shifts = np.tile(np.eye(3), (n_shifts, 1, 1))
+    T_shifts[:, 0, 2] = shifts  
+    H_shifted_all = np.matmul(T_shifts, H)  
 
-        T_cur += camera_offset
+    # Static camera offset
+    camera_offset = np.array([0.2286, 0, 0.5715])  
 
-        # Get current patch
-        cur_patch = cv2.warpPerspective(cur_image, H, dsize=patch_size)
-        if cur_patch.shape != patch_size:
-            cur_patch = cv2.resize(cur_patch, patch_size)
-        timestep_patches.append(cur_patch)
+    # Precompute patch bounding box corners
+    patch_corners = np.array([
+        [0, 0], [patch_size[0], 0], 
+        [patch_size[0], patch_size[1]], [0, patch_size[1]]
+    ], dtype=np.float32).reshape(-1, 1, 2)  
 
-        # Define current bounding box in image space
-        cur_bbox = [0, 0, patch_size[0], patch_size[1]]  # [xmin, ymin, xmax, ymax]
+    # Preload all images and odometry data
+    images = [robot_data.getImageAtTimestep(t) for t in range(n_timesteps)]
+    odometry = [robot_data.getOdomAtTimestep(t) for t in range(n_timesteps)]
 
+    for timestep in tqdm(range(history_size, n_timesteps), desc="Processing patches"):
+        cur_image = images[timestep]
+        cur_rt = odometry[timestep]
+        R_cur, T_cur = cur_rt[:3, :3], cur_rt[:3, 3] + camera_offset  
 
-        # --- Draw Past Patches ---
-        for past_hist in range(1, history_size):
-            past_timestep = timestep - past_hist
-            if past_timestep < 0:
-                continue
+        # Warp current image for all shifts in batch
+        cur_patches = np.array([
+            cv2.warpPerspective(cur_image, H_shifted, dsize=patch_size) 
+            for H_shifted in H_shifted_all
+        ])
 
-            # Get past image and past odometry data
-            past_image = robot_data.getImageAtTimestep(past_timestep)
-            past_rt = robot_data.getOdomAtTimestep(past_timestep)
-            R_past, T_past = past_rt[:3, :3], past_rt[:3, 3]
-            T_past += camera_offset
+        for shift_idx, H_shifted in enumerate(H_shifted_all):
+            timestep_patches = [cur_patches[shift_idx]]
+            past_patches = []
 
-            R_rel = R_cur.T @ R_past  # Past to current rotation
-            T_rel = R_cur.T @ (T_past - T_cur) # Past to current translation
+            valid_past_timesteps = range(max(0, timestep - history_size + 1), timestep)
+            past_images = [images[t] for t in valid_past_timesteps]
+            past_rts = [odometry[t] for t in valid_past_timesteps]
 
-            # Compute homography for past -> current -> patch
-            H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
-            H_past2patch = H @ H_past2cur
+            for past_image, past_rt in zip(past_images, past_rts):
+                R_past, T_past = past_rt[:3, :3], past_rt[:3, 3] + camera_offset  
+                R_rel = R_cur.T @ R_past  
+                T_rel = R_cur.T @ (T_past - T_cur)  
 
-            # Transform past patch bounding box to current coordinates
-            past_bbox_corners = np.array([
-                [0, 0],
-                [patch_size[0], 0],
-                [patch_size[0], patch_size[1]],
-                [0, patch_size[1]]
-            ], dtype=np.float32).reshape(-1, 1, 2)
+                H_past2cur = compute_homography_from_rt(K, R_rel, T_rel, plane_normal, plane_distance)
+                H_past2patch = H_shifted @ H_past2cur  
 
-            transformed_corners = cv2.perspectiveTransform(past_bbox_corners, H_past2cur)
-            x_min = int(np.min(transformed_corners[:, 0, 0]))
-            y_min = int(np.min(transformed_corners[:, 0, 1]))
-            x_max = int(np.max(transformed_corners[:, 0, 0]))
-            y_max = int(np.max(transformed_corners[:, 0, 1]))
-            past_bbox = [x_min, y_min, x_max, y_max]
+                # Transform past patch bounding box
+                transformed_corners = cv2.perspectiveTransform(patch_corners, H_past2cur)
 
-            # Check if the current patch overlaps with the past patch
-            if does_overlap(cur_bbox, past_bbox):
-                # Add the past patch if overlapping
-                past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
-                if past_patch.shape != patch_size:
-                    past_patch = cv2.resize(past_patch, patch_size)
-                timestep_patches.append(past_patch)
+                # Compute bounding box limits efficiently
+                bbox_coords = transformed_corners[:, 0, :].astype(int)
+                x_min, y_min = np.maximum(np.min(bbox_coords, axis=0), 0)
+                x_max, y_max = np.minimum(np.max(bbox_coords, axis=0), past_image.shape[1::-1])
+                img_height, img_width = past_image.shape[:2]
+                
+                past_bbox = [x_min, y_min, x_max, y_max]
 
-        patches.append(timestep_patches)
+                if does_overlap([0, 0, patch_size[0], patch_size[1]], past_bbox, img_width, img_height):
+                    past_patch = cv2.warpPerspective(past_image, H_past2patch, dsize=patch_size)
+                    past_patches.append(past_patch)
 
+            timestep_patches.extend(past_patches)
+            patches.append(timestep_patches)
+    
     return patches
 
-def does_overlap(cur_bbox, past_bbox):
+def does_overlap(cur_bbox, past_bbox, img_width, img_height):
     """
-    Checks if two bounding boxes overlap.
+    Checks if two bounding boxes overlap and ensures they are within image bounds.
     """
     x_min_cur, y_min_cur, x_max_cur, y_max_cur = cur_bbox
     x_min_past, y_min_past, x_max_past, y_max_past = past_bbox
 
+    # Check if bounding boxes are within image bounds
+    if (x_min_cur < 0 or x_max_cur > img_width or y_min_cur < 0 or y_max_cur > img_height or
+        x_min_past < 0 or x_max_past > img_width or y_min_past < 0 or y_max_past > img_height):
+        return False  # Bounding box is out of image bounds
+
+    # Check if bounding boxes overlap
     return not (
         x_max_cur < x_min_past or x_max_past < x_min_cur or
         y_max_cur < y_min_past or y_max_past < y_min_cur
@@ -107,7 +119,7 @@ def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255,
         grid_rows, grid_cols = grid_size
 
     # Get the dimensions of the patches (assuming all patches are the same size)
-    patch_height, patch_width, _ = patches[0][0].shape  # Extract first patch image
+    patch_height, patch_width, _ = patches[0].shape  # Extract first patch image
 
 
     # Create a blank canvas to hold the grid with gaps
@@ -145,7 +157,7 @@ def validate_vicreg_data(robot_data, vicreg_data):
         if key == 113:  # Hitting 'q' quits the program
             counter = len(vicreg_data)
         elif key == 82:  # Up arrow key
-            counter += history_size
+            counter += len(vicreg_data[0])
         else:
             counter += 1
     exit(0)

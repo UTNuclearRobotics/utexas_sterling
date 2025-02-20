@@ -179,26 +179,48 @@ def hom_to_cart(points):
     return points
 
 
-def draw_points(image, points, color=(0, 255, 0), radius=5, thickness=-1):
+def draw_points(image, H, patch_size=(128, 128), color=(0, 255, 0), thickness=2):
     """
-    Draw a list of points as circles on an image.
+    Draw the boundaries of patches extracted via homography on the original image.
 
     Args:
         image (numpy.ndarray): The input image (BGR format).
-        points (list of tuples): List of (x, y) coordinates to draw as circles.
-        color (tuple): Color of the circles in BGR format (default: green).
-        radius (int): Radius of the circles (default: 5 pixels).
-        thickness (int): Thickness of the circles (-1 for filled, >0 for border thickness).
+        H (numpy.ndarray): Homography matrix used to extract the patch.
+        patch_size (tuple): Size of the patch (width, height).
+        color (tuple): Color of the rectangle in BGR format (default: green).
+        thickness (int): Thickness of the rectangle border (default: 2 pixels).
 
-    Returns:255
-        numpy.ndarray: The image with the points drawn.
+    Returns:
+        numpy.ndarray: The image with patch boundaries drawn.
     """
     # Make a copy of the image to avoid modifying the original
     output_image = image.copy()
 
-    # Iterate over the list of points and draw each as a circle
-    for point in points:
-        cv2.circle(output_image, tuple(map(int, tuple(point))), radius, color, thickness)
+    # Define the corners of the patch in the patch coordinate system (homogeneous coordinates)
+    w, h = patch_size
+    patch_corners = np.array([
+        [0, 0, 1],  # Top-left
+        [w, 0, 1],  # Top-right
+        [w, h, 1],  # Bottom-right
+        [0, h, 1]   # Bottom-left
+    ], dtype=np.float32).T  # Shape: (3, 4)
+
+    # Compute the inverse homography to map patch corners back to the original image
+    H_inv = np.linalg.inv(H)
+    image_corners = H_inv @ patch_corners  # Shape: (3, 4)
+    
+    # Normalize homogeneous coordinates (x, y, w) -> (x/w, y/w)
+    image_corners = image_corners[:2] / image_corners[2:3]  # Shape: (2, 4)
+    image_corners = image_corners.T  # Shape: (4, 2), each row is (x, y)
+
+    # Convert to integer coordinates for drawing
+    image_corners = image_corners.astype(int)
+
+    # Draw the rectangle by connecting the corners
+    for i in range(4):
+        pt1 = tuple(image_corners[i])
+        pt2 = tuple(image_corners[(i + 1) % 4])  # Connect to the next corner, wrap around at 4
+        cv2.line(output_image, pt1, pt2, color, thickness)
 
     return output_image
 
