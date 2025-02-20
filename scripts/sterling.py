@@ -141,6 +141,101 @@ def ComputeVicRegData(
     
     return patches
 
+def crop_bottom_to_content(img, threshold=1):
+    """
+    Crops the bottom of the image so that the last row containing
+    any pixel value above the threshold becomes the new bottom.
+    
+    Parameters:
+      img: A color image (NumPy array) in BGR or RGB.
+      threshold: Pixel intensity threshold (default 1); 
+                 rows with all pixel values <= threshold are considered black.
+    
+    Returns:
+      Cropped image.
+    """
+    # Convert to grayscale for simplicity.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    
+    h, w = gray.shape
+    # Initialize the crop index to h (no crop if no black bottom is found).
+    crop_row = h  
+    # Iterate from the bottom row upward.
+    for row in range(h - 1, -1, -1):
+        # If at least one pixel in this row exceeds the threshold,
+        # then this row is part of the actual image.
+        if np.any(gray[row, :] > threshold):
+            crop_row = row + 1  # +1 so that this row is included
+            break
+    return img[:crop_row, :]
+
+def BEV_full(
+    H, patch_size=(128, 128), timestep=0, visualize = False
+):
+    """
+    Preprocesses the robot data to compute multiple viewpoints
+    of the same patch for each timestep.
+    Args:
+        H: Homography matrix.
+        K: Camera intrinsic matrix.
+        RT: Rotation and translation matrix.
+        robot_data: Instance of RobotDataAtTimestep.
+        history_size: Number of timesteps to consider in the past.
+        patch_size: Size of the patch (width, height).
+    Returns:
+        patches: List of patches for each timestep.
+    """
+    
+    # Define horizontal shifts: 5 left, original, 5 right
+    num_patches_x = 6
+    num_patches_y = 10
+    shift_step = 128
+    shift_x = np.arange(-(num_patches_x), num_patches_x + 2) * shift_step
+    shift_y = np.arange(-2, num_patches_y) * shift_step
+
+    # For visualization, if desired.
+    annotated_image = None
+    if visualize:
+        annotated_image = robot_data.getImageAtTimestep(timestep).copy()
+
+    # Process a single timestep. (You could loop over history_size and stitch each one.)
+    # Here we'll stitch for each timestep and append to a list.
+    cur_image = robot_data.getImageAtTimestep(timestep)
+    # List to hold each row of patches.
+    row_images = []
+    # Loop over y-shifts (vertical order; top-to-bottom)
+    for sy in sorted(shift_y, reverse=True):
+        col_patches = []
+        # Loop over x-shifts (horizontal order; left-to-right)
+        for sx in sorted(shift_x, reverse=True):
+            # Create a translation matrix for the given shift
+            T_shift = np.array([[1, 0, sx],
+                                [0, 1, sy],
+                                [0, 0, 1]])
+            # Shift the homography
+            H_shifted = T_shift @ H
+
+            # Warp the current image patch using the shifted homography
+            cur_patch = cv2.warpPerspective(cur_image, H_shifted, dsize=patch_size)
+            if cur_patch.shape[:2] != patch_size:
+                cur_patch = cv2.resize(cur_patch, patch_size)
+
+            col_patches.append(cur_patch)
+
+            if visualize and timestep == timestep:
+                annotated_image = draw_points(
+                    annotated_image, H_shifted, patch_size, color=(0, 255, 0), thickness=2
+                )
+        # Concatenate patches in the current row horizontally.
+        row_image = cv2.hconcat(col_patches)
+        row_images.append(row_image)
+    # Now vertically concatenate all rows to form the full birds-eye view.
+    stitched_image = cv2.vconcat(row_images)
+    stitched_image = crop_bottom_to_content(stitched_image)
+
+    if visualize:
+        return stitched_image, annotated_image
+    return stitched_image
 
 def stitch_patches_in_grid(patches, grid_size=None, gap_size=10, gap_color=(255, 255, 255)):
     # Determine the grid size if not provided
@@ -241,20 +336,19 @@ if __name__ == "__main__":
         case _ if args.vis_pkl:
             visualize_pkl(robot_data, H)
 
-    index = 1800
+    index = 10
     history_size = 10
 
-    vicreg_data, imagewithpatches = ComputeVicRegData(
-        H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index, visualize=True
+    #vicreg_data, imagewithpatches = ComputeVicRegData(
+    #    H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index, visualize=True
+    #)
+    all_patches, imagewithpatches = BEV_full(
+    H, patch_size=(128,128), timestep=index, visualize=True
     )
-
+    print(all_patches)
     # Get the current image from robot_data
     current_image = robot_data.getImageAtTimestep(index + history_size)
-
-    # Display all stitched patch grids dynamically
-    for idx, stitched_image in enumerate(vicreg_data):
-        patches = stitch_patches_in_grid(vicreg_data[idx])
-        cv2.imshow(f"Patches {idx} Grid", patches)
+    cv2.imshow("Stitched View", all_patches)
 
     cv2.imshow("Current Image with patches", imagewithpatches)
     cv2.waitKey(0)

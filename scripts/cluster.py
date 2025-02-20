@@ -143,7 +143,7 @@ class Cluster:
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        #representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
+        representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         # Apply K-means clustering with sklearn
         kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
@@ -227,7 +227,7 @@ class Cluster:
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        #representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
+        representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         silhouette_scores = []
         wcss_values = []
@@ -339,7 +339,7 @@ class Cluster:
         representation_vectors_np = representation_vectors.detach().cpu().numpy()
         #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        #representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
+        representation_vectors_np = normalize(representation_vectors_np, norm='l2', axis=1)
 
         # Step 2: Apply PCA for dimensionality reduction (First to 20D, then to 2D)
         pca_high = PCA(n_components=20, random_state=42)
@@ -408,8 +408,8 @@ if __name__ == "__main__":
         model_path=pt_path,
     )
 
-    #k_values = range(2, 12)
-    k_values = 4
+    k_values = range(2, 12)
+    #k_values = 7
     iterations = 1000
 
     if isinstance(k_values, range):

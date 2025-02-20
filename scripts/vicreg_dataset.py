@@ -20,9 +20,9 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
     patches = []
 
     # Define shifts
-    num_patches = 3  
+    num_patches = 2  
     shift_step = 128  
-    shifts = np.arange(-(num_patches), num_patches + 2) * shift_step  
+    shifts = np.arange(-(num_patches), num_patches + 1) * shift_step  
     n_shifts = len(shifts)
 
     # Vectorized shift matrices

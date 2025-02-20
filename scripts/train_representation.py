@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # Create dataset and dataloader
     patches_pkl = load_bag_pkl(args.bag, "vicreg")
-    IPT_pkl = load_bag_pkl(args.bag, "synced")
+    #IPT_pkl = load_bag_pkl(args.bag, "synced")
 
     # Define the augmentation pipeline
     augment_transform = v2.Compose([

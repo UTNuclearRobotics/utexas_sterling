@@ -6,9 +6,8 @@ from torchvision import transforms
 class TerrainDataset(Dataset):
     def __init__(self, patches, transform = None, dtype=torch.float32, incl_orientation = False):
         # Convert each patch to a tensor and ensure they are resized or padded if necessary
-        self.patches = [
-            torch.tensor(np.array(patch), dtype=dtype).permute(0, 3, 1, 2)  # (N_PATCHES, 3, 128, 128)
-            for patch in patches]
+        self.raw_patches = patches
+        self.dtype = dtype
         #self.robot_data = synced_data
         
         # Extract IMU and Odom data
@@ -33,11 +32,12 @@ class TerrainDataset(Dataset):
         return (imu_sample - self.imu_min) / (self.imu_max - self.imu_min + 1e-7)
 
     def __len__(self):
-        return len(self.patches)
+        return len(self.raw_patches)
 
     def __getitem__(self, idx):
-        sample = self.patches[idx]
+        patch_array = np.array(self.raw_patches[idx])
         #imu_sample = self.imu_data[idx]
+        sample = torch.tensor(patch_array, dtype=self.dtype).permute(0, 3, 1, 2)
         num_patches = sample.shape[0]
 
         # Ensure there are enough patches to sample from
