@@ -98,56 +98,63 @@ class GlobalCostmap:
 
     def process_odometry_and_update(self, local_costmap, odom_matrix):
         """
-        Processes odometry data, places local costmap into the correct tile, and updates accordingly.
+        Processes odometry data, places the local costmap into the correct global tile, and updates accordingly.
         """
-        # Extract translation from odometry
+        # Extract translation (note the sign flip) and convert to pixel coordinates.
         t_x, t_y = -odom_matrix[1, 3], odom_matrix[0, 3]
-
-        # Convert meters to pixels
         x_pixel = int(t_x / self.meters_per_pixel) + self.global_origin_x
         y_pixel = int(t_y / self.meters_per_pixel) + self.global_origin_y
 
-        # Extract yaw
+        # Extract yaw (rotation) in degrees.
         cos_theta = odom_matrix[0, 0]
         sin_theta = odom_matrix[1, 0]
         theta_degrees = np.degrees(np.arctan2(sin_theta, cos_theta))
 
-        # Convert local costmap to grayscale if needed
-        if len(local_costmap.shape) == 3:
+        # Convert to grayscale if needed.
+        if local_costmap.ndim == 3:
             local_costmap = cv2.cvtColor(local_costmap, cv2.COLOR_BGR2GRAY)
 
-        # Get costmap dimensions
         h, w = local_costmap.shape
         num_cells_x = w // self.cell_size
         num_cells_y = h // self.cell_size
 
-        # Rotation matrix
-        rotation_matrix = np.array([
-            [cos_theta, sin_theta],  
-            [-sin_theta, cos_theta]
-        ])
+        # Build the rotation matrix for mapping local costmap positions to global positions.
+        rotation_matrix = np.array([[cos_theta, -sin_theta],
+                                    [sin_theta,  cos_theta]])
 
-        # Process and update costmap in tiles
+        # Vectorize computation of local positions.
+        # Create a grid of cell indices.
+        j_idx, i_idx = np.meshgrid(np.arange(num_cells_x), np.arange(num_cells_y))
+        # Compute local cell center positions relative to the center of the costmap.
+        local_pos_x = (j_idx - num_cells_x // 2) * self.cell_size
+        local_pos_y = (num_cells_y // 2 - i_idx) * self.cell_size
+        local_positions = np.stack((local_pos_x, local_pos_y), axis=-1)  # shape: (num_cells_y, num_cells_x, 2)
+
+        # Rotate all local positions at once.
+        rotated_positions = (rotation_matrix @ local_positions.reshape(-1, 2).T).T.reshape(num_cells_y, num_cells_x, 2)
+        # Convert to global pixel coordinates (and then align to cell boundaries).
+        cell_coords_x = ((x_pixel + rotated_positions[..., 0].astype(np.int32)) // self.cell_size) * self.cell_size
+        cell_coords_y = ((y_pixel + rotated_positions[..., 1].astype(np.int32)) // self.cell_size) * self.cell_size
+
+        # Pre-compute the rotation matrix for individual cell rotation.
+        cell_center = (self.cell_size // 2, self.cell_size)  # bottom-center point
+        rot_mat = cv2.getRotationMatrix2D(cell_center, theta_degrees, 1.0)
+
+        # Process each cell.
         for i in range(num_cells_y):
             for j in range(num_cells_x):
+                # Extract the current cell.
                 cell = local_costmap[i * self.cell_size: (i + 1) * self.cell_size,
-                                     j * self.cell_size: (j + 1) * self.cell_size]
+                                    j * self.cell_size: (j + 1) * self.cell_size]
+                # Rotate the cell.
+                rotated_cell = cv2.warpAffine(cell, rot_mat, (self.cell_size, self.cell_size),
+                                                flags=cv2.INTER_NEAREST)
+                # Post-process: assign maximum value where rotated cell is 0.
+                rotated_cell[rotated_cell == 0] = np.max(rotated_cell)
 
-                local_pos = np.array([
-                    (j - num_cells_x // 2) * self.cell_size,  
-                    (i - num_cells_y // 2) * self.cell_size
-                ])
-                rotated_pos = rotation_matrix @ local_pos
-                cell_x = x_pixel + int(rotated_pos[0])
-                cell_y = y_pixel - int(rotated_pos[1])
-
-                cell_x = (cell_x // self.cell_size) * self.cell_size
-                cell_y = (cell_y // self.cell_size) * self.cell_size
-
-                rotated_cell = self.rotate_cell_bottom_center(cell, theta_degrees)
-
-                # Update the correct tile
-                self.update_cell(rotated_cell, (cell_x, cell_y))
+                # Update the corresponding tile in the global map.
+                # Use the precomputed coordinates.
+                self.update_cell(rotated_cell, (cell_coords_x[i, j], cell_coords_y[i, j]))
 
     def rotate_cell_bottom_center(self, cell, theta_degrees):
         """
@@ -195,8 +202,8 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    H, dsize,_ = chessboard_homography.plot_BEV_full(image)
+    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
     parser = argparse.ArgumentParser(description="Generate and update a global BEV cost map.")
     parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized pickle file inside.")
     args = parser.parse_args()
@@ -214,19 +221,19 @@ if __name__ == "__main__":
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
 
-    sim_viz_encoder_path = "bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
+    sim_encoder_path = "bags/2_20_ahg_courtyard_1_testing/models/2_20_ahg_courtyard_1_testing_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
     #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
-        0: 50,      #Cluster 0: Agg, leaves
+        0: 175,      #Cluster 0: Dark concrete, leaves, grass
         1: 0,      #Cluster 1: Smooth concrete
-        2: 100,      #Cluster 2: Smooth concrete
-        3: 0,      #Cluster 3: Agg
-        4: 225,      #Cluster 4: Aggregate concrete, leaves
-        5: 50,      # Cluster 5: Grass
-        6: 0      # Cluster 6: Smooth concrete
+        2: 50,      #Cluster 2: Dark bricks, some grass
+        3: 0,      #Cluster 3: Aggregate concrete, smooth concrete
+        4: 225,      #Cluster 4: Grass
+        5: 225,      # Cluster 5: Leaves, Grass
+        #6: 0      # Cluster 6: Smooth concrete
     }
     
     sim_preferences = {
@@ -240,8 +247,8 @@ if __name__ == "__main__":
         #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(sim_viz_encoder_path, sim_kmeans_path, sim_preferences)
-    global_costmap = GlobalCostmap(meters_per_pixel=1/(261*2))
+    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, preferences)
+    global_costmap = GlobalCostmap(tile_size=2560, cell_size=128, meters_per_pixel=1/(261*2))
 
     # Process each timestep
     robot_data = RobotDataAtTimestep(synced_pkl_path)
@@ -250,11 +257,10 @@ if __name__ == "__main__":
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing costmaps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         odom_cur = robot_data.getOdomAtTimestep(timestep)
-        robot_x, robot_y = -odom_cur[1, 3], -odom_cur[0, 3]
 
-        bev_img = cv2.warpPerspective(cur_img, H, dsize)
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
-        visualize_cost = bev_costmap.visualize_costmap(costmap, 64)
+        bev_img = chessboard_homography.plot_BEV_full(cur_img, H,patch_size=(128,128))
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
+        visualize_cost = bev_costmap.visualize_costmap(costmap, 128)
 
         global_costmap.process_odometry_and_update(visualize_cost, odom_cur)
 

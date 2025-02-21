@@ -73,7 +73,7 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
                 # Transform past patch bounding box
                 transformed_corners = cv2.perspectiveTransform(patch_corners, H_past2cur)
 
-                # Compute bounding box limits efficiently
+                # Compute bounding box limits
                 bbox_coords = transformed_corners[:, 0, :].astype(int)
                 x_min, y_min = np.maximum(np.min(bbox_coords, axis=0), 0)
                 x_max, y_max = np.minimum(np.max(bbox_coords, axis=0), past_image.shape[1::-1])
@@ -161,7 +161,6 @@ def validate_vicreg_data(robot_data, vicreg_data):
         else:
             counter += 1
     exit(0)
-
 
 if __name__ == "__main__":
     script_path = os.path.abspath(__file__)

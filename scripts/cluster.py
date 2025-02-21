@@ -100,7 +100,7 @@ class PatchRenderer:
 
 
 class Cluster:
-    def __init__(self, data_pkl_path, model_path, batch_size=8192):
+    def __init__(self, data_pkl_path, model_path, batch_size=256):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load dataset
@@ -119,11 +119,15 @@ class Cluster:
         dataset = TerrainDataset(patches=data_pkl)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        # TODO: actually batch this so we don't run out of memory
-        batch = next(iter(dataloader))
-        patch1, _ = batch
+        all_patches_list = []
+        for batch in dataloader:
+            # Each batch is a tuple (patch1, patch2); we only need patch1.
+            patch1, _ = batch  # patch1 shape: [batch_size, channels, height, width]
+            all_patches_list.append(patch1.cpu())  # Append to list, move to CPU if needed
 
-        self.patches = patch1.to("cpu")
+        # Concatenate all batches into a single tensor
+        all_patches_tensor = torch.cat(all_patches_list, dim=0)
+        self.patches = all_patches_tensor
 
     def generate_clusters(
         self,
@@ -139,16 +143,23 @@ class Cluster:
             iterations (int): Number of iterations for K-means.
         """
         # K Means
-        representation_vectors = self.model.encode_single_patch(self.patches)
-        representation_vectors_np = representation_vectors.detach().cpu().numpy()
+        # Move model to CPU and compute representations
+        self.model.cpu()
+        self.model.eval()
+        with torch.no_grad():
+            representation_vectors = self.model.visual_encoder(self.patches)
+            # Ensure representation_vectors is on CPU
+            representation_vectors = representation_vectors.detach().cpu()
+            representation_vectors_np = representation_vectors.numpy()
+            representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
+
         #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         # Apply K-means clustering with sklearn
         kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
         kmeans.fit(representation_vectors_np)
-        min_indices = kmeans.labels_
+        cluster_labels = kmeans.labels_
 
         # Save the K-means model and scaler
         joblib.dump(kmeans, save_model_path)
@@ -156,63 +167,16 @@ class Cluster:
 
         print("I made (K) clusters: ", k)
         print("Number of items in each cluster:")
-        for i in range(0, k):
-            print(" [", i, "]: ", (min_indices == i).sum())
-
-        # Find the K farthest apart vectors for each cluster
-        cluster_rep_vectors = []
         for i in range(k):
-            cluster = representation_vectors[min_indices == i]
-            cluster_size = cluster.size(0)
+            print(f" [Cluster {i}]: {(cluster_labels == i).sum()} items")
 
-            # Use pairwise distances to calculate similarities directly
-            clusterSim = torch.cdist(cluster, cluster)  # Pairwise distance matrix
-
-            # Store indices of the farthest apart vectors
-            cluster_indices = []
-            selected = torch.zeros(cluster_size, dtype=torch.bool)  # Track selected indices
-            if cluster_size == 0:  # Handle edge case for empty clusters
-                cluster_rep_vectors.append(torch.empty(0, cluster.size(1), device=cluster.device))
-                continue
-
-            # Start with the first random index
-            first_idx = 0
-            cluster_indices.append(first_idx)
-            selected[first_idx] = True
-
-            # Iteratively select the farthest vector
-            while len(cluster_indices) < cluster_size:
-                # Compute distances from already selected indices
-                distances = clusterSim[~selected][:, selected]
-                max_dist_idx = distances.max(dim=0).indices[0].item()  # Find farthest unselected index
-                unselected_indices = torch.where(~selected)[0]  # Map to original indices
-                next_idx = unselected_indices[max_dist_idx].item()
-
-                cluster_indices.append(next_idx)
-                selected[next_idx] = True
-
-            cluster_subtensor = cluster[cluster_indices]
-            cluster_rep_vectors.append(cluster_subtensor)
-
-        # Map back to image indices
-        all_cluster_image_indices = []
-        for cluster in cluster_rep_vectors:
-            cluster_image_indices = []
-            for row in cluster:
-                indices = torch.nonzero(torch.all(representation_vectors == row, dim=1), as_tuple=True)[0]
-                if indices.numel() > 0:  # Ensure there is at least one match
-                    cluster_image_indices.append(indices[0].item())  # Use the first match
-                else:
-                    print("Warning: No matching representation vector found for a cluster representative.")
-            all_cluster_image_indices.append(cluster_image_indices)
-
-        # Display clusters
-        for index, images in enumerate(all_cluster_image_indices):
-            print("CLUSTER: ", index)
-            print(images)
+        # Organize image indices into clusters
+        all_cluster_image_indices = [[] for _ in range(k)]
+        for idx, cluster in enumerate(cluster_labels):
+            all_cluster_image_indices[cluster].append(idx)  # Assign image index to corresponding cluster
 
         # Plot clusters only for the best k
-        self.plot_clusters(representation_vectors, torch.tensor(min_indices), k)
+        self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), k)
 
         return all_cluster_image_indices
 
@@ -223,11 +187,16 @@ class Cluster:
             k_values (range): Range of k-values to iterate over.
             iterations (int): Number of iterations for K-means.
         """
-        representation_vectors = self.model.encode_single_patch(self.patches)
-        representation_vectors_np = representation_vectors.detach().cpu().numpy()
+        self.model.cpu()
+        self.model.eval()
+        with torch.no_grad():
+            representation_vectors = self.model.visual_encoder(self.patches)
+            # Ensure representation_vectors is on CPU
+            representation_vectors = representation_vectors.detach().cpu()
+            representation_vectors_np = representation_vectors.numpy()
+            representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
         #scaler = MinMaxScaler()
         #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
-        representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         silhouette_scores = []
         wcss_values = []
@@ -408,8 +377,8 @@ if __name__ == "__main__":
         model_path=pt_path,
     )
 
-    k_values = range(2, 12)
-    #k_values = 7
+    #k_values = range(2, 12)
+    k_values = 6
     iterations = 1000
 
     if isinstance(k_values, range):
