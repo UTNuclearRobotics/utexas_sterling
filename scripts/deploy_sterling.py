@@ -6,11 +6,11 @@ import numpy as np
 import rclpy
 from bev_costmap import BEVCostmap
 from camera_intrinsics import CameraIntrinsics
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Point, Quaternion
 from homography_from_chessboard import HomographyFromChessboardImage
 from nav_msgs.msg import MapMetaData, OccupancyGrid, Odometry
 from rclpy.node import Node
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, Point, Quaternion
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 from std_msgs.msg import Header
 from utils import compute_model_chessboard_2d, draw_points
 
@@ -74,14 +74,17 @@ class SterlingLocalCostmap(Node):
         msg.info.width = width # Map width [cells]
         msg.info.height = height # Map height [cells]
         
-        # Offset of the top left of the costmap relative to base_link
+        # Offset of the top left of the costmap relative to bottom of camera image
         x_offset = 0.23 * (width / 2)
         y_offset = 0.23 * height
+        
+        # Offset of base_link to bottom of camera image
+        base_link_offset = 1.4
     
         # The origin of the map [m, m, rad]. This is the real-world pose of the cell (0,0) in the map.
         msg.info.origin = Pose()
         msg.info.origin.position.x = self.odometry_pose.position.x + x_offset
-        msg.info.origin.position.y = self.odometry_pose.position.y + y_offset
+        msg.info.origin.position.y = self.odometry_pose.position.y + y_offset + base_link_offset
         msg.info.origin.position.z = self.odometry_pose.position.z
         msg.info.origin.orientation = self.odometry_pose.orientation
 
