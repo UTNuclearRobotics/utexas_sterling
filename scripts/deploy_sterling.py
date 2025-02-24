@@ -63,26 +63,29 @@ class SterlingLocalCostmap(Node):
         msg = OccupancyGrid()
 
         # Fill in the header
-        msg.header = Header()
+        # msg.header = Header()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "base_link"
 
         # Fill in the map metadata
-        msg.info = MapMetaData()
+        # msg.info = MapMetaData()
         # map_load_time # The time at which the map was loaded
         msg.info.resolution # The map resolution [m/cell]
         msg.info.width = width # Map width [cells]
         msg.info.height = height # Map height [cells]
         
         # Offset of the top left of the costmap relative to bottom of camera image
-        x_offset = 0.23 * (width / 2)
-        y_offset = 0.23 * height
+        # TODO: Don't hardcode
+        tile_width = 0.23 # 128 pixel is meters in the real world 
+        x_offset = tile_width * (width / 2)
+        y_offset = tile_width * height
         
         # Offset of base_link to bottom of camera image
+        # TODO: Don't hardcode
         base_link_offset = 1.4
     
         # The origin of the map [m, m, rad]. This is the real-world pose of the cell (0,0) in the map.
-        msg.info.origin = Pose()
+        # msg.info.origin = Pose()
         msg.info.origin.position.x = self.odometry_pose.position.x + x_offset
         msg.info.origin.position.y = self.odometry_pose.position.y + y_offset + base_link_offset
         msg.info.origin.position.z = self.odometry_pose.position.z
@@ -94,7 +97,7 @@ class SterlingLocalCostmap(Node):
 
         # Publish the update
         self.local_costmap_updates_publisher.publish(msg)
-        # self.get_logger().info("Published costmap update")
+        self.get_logger().info("Published local costmap update")
 
 
 def align_corners(image, patch_size, grid_size, H_inv):
@@ -235,8 +238,8 @@ def main(args=None):
 
     cb_calibration_image = cv2.imread(os.path.join("homography", "raw_image.jpg"))
     chessboard_homography = HomographyFromChessboardImage(cb_calibration_image, 8, 6)
-    H = np.linalg.inv(chessboard_homography.H)
-    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
+    # H = np.linalg.inv(chessboard_homography.H)
+    # K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
     terrain_encoder_model_path = "../bags/2_20_ahg_courtyard_1_testing_terrain_rep.pt"
     kmeans_model_path = "../bags/sim_kmeans_model.pkl"
