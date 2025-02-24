@@ -1,22 +1,24 @@
+import argparse
 import os
+
 import cv2
 import numpy as np
 import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import CameraInfo, Image, CompressedImage, Imu
-from nav_msgs.msg import OccupancyGrid
-from nav_msgs.msg import Odometry
-import argparse
-from std_msgs.msg import Header
-from homography_from_chessboard import HomographyFromChessboardImage
-from camera_intrinsics import CameraIntrinsics
-from utils import draw_points, compute_model_chessboard_2d
 from bev_costmap import BEVCostmap
+from camera_intrinsics import CameraIntrinsics
+from geometry_msgs.msg import Pose
+from homography_from_chessboard import HomographyFromChessboardImage
+from nav_msgs.msg import MapMetaData, OccupancyGrid, Odometry
+from rclpy.node import Node
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, Point, Quaternion
+from std_msgs.msg import Header
+from utils import compute_model_chessboard_2d, draw_points
 
 
 class SterlingLocalCostmap(Node):
-    def __init__(self, camera_topic, odometry_topic, local_costmap_updates_topic):
+    def __init__(self, camera_topic, odometry_topic, local_costmap_updates_topic, cb_homography, BEV_costmap):
         super().__init__("sterling_local_costmap")
+        # ROS topics
         self.camera_topic = camera_topic
         self.odometry_topic = odometry_topic
         self.local_costmap_updates_topic = local_costmap_updates_topic
@@ -30,57 +32,152 @@ class SterlingLocalCostmap(Node):
         self.camera_subscriber = self.create_subscription(Image, self.camera_topic, self.camera_callback, 10)
         self.odometry_subscriber = self.create_subscription(Odometry, self.odometry_topic, self.odometry_callback, 10)
 
+        self.H_inv = np.linalg.inv(cb_homography.H)
+        self.get_terrain_preferred_costmap = BEV_costmap
+        
+        self.odometry_pose = None
+
     def camera_callback(self, msg):
         # When receiving a camera image, update the costmap
         if self.odometry_pose:
             image_data = msg.data
-            # TODO: Make a call to the BEVCostmap class to get the terrain costmap
-            terrain_costmap = self.get_terrain_preferred_costmap(image_data)
-            self.update_costmap(terrain_costmap)
+            bev_image = get_BEV_image(image_data, self.H_inv, (128, 128), (7, 12))
+            
+            # TODO: Treat unconfident terrain as unknown (-1)
+            terrain_costmap = self.get_terrain_preferred_costmap(bev_image, 128)
+            terrain_costmap = (terrain_costmap / 2.55).astype(np.int8)  # Max value is 255, so divide by 2.55 to get 100 and convert to int8
+            
+            # Make it 1D 
+            terrain_costmap_flat = [cell for row in terrain_costmap for cell in row]
+            self.update_costmap(terrain_costmap_flat)
 
     def odometry_callback(self, msg):
         # Store the odometry message pose
         self.odometry_pose = msg.pose.pose
 
     def update_costmap(self, terrain_costmap):
-        """
-        Args:
-            terrain_costmap: 2D integer array of terrain cost values (0, 255)
-        """
+        width = len(terrain_costmap[0])
+        height = len(terrain_costmap)
+        
         # Create an OccupancyGrid message
         msg = OccupancyGrid()
 
         # Fill in the header
         msg.header = Header()
-        msg.header.stamp = self.get_clock().now().to_msg()  # Current time
-        msg.header.frame_id = "map"  # Frame ID (e.g., 'map' or 'odom')
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
 
-        # Set the update region
-        # TODO: Offset to place region in front of the robot where camera is looking
-        msg.x = int(self.odometry_pose.position.x)  # X coordinate of the update region
-        msg.y = int(self.odometry_pose.position.y)  # Y coordinate of the update region
-        msg.width = len(terrain_costmap[0])  # Width of the update region
-        msg.height = len(terrain_costmap)  # Height of the update region
+        # Fill in the map metadata
+        msg.info = MapMetaData()
+        # map_load_time # The time at which the map was loaded
+        msg.info.resolution # The map resolution [m/cell]
+        msg.info.width = width # Map width [cells]
+        msg.info.height = height # Map height [cells]
+        
+        # Offset of the top left of the costmap relative to base_link
+        x_offset = 0.23 * (width / 2)
+        y_offset = 0.23 * height
+    
+        # The origin of the map [m, m, rad]. This is the real-world pose of the cell (0,0) in the map.
+        msg.info.origin = Pose()
+        msg.info.origin.position.x = self.odometry_pose.position.x + x_offset
+        msg.info.origin.position.y = self.odometry_pose.position.y + y_offset
+        msg.info.origin.position.z = self.odometry_pose.position.z
+        msg.info.origin.orientation = self.odometry_pose.orientation
 
+        # The map data, in row-major order, starting with (0,0).
+        # Occupancy probabilities are in the range [0,100]. Unknown is -1.
         msg.data = terrain_costmap
 
         # Publish the update
         self.local_costmap_updates_publisher.publish(msg)
-        self.get_logger().info("Published costmap update")
+        # self.get_logger().info("Published costmap update")
 
 
-# cb_tile_width = hom_from_cb.cb_tile_width # Chessboard tile width in pixels
-# Global costmap resolution = 0.04 m/cell
-def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), visualize=False):
+def align_corners(image, patch_size, grid_size, H_inv):
+    """
+    Align the corners to be perfectly horizontal and aligned with the bottom image edge
+    """
     # TODO: Use a matrix of corners and apply a *rotation* to align the corners
     # to be perfectly horizontal and apply *translation* to have resulting plane
     # on the grid to be centered and aligned with the bottom image edge
-    model_cb = compute_model_chessboard_2d(grid_size[0], grid_size[1], patch_size[0], True)
-
-    annotated_image = image.copy()
+    image_width, image_height = image.shape[:2]
     rows, cols = grid_size
+    patch_width, patch_height = patch_size
 
-    # Manual adjustment that should be automated with the TODO above
+    model_cb = compute_model_chessboard_2d(grid_size[0], grid_size[1], patch_size[0], False)
+
+    # Homogenous corners of the region of interest
+    corners = np.array(
+        [
+            [0, 0, 1],  # Top-left
+            [rows * patch_width, 0, 1],  # Top-right
+            [rows * patch_width, cols * patch_height, 1],  # Bottom-right
+            [0, cols * patch_height, 1],  # Bottom-left
+        ],
+        dtype=np.float32,
+    ).T  # Shape: (3, 4)
+
+    # Compute the inverse homography to map patch corners back to the original image
+    corners_on_image = H_inv @ corners  # Shape: (3, 4)
+
+    # Normalize homogeneous coordinates (x, y, w) -> (x/w, y/w)
+    corners_on_image = corners_on_image[:2] / corners_on_image[2:3]  # Shape: (2, 4)
+    corners_on_image = corners_on_image.T  # Shape: (4, 2), each row is (x, y)
+
+    # Compute rotation to make bottom row horizontal
+    bottom_edge_vec = corners_on_image[-1] - corners_on_image[-2]  # Left to right of bottom row
+    angle = np.arctan2(bottom_edge_vec[1], bottom_edge_vec[0])
+    rotation_angle = -angle  # Rotate to align with x-axis
+
+    # Rotation matrix
+    cos_theta = np.cos(rotation_angle)
+    sin_theta = np.sin(rotation_angle)
+    rotation_matrix = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
+
+    # Apply rotation around centroid
+    centroid = np.mean(model_cb, axis=0)
+    corners_centered = model_cb - centroid
+    corners_rotated = corners_centered @ rotation_matrix.T
+    corners_rotated += centroid
+
+    # Compute translation to center and align with bottom edge
+    bottom_row_rotated = corners_rotated[(rows - 1) * cols : rows * cols]
+    min_x, min_y = np.min(corners_rotated, axis=0)
+    max_x, max_y = np.max(corners_rotated, axis=0)
+    width = max_x - min_x
+    height = max_y - min_y
+
+    # Target position
+    target_x = (image_width - width) / 2  # Center horizontally
+    bottom_row_y = np.mean(bottom_row_rotated[:, 1])  # Average y of bottom row
+    target_y = image_height - (max_y - bottom_row_y)  # Align bottom row
+
+    # Translation vector
+    translation = np.array([target_x - min_x, target_y - min_y])
+
+    # Apply translation
+    corners_final = corners_rotated + translation
+
+    print(corners_final)
+    copy = image.copy()
+    for corner in corners_final:
+        x, y = int(corner[0]), int(corner[1])
+        copy = cv2.circle(copy, (x, y), 5, (0, 0, 255), -1)  # Draw red dots
+    cv2.imshow("Dots", copy)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    return corners_final
+
+
+def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), visualize=False):
+    annotated_image = image.copy()
+    H_inv = np.linalg.inv(hom_from_cb.H)
+    rows, cols = grid_size
+    patch_width, patch_height = patch_size
+
+    # TODO: Don't make this adjust manual
     origin_shift = (patch_size[0], patch_size[1] * 2 + 60)
 
     row_images = []
@@ -92,7 +189,7 @@ def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), 
 
             # Compute the translated homography
             T_shift = np.array([[1, 0, x_shift], [0, 1, y_shift], [0, 0, 1]])
-            H_shifted = T_shift @ np.linalg.inv(hom_from_cb.H)
+            H_shifted = T_shift @ H_inv
 
             # Warp and resize the patch
             cur_patch = cv2.warpPerspective(image, H_shifted, dsize=patch_size)
@@ -110,9 +207,22 @@ def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), 
 
     if visualize:
         cv2.imshow("Current Image with patches", annotated_image)
+
+        # Draw the green grid lines
+        for i in range(rows + 1):
+            start_point = (0, i * patch_height)
+            end_point = (cols * patch_width, i * patch_height)
+            stitched_image = cv2.line(stitched_image, start_point, end_point, (0, 255, 0), 2)
+        for j in range(cols + 1):
+            start_point = (j * patch_width, 0)
+            end_point = (j * patch_width, rows * patch_height)
+            stitched_image = cv2.line(stitched_image, start_point, end_point, (0, 255, 0), 2)
         cv2.imshow("Stitched BEV Image", stitched_image)
+
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+
+    return stitched_image
 
 
 def main(args=None):
@@ -125,8 +235,8 @@ def main(args=None):
     H = np.linalg.inv(chessboard_homography.H)
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
 
-    terrain_encoder_model_path = "../bags/ahg_courtyard_1/models/vis_rep.pt"
-    kmeans_model_path = "../bags/ahg_courtyard_1/models/vis_rep.pt"
+    terrain_encoder_model_path = "../bags/2_20_ahg_courtyard_1_testing_terrain_rep.pt"
+    kmeans_model_path = "../bags/sim_kmeans_model.pkl"
     preferences = {
         # Black: 0, White: 255
         0: 50,  # Cluster 0: Agg, leaves
@@ -139,18 +249,19 @@ def main(args=None):
     }
     BEV_costmap = BEVCostmap(terrain_encoder_model_path, kmeans_model_path, preferences)
 
-    bev_image = get_BEV_image(cb_calibration_image, chessboard_homography, visualize=False)
-    result = BEV_costmap.BEV_to_costmap(bev_image, 128)
+    # bev_image = get_BEV_image(cb_calibration_image, chessboard_homography, (128, 128), (7, 12), visualize=True)
+    
+    # result = BEV_costmap.BEV_to_costmap(bev_image, 128)
 
-    cv2.imshow("Stitched BEV Image", result)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # cv2.imshow("Stitched BEV Image", result)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
 
-    # rclpy.init(args=args)
-    # costmap_updater = SterlingLocalCostmap(camera_topic, odometry_topic, local_costmap_updates_topic)
-    # rclpy.spin(costmap_updater)
-    # costmap_updater.destroy_node()
-    # rclpy.shutdown()
+    rclpy.init(args=args)
+    costmap_updater = SterlingLocalCostmap(camera_topic, odometry_topic, local_costmap_updates_topic, chessboard_homography, BEV_costmap)
+    rclpy.spin(costmap_updater)
+    costmap_updater.destroy_node()
+    rclpy.shutdown()
 
 
 if __name__ == "__main__":
