@@ -27,13 +27,13 @@ class BEVCostmap:
 
     def __init__(self, viz_encoder_path, kmeans_path, preferences):
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load visual encoder model weights
-        self.sterling = SterlingPaternRepresentation(device).to(device)
+        self.sterling = SterlingPaternRepresentation(self.device).to(self.device)
         if not os.path.exists(viz_encoder_path):
             raise FileNotFoundError(f"Model file not found at: {viz_encoder_path}")
-        self.sterling.load_state_dict(torch.load(viz_encoder_path, weights_only=True))
+        self.sterling.load_state_dict(torch.load(viz_encoder_path, weights_only=True, map_location=torch.device(self.device)))
 
         # Load K-means model
         if not os.path.exists(kmeans_path):
@@ -52,22 +52,22 @@ class BEVCostmap:
     def predict_clusters(self, cells):
         """Predict clusters for a batch of cells."""
         if isinstance(cells, np.ndarray):
-            cells = torch.tensor(cells, dtype=torch.float32)
+            cells = torch.tensor(cells, dtype=torch.float32, device=self.device)
 
         if len(cells.shape) == 4:  # [B, C, H, W]
             pass  
         elif len(cells.shape) == 3:  # [C, H, W] -> [1, C, H, W]
             cells = cells.unsqueeze(0)
         
+        self.sterling.eval()
         with torch.no_grad():
-            representations = self.sterling.encode_single_patch(cells)
-
-        representations_np = representations.detach().cpu().numpy()
-        #scaled_representations = normalize(representations_np, norm='l2', axis=1)
+            representation_vectors = self.sterling.visual_encoder(cells)
+            # Ensure representation_vectors is on CPU
+            representations_np = representation_vectors.cpu().numpy()
+            representations_np = normalize(representations_np, axis=1, norm='l2')
         #scaled_representations = self.scaler.transform(representations_np)
-        cluster_labels = self.kmeans.predict(representations_np)
 
-        return cluster_labels
+        return self.kmeans.predict(representations_np)
 
     def calculate_cell_costs(self, cells):
         """Batch process cell costs."""
@@ -76,45 +76,56 @@ class BEVCostmap:
         return costs
 
     def BEV_to_costmap(self, bev_img, cell_size):
-        """Convert BEV image to costmap using batch processing."""
+        """Convert BEV image to costmap while automatically marking consistent black areas."""
         height, width = bev_img.shape[:2]
         num_cells_y, num_cells_x = height // cell_size, width // cell_size
-        costmap = np.zeros((num_cells_y, num_cells_x), dtype=np.uint8)
 
-        # Precompute all cells as a batch
-        cells = [
-            bev_img[i * cell_size : (i + 1) * cell_size, j * cell_size : (j + 1) * cell_size]
-            for i in range(num_cells_y)
-            for j in range(num_cells_x)
-        ]
+        # Determine effective dimensions that are multiples of cell_size.
+        effective_height = num_cells_y * cell_size
+        effective_width = num_cells_x * cell_size
 
-        # Convert cells to tensors in batch
-        processed_cells = []
-        for cell in cells:
-            if np.all(cell == 0):  
-                processed_cells.append(None)  # Mark black cells separately
-            else:
-                if len(cell.shape) == 2:  # Grayscale
-                    cell = np.expand_dims(cell, axis=0)
-                elif len(cell.shape) == 3 and cell.shape[2] == 3:  # RGB
-                    cell = np.transpose(cell, (2, 0, 1))
-                processed_cells.append(cell)
+        # Slice the image to the effective region.
+        bev_img = bev_img[:effective_height, :effective_width]
 
-        # Convert to tensor batch
-        valid_cells = [cell for cell in processed_cells if cell is not None]
-        if valid_cells:
-            valid_cells = np.stack(valid_cells, axis=0)
+        # Initialize costmap container.
+        costmap = np.empty((num_cells_y, num_cells_x), dtype=np.uint8)
+
+        # Create mask for black regions.
+        # If these dimensions and cell_size remain constant, consider caching the following mask.
+        mask = np.zeros((height, width), dtype=np.uint8)
+        triangle_left = np.array([[0, height], [0, 3 * height // 4], [width // 4, height]], dtype=np.int32)
+        triangle_right = np.array([[width, height], [width, 3 * height // 4], [width - width // 4, height]], dtype=np.int32)
+        cv2.fillPoly(mask, [triangle_left, triangle_right], 255)
+        mask = mask[:effective_height, :effective_width]
+
+        # Reshape mask into cells and compute per-cell max to detect any black pixel.
+        black_cells = (mask.reshape(num_cells_y, cell_size, num_cells_x, cell_size)
+                            .max(axis=(1, 3)) == 255)
+
+        # Use stride tricks to extract cell views without copying data.
+        channels = bev_img.shape[2]
+        cell_shape = (num_cells_y, num_cells_x, cell_size, cell_size, channels)
+        cell_strides = (bev_img.strides[0] * cell_size,
+                        bev_img.strides[1] * cell_size,
+                        bev_img.strides[0],
+                        bev_img.strides[1],
+                        bev_img.strides[2])
+        cells = np.lib.stride_tricks.as_strided(bev_img, shape=cell_shape, strides=cell_strides)
+        # Rearrange to (num_cells_y, num_cells_x, channels, cell_size, cell_size)
+        cells = cells.transpose(0, 1, 4, 2, 3)
+
+        # Select only valid (non-black) cells.
+        valid_cells = cells[~black_cells]
+
+        # Calculate costs for valid cells in a single batch.
+        if valid_cells.size:
             costs = self.calculate_cell_costs(valid_cells)
+        else:
+            costs = np.empty((0,), dtype=np.uint8)
 
-        # Assign costs back to the costmap
-        idx = 0
-        for i in range(num_cells_y):
-            for j in range(num_cells_x):
-                if processed_cells[i * num_cells_x + j] is None:
-                    costmap[i, j] = 255  # Assign maximum cost to black cells
-                else:
-                    costmap[i, j] = costs[idx]
-                    idx += 1
+        # Assemble costmap: assign maximum cost (255) to black cells and computed costs to others.
+        costmap[black_cells] = 255
+        costmap[~black_cells] = costs
 
         return costmap
 
@@ -127,11 +138,9 @@ class BEVCostmap:
         Returns:
             Grayscale image of the costmap.
         """
-        # Directly resize the costmap using nearest interpolation
-        costmap_img = cv2.resize(costmap, None, fx=cell_size, fy=cell_size, interpolation=cv2.INTER_NEAREST)
 
         # Convert grayscale to BGR for consistency
-        return cv2.cvtColor(costmap_img, cv2.COLOR_GRAY2BGR)
+        return cv2.cvtColor(cv2.resize(costmap, None, fx=cell_size, fy=cell_size, interpolation=cv2.INTER_NEAREST), cv2.COLOR_GRAY2BGR)
 
     def save_data(self):
         # Initialize the video writer
@@ -186,55 +195,47 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    H, dsize,_ = chessboard_homography.plot_BEV_full(image)
+    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
     robot_data = RobotDataAtTimestep(synced_pkl_path)
 
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
 
-    sim_encoder_path = "bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
+    sim_encoder_path = "bags/2_20_ahg_courtyard_1_testing/models/2_20_ahg_courtyard_1_testing_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
     #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
     preferences = {
         # Black: 0, White: 255
-        0: 50,      #Cluster 0: Agg, leaves
+        0: 175,      #Cluster 0: Dark concrete, leaves, grass
         1: 0,      #Cluster 1: Smooth concrete
-        2: 100,      #Cluster 2: Smooth concrete
-        3: 0,      #Cluster 3: Agg
-        4: 225,      #Cluster 4: Aggregate concrete, leaves
-        5: 50,      # Cluster 5: Grass
-        6: 0      # Cluster 6: Smooth concrete
+        2: 50,      #Cluster 2: Dark bricks, some grass
+        3: 0,      #Cluster 3: Aggregate concrete, smooth concrete
+        4: 225,      #Cluster 4: Grass
+        5: 225,      # Cluster 5: Leaves, Grass
+        #6: 0      # Cluster 6: Smooth concrete
     }
 
     sim_preferences = {
         # Black: 0, White: 255
-        0: 50,      #Cluster 0: Bricks
-        1: 225,      #Cluster 1: Grass
-        2: 225,      #Cluster 2: Mulch
-        3: 0,      #Cluster 3: Pavement
-        #4: 0,      #Cluster 4: Aggregate concrete, leaves
-        #5: 50,      # Cluster 5: Grass
+        0: 225,      #Cluster 0: Grass
+        1: 0,      #Cluster 1: Grass
+        2: 50,      #Cluster 2: Mulch
+        3: 175,      #Cluster 3: Pavement
+        4: 50,      #Cluster 4: Aggregate concrete, leaves
+        5: 175,      # Cluster 5: Grass
         #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
+    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, preferences)
 
-    global_img = cv2.imread("full_map.png")
-    costmap = bev_costmap.BEV_to_costmap(global_img, 64)
-    visualize = bev_costmap.visualize_costmap(costmap, 64)
-    cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
-    cv2.imshow("Cost Map", visualize)
-    cv2.waitKey(0)
-    cv2.imwrite("costmap_from_global.png", visualize)
-"""
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
-        bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 64)
-        visualize = bev_costmap.visualize_costmap(costmap, 64)
+        bev_img = chessboard_homography.plot_BEV_full(cur_img, H,patch_size=(128,128))
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
+        visualize = bev_costmap.visualize_costmap(costmap, 128)
 
         combined_frame = cv2.vconcat([visualize, bev_img])
         cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
@@ -242,4 +243,12 @@ if __name__ == "__main__":
         cv2.waitKey(10)
 
 # Building costmap from global map only
+"""
+    global_img = cv2.imread("full_map.png")
+    costmap = bev_costmap.BEV_to_costmap(global_img, 64)
+    visualize = bev_costmap.visualize_costmap(costmap, 64)
+    cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
+    cv2.imshow("Cost Map", visualize)
+    cv2.waitKey(0)
+    cv2.imwrite("costmap_from_global.png", visualize)
 """

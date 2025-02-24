@@ -169,7 +169,7 @@ def crop_bottom_to_content(img, threshold=1):
             break
     return img[:crop_row, :]
 
-def BEV_full(
+def plot_BEV_full(
     H, patch_size=(128, 128), timestep=0, visualize = False
 ):
     """
