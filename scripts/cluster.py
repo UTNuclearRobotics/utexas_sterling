@@ -147,7 +147,7 @@ class Cluster:
         self.model.cpu()
         self.model.eval()
         with torch.no_grad():
-            representation_vectors = self.model.visual_encoder(self.patches)
+            representation_vectors = self.model.encode_single_patch(self.patches)
             # Ensure representation_vectors is on CPU
             representation_vectors = representation_vectors.detach().cpu()
             representation_vectors_np = representation_vectors.numpy()

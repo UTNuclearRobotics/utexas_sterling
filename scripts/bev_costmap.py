@@ -202,7 +202,7 @@ if __name__ == "__main__":
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
 
-    sim_encoder_path = "bags/2_20_ahg_courtyard_1_testing/models/2_20_ahg_courtyard_1_testing_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
+    sim_encoder_path = "bags/panther_recording_20250224_035801-wander/models/panther_recording_20250224_035801-wander_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
     #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
@@ -219,16 +219,16 @@ if __name__ == "__main__":
 
     sim_preferences = {
         # Black: 0, White: 255
-        0: 225,      #Cluster 0: Grass
-        1: 0,      #Cluster 1: Grass
-        2: 50,      #Cluster 2: Mulch
-        3: 175,      #Cluster 3: Pavement
-        4: 50,      #Cluster 4: Aggregate concrete, leaves
-        5: 175,      # Cluster 5: Grass
+        0: 50,      #Cluster 0: Bricks
+        1: 225,      #Cluster 1: Grass
+        2: 0,      #Cluster 2: Pavement, bricks
+        3: 175,      #Cluster 3: Mulch
+        4: 225,      #Cluster 4: Grass
+        5: 225,      # Cluster 5: Grass
         #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, preferences)
+    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
 
     for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
