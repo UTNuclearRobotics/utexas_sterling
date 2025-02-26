@@ -8,10 +8,11 @@ from bev_costmap import BEVCostmap
 from camera_intrinsics import CameraIntrinsics
 from geometry_msgs.msg import Pose, Point, Quaternion
 from homography_from_chessboard import HomographyFromChessboardImage
-from nav_msgs.msg import MapMetaData, OccupancyGrid, Odometry
+from nav_msgs.msg import MapMetaData, Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 from std_msgs.msg import Header
+from map_msgs.msg import OccupancyGridUpdate
 from utils import compute_model_chessboard_2d, draw_points
 
 
@@ -25,7 +26,7 @@ class SterlingLocalCostmap(Node):
 
         # ROS publishers
         self.local_costmap_updates_publisher = self.create_publisher(
-            OccupancyGrid, self.local_costmap_updates_topic, 10
+            OccupancyGridUpdate, self.local_costmap_updates_topic, 10
         )
 
         # ROS subscribers
@@ -33,67 +34,70 @@ class SterlingLocalCostmap(Node):
         self.odometry_subscriber = self.create_subscription(Odometry, self.odometry_topic, self.odometry_callback, 10)
 
         self.H_inv = np.linalg.inv(cb_homography.H)
-        self.get_terrain_preferred_costmap = BEV_costmap
-        
+        self.get_terrain_preferred_costmap = BEV_costmap.BEV_to_costmap
+
         self.odometry_pose = None
 
     def camera_callback(self, msg):
         # When receiving a camera image, update the costmap
         if self.odometry_pose:
-            image_data = msg.data
+            image_data = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
             bev_image = get_BEV_image(image_data, self.H_inv, (128, 128), (7, 12))
-            
+
             # TODO: Treat unconfident terrain as unknown (-1)
             terrain_costmap = self.get_terrain_preferred_costmap(bev_image, 128)
-            terrain_costmap = (terrain_costmap / 2.55).astype(np.int8)  # Max value is 255, so divide by 2.55 to get 100 and convert to int8
-            
-            # Make it 1D 
-            terrain_costmap_flat = [cell for row in terrain_costmap for cell in row]
-            self.update_costmap(terrain_costmap_flat)
+            # print("Terrain costmap (raw):", terrain_costmap)
+
+            terrain_costmap = (terrain_costmap / 2.55).astype(
+                int
+            )  # Max value is 255, so divide by 2.55 to get 100 and convert to int8
+            # print("Terrain costmap (scaled to 100):", terrain_costmap)
+
+            self.update_costmap(terrain_costmap)
 
     def odometry_callback(self, msg):
         # Store the odometry message pose
         self.odometry_pose = msg.pose.pose
 
     def update_costmap(self, terrain_costmap):
+        """
+        Args:
+            terrain_costmap (list): 2D list of terrain costs
+        """
         width = len(terrain_costmap[0])
         height = len(terrain_costmap)
-        
-        # Create an OccupancyGrid message
-        msg = OccupancyGrid()
+        terrain_costmap_flat = [int(val) for val in terrain_costmap.flatten()]
+        # print("Flattened terrain costmap:", terrain_costmap_flat)
+
+        # Create an OccupancyGridUpdate message
+        msg = OccupancyGridUpdate()
 
         # Fill in the header
         # msg.header = Header()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "base_link"
 
-        # Fill in the map metadata
-        # msg.info = MapMetaData()
-        # map_load_time # The time at which the map was loaded
-        msg.info.resolution # The map resolution [m/cell]
-        msg.info.width = width # Map width [cells]
-        msg.info.height = height # Map height [cells]
-        
+        msg.width = width  # Map width [cells]
+        msg.height = height  # Map height [cells]
+
         # Offset of the top left of the costmap relative to bottom of camera image
         # TODO: Don't hardcode
-        tile_width = 0.23 # 128 pixel is meters in the real world 
+        tile_width = 0.23  # 128 pixel is meters in the real world
         x_offset = tile_width * (width / 2)
         y_offset = tile_width * height
-        
+
         # Offset of base_link to bottom of camera image
         # TODO: Don't hardcode
         base_link_offset = 1.4
-    
+
         # The origin of the map [m, m, rad]. This is the real-world pose of the cell (0,0) in the map.
         # msg.info.origin = Pose()
-        msg.info.origin.position.x = self.odometry_pose.position.x + x_offset
-        msg.info.origin.position.y = self.odometry_pose.position.y + y_offset + base_link_offset
-        msg.info.origin.position.z = self.odometry_pose.position.z
-        msg.info.origin.orientation = self.odometry_pose.orientation
+        msg.x = int(self.odometry_pose.position.x + x_offset)
+        msg.y = int(self.odometry_pose.position.y + y_offset + base_link_offset)
 
         # The map data, in row-major order, starting with (0,0).
         # Occupancy probabilities are in the range [0,100]. Unknown is -1.
-        msg.data = terrain_costmap
+        msg.data = terrain_costmap_flat
 
         # Publish the update
         self.local_costmap_updates_publisher.publish(msg)
@@ -177,9 +181,8 @@ def align_corners(image, patch_size, grid_size, H_inv):
     return corners_final
 
 
-def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), visualize=False):
+def get_BEV_image(image, H, patch_size=(128, 128), grid_size=(7, 12), visualize=False):
     annotated_image = image.copy()
-    H_inv = np.linalg.inv(hom_from_cb.H)
     rows, cols = grid_size
     patch_width, patch_height = patch_size
 
@@ -195,7 +198,7 @@ def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), 
 
             # Compute the translated homography
             T_shift = np.array([[1, 0, x_shift], [0, 1, y_shift], [0, 0, 1]])
-            H_shifted = T_shift @ H_inv
+            H_shifted = T_shift @ H
 
             # Warp and resize the patch
             cur_patch = cv2.warpPerspective(image, H_shifted, dsize=patch_size)
@@ -209,7 +212,7 @@ def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), 
         row_image = cv2.hconcat(col_patches[::-1])
         row_images.append(row_image)
     stitched_image = cv2.vconcat(row_images[::-1])
-    print(f"Stitched image size: {stitched_image.shape}")
+    # print(f"Stitched image size: {stitched_image.shape}")
 
     if visualize:
         cv2.imshow("Current Image with patches", annotated_image)
@@ -232,7 +235,7 @@ def get_BEV_image(image, hom_from_cb, patch_size=(128, 128), grid_size=(7, 12), 
 
 
 def main(args=None):
-    camera_topic = "/oakd/oak_d_node/rgb/image_rect_color"
+    camera_topic = "/oakd2/oak_d_node/rgb/image_rect_color"
     odometry_topic = "/odometry/filtered"
     local_costmap_updates_topic = "/local_costmap/costmap_updates"
 
@@ -255,8 +258,8 @@ def main(args=None):
     }
     BEV_costmap = BEVCostmap(terrain_encoder_model_path, kmeans_model_path, preferences)
 
-    # bev_image = get_BEV_image(cb_calibration_image, chessboard_homography, (128, 128), (7, 12), visualize=True)
-    
+    # bev_image = get_BEV_image(cb_calibration_image, H, (128, 128), (7, 12), visualize=True)
+
     # result = BEV_costmap.BEV_to_costmap(bev_image, 128)
 
     # cv2.imshow("Stitched BEV Image", result)
@@ -264,7 +267,9 @@ def main(args=None):
     # cv2.destroyAllWindows()
 
     rclpy.init(args=args)
-    costmap_updater = SterlingLocalCostmap(camera_topic, odometry_topic, local_costmap_updates_topic, chessboard_homography, BEV_costmap)
+    costmap_updater = SterlingLocalCostmap(
+        camera_topic, odometry_topic, local_costmap_updates_topic, chessboard_homography, BEV_costmap
+    )
     rclpy.spin(costmap_updater)
     costmap_updater.destroy_node()
     rclpy.shutdown()
