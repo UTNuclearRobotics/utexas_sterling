@@ -342,10 +342,10 @@ if __name__ == "__main__":
     #vicreg_data, imagewithpatches = ComputeVicRegData(
     #    H, K, RT, plane_normal, plane_distance, robot_data, history_size, patch_size=(128,128), start=index, visualize=True
     #)
-    all_patches, imagewithpatches = BEV_full(
+    all_patches, imagewithpatches = plot_BEV_full(
     H, patch_size=(128,128), timestep=index, visualize=True
     )
-    print(all_patches)
+    #print(all_patches)
     # Get the current image from robot_data
     current_image = robot_data.getImageAtTimestep(index + history_size)
     cv2.imshow("Stitched View", all_patches)

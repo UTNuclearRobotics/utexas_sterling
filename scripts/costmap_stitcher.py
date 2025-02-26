@@ -221,7 +221,7 @@ if __name__ == "__main__":
     viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
 
-    sim_encoder_path = "bags/2_20_ahg_courtyard_1_testing/models/2_20_ahg_courtyard_1_testing_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
+    sim_encoder_path = "bags/panther_recording_20250224_035801-wander/models/panther_recording_20250224_035801-wander_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
     #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
@@ -235,20 +235,20 @@ if __name__ == "__main__":
         5: 225,      # Cluster 5: Leaves, Grass
         #6: 0      # Cluster 6: Smooth concrete
     }
-    
+
     sim_preferences = {
         # Black: 0, White: 255
         0: 50,      #Cluster 0: Bricks
         1: 225,      #Cluster 1: Grass
-        2: 225,      #Cluster 2: Mulch
-        3: 0,      #Cluster 3: Pavement
-        #4: 0,      #Cluster 4: Aggregate concrete, leaves
-        #5: 50,      # Cluster 5: Grass
+        2: 0,      #Cluster 2: Pavement, bricks
+        3: 175,      #Cluster 3: Mulch
+        4: 225,      #Cluster 4: Grass
+        5: 225,      # Cluster 5: Grass
         #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, preferences)
-    global_costmap = GlobalCostmap(tile_size=2560, cell_size=128, meters_per_pixel=1/(261*2))
+    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
+    global_costmap = GlobalCostmap(tile_size=2560, cell_size=128, meters_per_pixel=1/(557))
 
     # Process each timestep
     robot_data = RobotDataAtTimestep(synced_pkl_path)

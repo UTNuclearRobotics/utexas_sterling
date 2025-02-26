@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from scipy.optimize import minimize
 
 class GlobalMap:
-    def __init__(self, tile_size=1024, channels=3, visualize=False):
+    def __init__(self, tile_size=1280, channels=3, visualize=False):
         """
         A global mapping system using a tiled structure for efficient large-scale stitching.
 
@@ -119,27 +119,25 @@ class GlobalMap:
         mask = (warped_img > 0).any(axis=2)
         update_mask = mask & (warped_depth >= tile_zb) & (warped_sharpness > 0)
 
-        # 🔹 **Detect the boundary of update_mask using edge detection**
+        # Detect the boundary of update_mask using edge detection
         boundary_mask = cv2.Canny(update_mask.astype(np.uint8) * 255, 50, 150)
         
-        # 🔹 **Adaptive Dilation: Use different kernel sizes based on edge density**
+        # Adaptive Dilation: Use different kernel sizes based on edge density
         close_edges = cv2.dilate(boundary_mask, np.ones((1,1), np.uint8), iterations=1).astype(bool)
         far_edges = cv2.dilate(boundary_mask, np.ones((3,3), np.uint8), iterations=1).astype(bool)
         
         adaptive_mask = np.where(close_edges, close_edges, far_edges)
-
-        # 🔹 **Fix: Ensure `adaptive_mask` is the same size as `warped_img`**
         if adaptive_mask.shape[:2] != warped_img.shape[:2]:
             adaptive_mask = cv2.resize(adaptive_mask.astype(np.uint8), (warped_img.shape[1], warped_img.shape[0]), interpolation=cv2.INTER_NEAREST).astype(bool)
 
-        # 🔹 **Expand only boundary pixels from warped_img without blurring**
+        # Expand only boundary pixels from warped_img without blurring
         expanded_warped = warped_img.copy()
         expanded_warped[adaptive_mask] = cv2.dilate(warped_img, np.ones((3,3), np.uint8), iterations=1)[adaptive_mask]
 
         if tile_img.ndim == 3:
             update_mask_3d = np.repeat(update_mask[:, :, np.newaxis], 3, axis=2)
 
-            # **Use Past Frames for Blending**
+            # Use Past Frames for Blending
             frame_history = tile_data['frame_history']
             frame_history.append(warped_img.copy())  # Store the current frame
 
@@ -150,7 +148,7 @@ class GlobalMap:
                 alpha = (i + 1) / weight_sum
                 cv2.addWeighted(frame_history[i], alpha, blended_img, 1 - alpha, 0, blended_img)
 
-            # **Apply expanded_warped only in update_mask regions**
+            # Apply expanded_warped only in update_mask regions
             tile_img[update_mask_3d] = expanded_warped[update_mask_3d]
         else:
             tile_img[update_mask] = expanded_warped[update_mask]
@@ -311,12 +309,35 @@ class GlobalMap:
         rotation_threshold = 0.006
 
         if self.H_old is None:
-            # First frame: set identity transform, etc.
-            self.H_old = np.eye(3, dtype=np.float32)
+            # First frame: initialize based on robot's original heading
+            if odom_data is not None:
+                # Extract yaw (rotation) in degrees.
+                cos_theta = odom_data[0, 0]
+                sin_theta = odom_data[1, 0]
+                self.H_old = np.array([
+                    [cos_theta, sin_theta, 0],
+                    [-sin_theta, cos_theta, 0],
+                    [0, 0, 1]
+                ], dtype=np.float32)
+            else:
+                # Fallback to identity if no odom data
+                self.H_old = np.eye(3, dtype=np.float32)
+
+            # Apply 90-degree clockwise rotation
+            rotation_90_clockwise = np.array([
+                [0, -1, 0],  # cos(90) = 0, sin(90) = 1, adjusted for clockwise
+                [1, 0, 0],   # -sin(90) = -1, cos(90) = 0
+                [0, 0, 1]    # Homogeneous coordinate
+            ], dtype=np.float32)
+
+            # Rotate the initial heading by 90 degrees clockwise
+            self.H_old = self.H_old @ rotation_90_clockwise
+            self.H_old /= self.H_old[2, 2]  # Normalize to ensure the last element is 1
+
             self.frame_previous = frame_cur
             self.odom_previous = odom_data
             self.frame_history.append(frame_cur)
-            print(f"Initialized tile-based global map at timestep {timestep}")
+            print(f"Initialized tile-based global map at timestep {timestep} with heading rotated 90 degrees clockwise")
             return
 
         if odom_data is not None and self.odom_previous is not None:
@@ -324,7 +345,7 @@ class GlobalMap:
             relative_transform = solve(self.odom_previous, odom_data)  # Faster than np.linalg.inv() @ odom_data
 
             # Compute translation and rotation differences
-            tx, ty = relative_transform[0, 3], relative_transform[1, 3]
+            tx, ty = relative_transform[1, 3], relative_transform[0, 3]
             translation_distance = np.hypot(tx, ty)  # Faster Euclidean distance
             rotation_angle = np.arctan2(relative_transform[1, 0], relative_transform[0, 0])  # Faster rotation calc
             
@@ -338,7 +359,7 @@ class GlobalMap:
         else:
             print(f"Missing odometry data at timestep {timestep}")
             return
-        
+
         H_refined = self.refine_homography(H_relative, frame_cur)
         self.H_old = self.H_old @ H_refined
         self.H_old /= self.H_old[2,2]
@@ -564,18 +585,18 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    #H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    H, dsize,_ = chessboard_homography.plot_BEV_full(image)
+    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
-    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_20250218_175547/panther_recording_20250218_175547_synced.pkl"))
+    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_20250224_044130-path/panther_recording_20250224_044130_synced.pkl"))
     #robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_sim_loop_2/panther_recording_sim_loop_2_synced.pkl"))
 
     scale_start = 490
-    bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
-    bev_image_cur = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start+1), H, dsize)
-    meters_to_pixels = calculate_meters_to_pixels(bev_image_prev, bev_image_cur,
-                                                  robot_data.getOdomAtTimestep(scale_start),
-                                                  robot_data.getOdomAtTimestep(scale_start+1))
+    #bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
+    #bev_image_cur = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start+1), H, dsize)
+    #meters_to_pixels = calculate_meters_to_pixels(bev_image_prev, bev_image_cur,
+    #                                              robot_data.getOdomAtTimestep(scale_start),
+    #                                              robot_data.getOdomAtTimestep(scale_start+1))
     #522 for sim
     #261 for actual
     # Initialize the global map
@@ -592,7 +613,7 @@ if __name__ == "__main__":
             viewer.show_map()
     else:
         # Process subsequent BEV images
-        for timestep in tqdm(range(start+1, end), desc="Processing patches at timesteps"):
+        for timestep in tqdm(range(start, end), desc="Processing patches at timesteps"):
             try:
                 cur_img = robot_data.getImageAtTimestep(timestep)
                 cur_rt = robot_data.getOdomAtTimestep(timestep)
@@ -600,9 +621,9 @@ if __name__ == "__main__":
                     print(f"Missing image data at timestep {timestep}")
                     continue
 
-                bev_img = cv2.warpPerspective(cur_img, H, dsize)  # Create BEV image
+                bev_img = chessboard_homography.plot_BEV_full(cur_img, H,patch_size=(128,128))
                 #global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
-                global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=522)
+                global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=557)
 
             except Exception as e:
                 print(f"Error at timestep {timestep}: {e}")
