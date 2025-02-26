@@ -31,11 +31,12 @@ class SynchronizeRosbag:
     based on odometry information.
     """
 
-    def __init__(self, bag_path, visual, simulation):
+    def __init__(self, bag_path, visual, simulation, time_threshold):
         self.BAG_PATH = bag_path
         self.SAVE_PATH = bag_path
         self.VISUAL = visual
         self.SIM = simulation
+        self.TIME_THRESHOLD = time_threshold
 
         if self.SIM:
             self.odometry_topic = "/odometry/filtered"
@@ -89,8 +90,7 @@ class SynchronizeRosbag:
             time_diff_odom = abs(odom_time - avg_time)
 
             # Synchronize if all time differences are within the threshold
-            threshhold = 0.05
-            if time_diff_image < threshhold and time_diff_imu < threshhold and time_diff_odom < threshhold:
+            if time_diff_image < self.TIME_THRESHOLD and time_diff_imu < self.TIME_THRESHOLD and time_diff_odom < self.TIME_THRESHOLD:
                 img_msg = self.image_msgs.popleft()
                 imu_msg = self.imu_msgs.popleft()
                 odom_msg = self.odom_msgs.popleft()
@@ -249,10 +249,15 @@ if __name__ == "__main__":
     parser.add_argument("--visual", "-v", action="store_true", default=False, help="Save video of processed rosbag.")
 
     parser.add_argument("--simulation", "-sim", action="store_true", default=False, help="Rosbag is from a Gazebo simulation.")
+    parser.add_argument("--threshold", "-th", type=float, default=0.05, help="Threshold for syncing messages within a certain time window")
     args = parser.parse_args()
 
     cprint(
-        f"Bag Path: {args.bag_path}\n" f"Save Path: {args.save_path}\n" f"Visualization: {args.visual}" f"Simulation: {args.simulation}",
+        f"Bag Path: {args.bag_path}\n"
+        f"Save Path: {args.save_path}\n"
+        f"Visualization: {args.visual}\n"
+        f"Simulation: {args.simulation}\n"
+        f"Time Threshold: {args.threshold}",
         "blue",
     )
 
@@ -260,7 +265,8 @@ if __name__ == "__main__":
     processor = SynchronizeRosbag(
         bag_path=os.path.normpath(args.bag_path),
         visual=args.visual,
-        simulation=args.simulation
+        simulation=args.simulation,
+        time_threshold=args.threshold
     )
     processor.read_rosbag()
     processor.save_data()

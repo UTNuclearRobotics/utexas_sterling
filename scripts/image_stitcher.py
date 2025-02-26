@@ -360,8 +360,8 @@ class GlobalMap:
             print(f"Missing odometry data at timestep {timestep}")
             return
 
-        H_refined = self.refine_homography(H_relative, frame_cur)
-        self.H_old = self.H_old @ H_refined
+        #H_refined = self.refine_homography(H_relative, frame_cur)
+        self.H_old = self.H_old @ H_relative
         self.H_old /= self.H_old[2,2]
 
         # Warp into tile map
@@ -372,7 +372,7 @@ class GlobalMap:
         self.frame_previous = frame_cur
         self.frame_history.append(frame_cur)
 
-        # Display full map (Only every 100 frames)
+        # Display full map
         if self.visualize:
             big_map = self.get_full_map()
             if big_map is not None and big_map.size > 0:
@@ -523,6 +523,7 @@ class MapViewer:
 def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_matrix_cur):
     """
     Calculate the meters-to-pixels scaling factor using relative odometry and image displacement.
+    Also visualizes the change in keypoints.
 
     Args:
         image_prev (np.ndarray): The previous bird's-eye view (BEV) image.
@@ -533,6 +534,7 @@ def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_mat
     Returns:
         float: The calculated meters-to-pixels scaling factor.
     """
+
     # Compute relative odometry transformation (translation in meters)
     relative_transform = np.linalg.inv(odom_matrix_prev) @ odom_matrix_cur
     tx_meters = relative_transform[1, 3]
@@ -547,9 +549,17 @@ def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_mat
     keypoints_prev, descriptors_prev = orb.detectAndCompute(gray_prev, None)
     keypoints_cur, descriptors_cur = orb.detectAndCompute(gray_cur, None)
 
+    if descriptors_prev is None or descriptors_cur is None:
+        print("No descriptors found. Returning None.")
+        return None
+
     # Match descriptors using BFMatcher
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(descriptors_prev, descriptors_cur)
+
+    if len(matches) < 10:  # Ensure enough keypoints to compute displacement
+        print("Not enough keypoint matches. Returning None.")
+        return None
 
     # Sort matches by distance (best matches first)
     matches = sorted(matches, key=lambda x: x.distance)
@@ -566,11 +576,19 @@ def calculate_meters_to_pixels(image_prev, image_cur, odom_matrix_prev, odom_mat
     translation_meters = np.sqrt(tx_meters**2 + ty_meters**2)
 
     # Compute meters-to-pixels scaling factor
-    meters_to_pixels = avg_pixel_displacement / translation_meters
+    meters_to_pixels = translation_meters / avg_pixel_displacement
 
     print(f"Translation in meters: {translation_meters}")
     print(f"Average pixel displacement: {avg_pixel_displacement}")
     print(f"Calculated meters-to-pixels scaling factor: {meters_to_pixels}")
+
+    # ---- Visualize the Keypoint Matches ----
+    img_matches = cv2.drawMatches(image_prev, keypoints_prev, image_cur, keypoints_cur, matches[:50], None,
+                                  flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+    # Show matched keypoints and motion
+    cv2.imshow("Keypoint Matches", img_matches)
+    cv2.waitKey(0)  # Adjust timing as needed
 
     return meters_to_pixels
 
@@ -588,18 +606,21 @@ if __name__ == "__main__":
     H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
     #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
-    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_20250224_044130-path/panther_recording_20250224_044130_synced.pkl"))
+    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl"))
     #robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_sim_loop_2/panther_recording_sim_loop_2_synced.pkl"))
 
-    scale_start = 490
-    #bev_image_prev = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start), H, dsize)
-    #bev_image_cur = cv2.warpPerspective(robot_data.getImageAtTimestep(scale_start+1), H, dsize)
+    #scale_start = 15
+    #scale_end = 16
+    #bev_image_prev = chessboard_homography.plot_BEV_full(robot_data.getImageAtTimestep(scale_start), H,patch_size=(128,128))
+    #bev_image_cur = chessboard_homography.plot_BEV_full(robot_data.getImageAtTimestep(scale_start+1), H,patch_size=(128,128))
     #meters_to_pixels = calculate_meters_to_pixels(bev_image_prev, bev_image_cur,
     #                                              robot_data.getOdomAtTimestep(scale_start),
     #                                              robot_data.getOdomAtTimestep(scale_start+1))
-    #522 for sim
+
+    #557 for sim
     #261 for actual
     # Initialize the global map
+    
     global_map = GlobalMap(visualize=True)
     start, end = 0, 4000
 
@@ -641,6 +662,7 @@ if __name__ == "__main__":
         viewer = MapViewer(final_map)
         viewer.show_map()
         viewer.save_full_map()
+
 # Add Z buffer, so that pixels off in the distance are replaced with the most recent. 
 # We can get pixel and depth of the pixel using homography, once we reach that pixel, replace that portion of the image with most current
 

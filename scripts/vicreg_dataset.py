@@ -6,7 +6,7 @@ import pickle
 import cv2
 import numpy as np
 from camera_intrinsics import CameraIntrinsics
-from homography_from_chessboard import HomographyFromChessboardImage
+from homography_matrix import HomographyMatrix
 from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
@@ -163,21 +163,12 @@ def validate_vicreg_data(robot_data, vicreg_data):
     exit(0)
 
 if __name__ == "__main__":
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
-
-    # Load the image
-    image_dir = script_dir + "/homography/"
-    image_file = "raw_image.jpg"
-    image = cv2.imread(os.path.join(image_dir, image_file))
-
-    # Parameters for compute vicreg data
-    chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    # H, dsize = chessboard_homography.plot_BEV_full(plot_BEV_full=False)
+    # Load parameters for compute vicreg data from camera intrinsics yaml and homography yaml
+    H = HomographyMatrix().get_homography_matrix()
+    RT = HomographyMatrix().get_rigid_transform()
+    plane_normal = HomographyMatrix().get_plane_normal()
+    plane_distance = HomographyMatrix().get_plane_distance()
     K, _ = CameraIntrinsics().get_camera_calibration_matrix()
-    plane_normal = chessboard_homography.get_plane_norm()
-    plane_distance = chessboard_homography.get_plane_dist()
 
     parser = argparse.ArgumentParser(description="Preprocess data for VICReg.")
     parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronzied pickle file inside.")

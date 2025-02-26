@@ -6,25 +6,26 @@ from homography_utils import *
 from utils import *
 import tkinter as tk
 from scipy.spatial.transform import Rotation as R
-from concurrent.futures import ThreadPoolExecutor
+import argparse
+import yaml
+import os
 
 
 class HomographyFromChessboardImage:
     def __init__(self, image, cb_rows, cb_cols):
         # super().__init__(torch.eye(3))
         self.image = image
-        self.cb_rows = cb_rows
-        self.cb_cols = cb_cols
-        self.chessboard_size = (cb_rows, cb_cols)
+        self.cb_rows = cb_rows-1
+        self.cb_cols = cb_cols-1
 
         # Get image chessboard corners, cartesian NX2
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        ret, corners = cv2.findChessboardCorners(gray, (cb_cols, cb_rows), None)
+        ret, corners = cv2.findChessboardCorners(gray, (self.cb_cols, self.cb_rows), None)
         self.corners = corners.reshape(-1, 2)
         self.cb_tile_width = int(self.chessboard_tile_width())
 
         # Get model chessboard corners, cartesian NX2
-        model_chessboard_2d = compute_model_chessboard_2d(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=True)
+        model_chessboard_2d = compute_model_chessboard_2d(self.cb_rows, self.cb_cols, self.cb_tile_width, center_at_zero=True)
 
         self.H, mask = cv2.findHomography(model_chessboard_2d, self.corners, cv2.RANSAC)
         self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
@@ -33,7 +34,7 @@ class HomographyFromChessboardImage:
         self.validate_chessboard_2d(model_chessboard_2d)
 
         # Transform model chessboard 3D points to image points
-        model_chessboard_3d = compute_model_chessboard_3d(cb_rows, cb_cols, self.cb_tile_width, center_at_zero=True)
+        model_chessboard_3d = compute_model_chessboard_3d(self.cb_rows, self.cb_cols, self.cb_tile_width, center_at_zero=True)
         self.validate_chessboard_3d(model_chessboard_3d)
 
     def validate_chessboard_2d(self, model_chessboard_2d):
@@ -107,6 +108,44 @@ class HomographyFromChessboardImage:
         transformed_points = H @ hom_points
         return hom_to_cart(transformed_points)
 
+    def save_homography_to_yaml(self, filepath="homography.yaml"):
+        """
+        Save the homography matrix (self.H), rigid transform (self.RT), plane normal (self.plane_normal),
+        and plane distance (self.plane_distance) to a YAML file.
+
+        Args:
+            filepath (str): Path to save the YAML file (default: 'homography.yaml').
+        
+        Returns:
+            None
+        """
+        # Convert self.H (3x3 NumPy array) to a list of lists
+        inv_H = np.linalg.inv(self.H)
+        homography_matrix = inv_H.tolist()
+
+        # Convert self.RT (likely 3x4 or 4x4 NumPy array) to a list of lists
+        rigid_transform = self.RT.tolist()
+
+        # Convert self.plane_normal (3x1 NumPy array) to a list
+        plane_normal = self.plane_normal.tolist()
+
+        # Convert self.plane_distance (scalar) to a float
+        plane_distance = float(self.plane_distance)
+
+        # Structure the data for YAML
+        data = {
+            "homography": homography_matrix,
+            "rigid_transform": rigid_transform,
+            "plane_normal": plane_normal,
+            "plane_distance": plane_distance
+        }
+
+        # Save to YAML file
+        with open(filepath, 'w') as yaml_file:
+            yaml.dump(data, yaml_file, default_flow_style=None)  # None preserves matrix/vector readability
+        
+        print(f"Homography data saved to {filepath}")
+
     def plot_BEV_chessboard(self):
         image = self.image.copy()
         model_chessboard_2d_centered = compute_model_chessboard_2d(
@@ -170,104 +209,32 @@ class HomographyFromChessboardImage:
             cv2.imshow("Full BEV", rend_image)
             cv2.waitKey(1)
 
-    def crop_bottom_to_content(self, img, threshold=1):
-        """
-        Crops the bottom of the image so that the last row containing
-        any pixel value above the threshold becomes the new bottom.
-        
-        Parameters:
-        img: A color image (NumPy array) in BGR or RGB.
-        threshold: Pixel intensity threshold (default 1); 
-                    rows with all pixel values <= threshold are considered black.
-        
-        Returns:
-        Cropped image.
-        """
-        # Convert to grayscale for simplicity.
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
-        
-        h, w = gray.shape
-        # Initialize the crop index to h (no crop if no black bottom is found).
-        crop_row = h  
-        # Iterate from the bottom row upward.
-        for row in range(h - 1, -1, -1):
-            # If at least one pixel in this row exceeds the threshold,
-            # then this row is part of the actual image.
-            if np.any(gray[row, :] > threshold):
-                crop_row = row + 1  # +1 so that this row is included
-                break
-        return img[:crop_row, :]
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Compute homography from a chessboard image.")
+    parser.add_argument("--image_path", "-i", type=str, required=True, help="Path to the chessboard image file.")
+    parser.add_argument("--rows", "-r", type=int, required=True, help="Number of rows in the chessboard.")
+    parser.add_argument("--cols", "-c", type=int, required=True, help="Number of columns in the chessboard.")
+    # Removed --output_yaml argument
 
-    def plot_BEV_full(self, img, H, patch_size=(128, 128)):
-        """
-        Preprocesses the robot data to compute multiple viewpoints
-        of the same patch for each timestep.
-        Args:
-            H: Homography matrix.
-            patch_size: Size of the patch (width, height).
-        Returns:
-            stitched_image: Reconstructed bird's-eye view image.
-        """
-        # Define horizontal and vertical shifts
-        num_patches_x = 6
-        num_patches_y = 10
-        shift_step = 128
+    args = parser.parse_args()
 
-        # Compute all shifts using vectorized NumPy operations
-        shift_x = np.arange(-(num_patches_x), num_patches_x + 2) * shift_step  # -6 to 7 (14 steps)
-        shift_y = np.arange(-2, num_patches_y) * shift_step                   # -2 to 9 (12 steps)
+    image = cv2.imread(args.image_path)
+    if image is None:
+        print(f"Error: Could not load image from {args.image_path}")
+        exit(1)
 
-        # Sort shifts in descending order to match sorted(..., reverse=True)
-        shift_x = sorted(shift_x, reverse=True)  # Largest negative to largest positive (left to right)
-        shift_y = sorted(shift_y, reverse=True)  # Largest negative to largest positive (top to bottom)
+    # Get the directory of the image_path and construct the YAML filepath
+    image_dir = os.path.dirname(args.image_path)  # Directory of the image
+    yaml_filename = "homography.yaml"  # Default filename
+    yaml_filepath = os.path.join(image_dir, yaml_filename)  # Full path for YAML file
 
-        # Generate all possible (sx, sy) shift pairs with the correct order
-        # Use explicit indexing to match the original reverse-sorted order
-        shift_pairs = []
-        for sy in shift_y:  # Top to bottom (largest negative to largest positive)
-            for sx in shift_x:  # Left to right (largest negative to largest positive)
-                shift_pairs.append([sx, sy])
-        shift_pairs = np.array(shift_pairs)  # Shape: (168, 2)
+    homography_processor = HomographyFromChessboardImage(
+        image=image,
+        cb_rows=args.rows,
+        cb_cols=args.cols
+    )
 
-        def process_patch(shift):
-            """Applies homography and warps a patch."""
-            sx, sy = shift
-
-            # Create transformation matrix
-            T_shift = np.array([[1, 0, sx],
-                                [0, 1, sy],
-                                [0, 0, 1]])
-            H_shifted = T_shift @ H  # Matrix multiplication
-
-            # Warp image using shifted homography
-            cur_patch = cv2.warpPerspective(img, H_shifted, dsize=patch_size, flags=cv2.INTER_LINEAR)
-
-            # Ensure patch size matches exactly
-            if cur_patch.shape[:2] != patch_size:
-                cur_patch = cv2.resize(cur_patch, patch_size, interpolation=cv2.INTER_LINEAR)
-
-            return cur_patch
-
-        # Use multi-threading to process patches in parallel
-        with ThreadPoolExecutor(max_workers=min(8, len(shift_pairs))) as executor:
-            patches = list(executor.map(process_patch, shift_pairs))
-
-        # Reconstruct the grid (rows x cols)
-        rows = len(shift_y)  # 12
-        cols = len(shift_x)  # 14
-
-        # Reshape patches into row-wise groups and concatenate efficiently
-        patches_array = np.array(patches, dtype=np.uint8)  # Convert to numpy array for efficiency
-        row_images = [cv2.hconcat(patches_array[i * cols:(i + 1) * cols]) for i in range(rows)]
-
-        # No reversal needed since shift_y is already sorted reverse=True
-        # Concatenate all rows to form the final stitched image
-        stitched_image = cv2.vconcat(row_images)
-
-        # Crop the bottom part if necessary
-        stitched_image = self.crop_bottom_to_content(stitched_image)
-
-        return stitched_image
+    homography_processor.save_homography_to_yaml(filepath=yaml_filepath)
 
 """
     def plot_BEV_full(self, image, plot_BEV_full=False):

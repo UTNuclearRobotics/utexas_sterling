@@ -177,7 +177,6 @@ class SynchronizeRosbag:
                 img3 = cv2.imdecode(img3_data, cv2.IMREAD_COLOR)
 
                 # Stitch the images together using panoramic view
-<<<<<<< Updated upstream
                 #stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
                 #status, stitched_img = stitcher.stitch([img1, img2, img3])
 
@@ -185,17 +184,15 @@ class SynchronizeRosbag:
                 #    print("Error during stitching")
                 #    continue
 
-=======
-                stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
-                status, stitched_img = stitcher.stitch([img1, img2])
-                if status != cv2.Stitcher_OK:
-                    print("Error during stitching")
-                    continue
+                #stitcher = cv2.Stitcher_create(cv2.Stitcher_PANORAMA)
+                #status, stitched_img = stitcher.stitch([img1, img2])
+                #if status != cv2.Stitcher_OK:
+                #    print("Error during stitching")
+                #    continue
                 
                 # stitched_img = np.hstack((img1, img2, img3))
                 # stitched_img = ImageStitcher.stitch_images([img1, img2, img3])
                 
->>>>>>> Stashed changes
                 # Encode the stitched image back to compressed format
                 _, stitched_img_encoded = cv2.imencode('.jpg', img2)
                 stitched_img_data = stitched_img_encoded.tobytes()                

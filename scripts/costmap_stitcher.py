@@ -4,13 +4,11 @@ import os
 import numpy as np
 from tqdm import tqdm
 from bev_costmap import BEVCostmap
-from homography_from_chessboard import HomographyFromChessboardImage
+from homography_matrix import HomographyMatrix
 from robot_data_at_timestep import RobotDataAtTimestep  
-import numpy as np
-import cv2
 from image_stitcher import MapViewer
 from collections import defaultdict
-from scipy.linalg import solve
+from homography_utils import plot_BEV_full
 
 
 class GlobalCostmap:
@@ -193,39 +191,39 @@ class GlobalCostmap:
 
 
 if __name__ == "__main__":
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
-
-    # Load the image
-    image_dir = script_dir + "/homography/"
-    image_file = "raw_image.jpg"
-    image = cv2.imread(os.path.join(image_dir, image_file))
-
-    chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
-    #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
+    # Load homography matrix (assuming default path; adjust as needed)
+    H = HomographyMatrix().get_homography_matrix()
     parser = argparse.ArgumentParser(description="Generate and update a global BEV cost map.")
-    parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized pickle file inside.")
+    parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized pickle file and models subfolder inside.")
+    parser.add_argument("-sim", "--use-sim-kmeans", action="store_true", help="Use the simulation k-means model instead of the default one")
     args = parser.parse_args()
 
+    # Validate bag directory
     bag_path = args.b
-    if not os.path.exists(bag_path):
-        raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
+    if not os.path.exists(bag_path) or not os.path.isdir(bag_path):
+        raise FileNotFoundError(f"Bag path does not exist or is not a directory: {bag_path}")
 
+    # Search for synced pickle file
     synced_pkl = [file for file in os.listdir(bag_path) if file.endswith("_synced.pkl")]
     if len(synced_pkl) != 1:
-        raise FileNotFoundError(f"Synced pickle file not found in: {bag_path}")
+        raise FileNotFoundError(f"Exactly one '*_synced.pkl' file expected in '{bag_path}', found {len(synced_pkl)}")
     synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
 
-    # Initialize BEV Costmap
-    viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
-    kmeans_path = "scripts/clusters/kmeans_model.pkl"
+    # Search for .pt file in models subfolder
+    models_dir = os.path.join(bag_path, "models")
+    if not os.path.exists(models_dir) or not os.path.isdir(models_dir):
+        raise FileNotFoundError(f"'models' subfolder not found in '{bag_path}'")
+    
+    terrain_rep_files = [file for file in os.listdir(models_dir) if file.endswith("_terrain_rep.pt")]
+    if len(terrain_rep_files) != 1:
+        raise FileNotFoundError(f"Exactly one '*_terrain_rep.pt' file expected in '{models_dir}', found {len(terrain_rep_files)}")
+    viz_encoder_path = os.path.join(models_dir, terrain_rep_files[0])
 
-    sim_encoder_path = "bags/panther_recording_20250224_035801-wander/models/panther_recording_20250224_035801-wander_terrain_rep.pt"
-    sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
-    #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
+    # Define k-means model paths
+    DEFAULT_KMEANS_PATH = "scripts/clusters/kmeans_model.pkl"
+    SIM_KMEANS_PATH = "scripts/clusters_sim/sim_kmeans_model.pkl"
 
-    preferences = {
+    PREFERENCES = {
         # Black: 0, White: 255
         0: 175,      #Cluster 0: Dark concrete, leaves, grass
         1: 0,      #Cluster 1: Smooth concrete
@@ -236,7 +234,7 @@ if __name__ == "__main__":
         #6: 0      # Cluster 6: Smooth concrete
     }
 
-    sim_preferences = {
+    SIM_PREFERENCES = {
         # Black: 0, White: 255
         0: 50,      #Cluster 0: Bricks
         1: 225,      #Cluster 1: Grass
@@ -247,7 +245,46 @@ if __name__ == "__main__":
         #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
+    # Select k-means model and preferences based on -sim argument
+    if args.use_sim_kmeans:
+        kmeans_path = SIM_KMEANS_PATH
+        preferences = SIM_PREFERENCES
+    else:
+        kmeans_path = DEFAULT_KMEANS_PATH
+        preferences = PREFERENCES
+    
+    if not os.path.exists(kmeans_path):
+        raise FileNotFoundError(f"K-means model not found at '{kmeans_path}'")
+
+    # Debugging output (optional)
+    print(f"Using synced pickle file: {synced_pkl_path}")
+    print(f"Using visual encoder: {viz_encoder_path}")
+    print(f"Using k-means model: {kmeans_path}")
+    print(f"Using preferences: {preferences}")
+
+    PREFERNCES = {
+        # Black: 0, White: 255
+        0: 175,      #Cluster 0: Dark concrete, leaves, grass
+        1: 0,      #Cluster 1: Smooth concrete
+        2: 50,      #Cluster 2: Dark bricks, some grass
+        3: 0,      #Cluster 3: Aggregate concrete, smooth concrete
+        4: 225,      #Cluster 4: Grass
+        5: 225,      # Cluster 5: Leaves, Grass
+        #6: 0      # Cluster 6: Smooth concrete
+    }
+
+    SIM_PREFERENCES = {
+        # Black: 0, White: 255
+        0: 50,      #Cluster 0: Bricks
+        1: 225,      #Cluster 1: Grass
+        2: 0,      #Cluster 2: Pavement, bricks
+        3: 175,      #Cluster 3: Mulch
+        4: 225,      #Cluster 4: Grass
+        5: 225,      # Cluster 5: Grass
+        #6: 50      # Cluster 6: Smooth concrete
+    }
+
+    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences)
     global_costmap = GlobalCostmap(tile_size=2560, cell_size=128, meters_per_pixel=1/(557))
 
     # Process each timestep
@@ -258,7 +295,7 @@ if __name__ == "__main__":
         cur_img = robot_data.getImageAtTimestep(timestep)
         odom_cur = robot_data.getOdomAtTimestep(timestep)
 
-        bev_img = chessboard_homography.plot_BEV_full(cur_img, H,patch_size=(128,128))
+        bev_img = plot_BEV_full(cur_img, H,patch_size=(128,128))
         costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
         visualize_cost = bev_costmap.visualize_costmap(costmap, 128)
 
