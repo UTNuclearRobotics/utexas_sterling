@@ -133,7 +133,7 @@ class Cluster:
         self,
         k,
         iterations,
-        save_model_path="scripts/clusters_sim/sim_kmeans_model.pkl",
+        save_model_path="scripts/clusters/kmeans_model.pkl",
         save_scaler_path="scripts/clusters_sim/scaler.pkl",
     ):
         """
@@ -344,7 +344,7 @@ class Cluster:
 
 if __name__ == "__main__":
     # Save directory
-    save_dir = os.path.join(script_dir, "clusters_sim")
+    save_dir = os.path.join(script_dir, "clusters")
     os.makedirs(save_dir, exist_ok=True)
 
     # Parse command line arguments
@@ -378,7 +378,7 @@ if __name__ == "__main__":
     )
 
     #k_values = range(2, 12)
-    k_values = 6
+    k_values = 10
     iterations = 1000
 
     if isinstance(k_values, range):

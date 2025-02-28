@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import joblib
 from homography_from_chessboard import HomographyFromChessboardImage
+from homography_matrix import HomographyMatrix
 from robot_data_at_timestep import RobotDataAtTimestep
 from termcolor import cprint
 from tqdm import tqdm
@@ -14,6 +15,7 @@ import joblib
 from sklearn.cluster import KMeans
 from train_representation import SterlingPaternRepresentation
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, PowerTransformer, normalize, RobustScaler
+from homography_utils import plot_BEV_full
 
 
 # GCD of 1280 and 720: 1,2,4,5,8,10,16,20,40,80
@@ -186,23 +188,14 @@ if __name__ == "__main__":
 
     # Get chessboard calibration image
 if __name__ == "__main__":
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
-
-    # Load the image
-    image_dir = script_dir + "/homography/"
-    image_file = "raw_image.jpg"
-    image = cv2.imread(os.path.join(image_dir, image_file))
-
-    chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    H = HomographyMatrix().get_homography_matrix()
     #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
     robot_data = RobotDataAtTimestep(synced_pkl_path)
 
-    viz_encoder_path = "bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
+    viz_encoder_path = "bags/agh_courtyard_2/models/agh_courtyard_2_terrain_rep.pt"#"bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
     kmeans_path = "scripts/clusters/kmeans_model.pkl"
 
-    sim_encoder_path = "bags/panther_recording_20250224_035801-wander/models/panther_recording_20250224_035801-wander_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
+    sim_encoder_path = "bags/panther_sim_recording_low_20250228_125700/models/panther_sim_recording_low_20250228_125700_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
     #scaler_path = "scripts/clusters_sim/sim_scaler.pkl"
 
@@ -217,23 +210,37 @@ if __name__ == "__main__":
         #6: 0      # Cluster 6: Smooth concrete
     }
 
+    preferences_ahg_2 = {
+        # Black: 0, White: 255
+        0: 0,      #Cluster 0: Concrete
+        1: 225,      #Cluster 1: Dark thing
+        2: 50,      #Cluster 2: concrete??
+        3: 225,      #Cluster 3: Dark thing
+        4: 225,      #Cluster 4: Dark thing
+        5: 225,      # Cluster 5: Dark thing
+        6: 50,      # Cluster 6: Bricks
+        7: 225,      # Cluster 7: Dark thing
+        8: 175,      # Cluster 8: Everything, but most grass and leaves
+        9: 0,      #Cluster 9: Concrete
+    }
+
     sim_preferences = {
         # Black: 0, White: 255
-        0: 50,      #Cluster 0: Bricks
-        1: 225,      #Cluster 1: Grass
-        2: 0,      #Cluster 2: Pavement, bricks
-        3: 175,      #Cluster 3: Mulch
-        4: 225,      #Cluster 4: Grass
-        5: 225,      # Cluster 5: Grass
+        0: 225,      #Cluster 0: Grass
+        1: 0,      #Cluster 1: Pavement
+        2: 225,      #Cluster 2: Red
+        3: 150,      #Cluster 3: Grass and pavement
+        4: 225,      #Cluster 4: Grass and red
+        #5: 225,      # Cluster 5: Grass
         #6: 50      # Cluster 6: Smooth concrete
     }
 
-    bev_costmap = BEVCostmap(sim_encoder_path, sim_kmeans_path, sim_preferences)
+    bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences_ahg_2)
 
-    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(1400, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
-        bev_img = chessboard_homography.plot_BEV_full(cur_img, H,patch_size=(128,128))
+        bev_img = plot_BEV_full(cur_img, H,patch_size=(128,128))
         costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
         visualize = bev_costmap.visualize_costmap(costmap, 128)
 

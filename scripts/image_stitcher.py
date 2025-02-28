@@ -4,6 +4,7 @@ from robot_data_at_timestep import RobotDataAtTimestep
 import os
 from camera_intrinsics import CameraIntrinsics
 from homography_from_chessboard import HomographyFromChessboardImage
+from homography_matrix import HomographyMatrix
 from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
@@ -17,6 +18,9 @@ from collections import Counter
 import torch
 import torch.nn.functional as F
 from scipy.optimize import minimize
+from homography_utils import plot_BEV_full
+
+ROTATION_90_CLOCKWISE = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32)
 
 class GlobalMap:
     def __init__(self, tile_size=1280, channels=3, visualize=False):
@@ -323,15 +327,8 @@ class GlobalMap:
                 # Fallback to identity if no odom data
                 self.H_old = np.eye(3, dtype=np.float32)
 
-            # Apply 90-degree clockwise rotation
-            rotation_90_clockwise = np.array([
-                [0, -1, 0],  # cos(90) = 0, sin(90) = 1, adjusted for clockwise
-                [1, 0, 0],   # -sin(90) = -1, cos(90) = 0
-                [0, 0, 1]    # Homogeneous coordinate
-            ], dtype=np.float32)
-
             # Rotate the initial heading by 90 degrees clockwise
-            self.H_old = self.H_old @ rotation_90_clockwise
+            self.H_old = self.H_old @ ROTATION_90_CLOCKWISE
             self.H_old /= self.H_old[2, 2]  # Normalize to ensure the last element is 1
 
             self.frame_previous = frame_cur
@@ -597,16 +594,10 @@ if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
 
-    # Load the image
-    image_dir = script_dir + "/homography/"
-    image_file = "raw_image.jpg"
-    image = cv2.imread(os.path.join(image_dir, image_file))
-
-    chessboard_homography = HomographyFromChessboardImage(image, 8, 6)
-    H = np.linalg.inv(chessboard_homography.H)  # get_homography_image_to_model()
+    H = HomographyMatrix().get_homography_matrix()
     #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
-    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl"))
+    robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/agh_courtyard_2/panther_recording_20250227_170607_synced.pkl"))
     #robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/panther_recording_sim_loop_2/panther_recording_sim_loop_2_synced.pkl"))
 
     #scale_start = 15
@@ -621,8 +612,8 @@ if __name__ == "__main__":
     #261 for actual
     # Initialize the global map
     
-    global_map = GlobalMap(visualize=True)
-    start, end = 0, 4000
+    global_map = GlobalMap(visualize=False)
+    start, end = 0, 8000
 
     # Check if an image path is provided
     image_path = None#"full_map.png"  # Change this to None if no image path is given
@@ -634,7 +625,7 @@ if __name__ == "__main__":
             viewer.show_map()
     else:
         # Process subsequent BEV images
-        for timestep in tqdm(range(start, end), desc="Processing patches at timesteps"):
+        for timestep in tqdm(range(start, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
             try:
                 cur_img = robot_data.getImageAtTimestep(timestep)
                 cur_rt = robot_data.getOdomAtTimestep(timestep)
@@ -642,7 +633,7 @@ if __name__ == "__main__":
                     print(f"Missing image data at timestep {timestep}")
                     continue
 
-                bev_img = chessboard_homography.plot_BEV_full(cur_img, H,patch_size=(128,128))
+                bev_img = plot_BEV_full(cur_img, H,patch_size=(128,128))
                 #global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=meters_to_pixels)
                 global_map.process_frame(bev_img, timestep, odom_data=cur_rt, scale=557)
 

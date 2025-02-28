@@ -262,28 +262,6 @@ if __name__ == "__main__":
     print(f"Using k-means model: {kmeans_path}")
     print(f"Using preferences: {preferences}")
 
-    PREFERNCES = {
-        # Black: 0, White: 255
-        0: 175,      #Cluster 0: Dark concrete, leaves, grass
-        1: 0,      #Cluster 1: Smooth concrete
-        2: 50,      #Cluster 2: Dark bricks, some grass
-        3: 0,      #Cluster 3: Aggregate concrete, smooth concrete
-        4: 225,      #Cluster 4: Grass
-        5: 225,      # Cluster 5: Leaves, Grass
-        #6: 0      # Cluster 6: Smooth concrete
-    }
-
-    SIM_PREFERENCES = {
-        # Black: 0, White: 255
-        0: 50,      #Cluster 0: Bricks
-        1: 225,      #Cluster 1: Grass
-        2: 0,      #Cluster 2: Pavement, bricks
-        3: 175,      #Cluster 3: Mulch
-        4: 225,      #Cluster 4: Grass
-        5: 225,      # Cluster 5: Grass
-        #6: 50      # Cluster 6: Smooth concrete
-    }
-
     bev_costmap = BEVCostmap(viz_encoder_path, kmeans_path, preferences)
     global_costmap = GlobalCostmap(tile_size=2560, cell_size=128, meters_per_pixel=1/(557))
 
