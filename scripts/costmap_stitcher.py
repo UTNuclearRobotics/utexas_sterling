@@ -4,7 +4,7 @@ import os
 import numpy as np
 from tqdm import tqdm
 from bev_costmap import BEVCostmap
-from homography_matrix import HomographyMatrix
+from homography_params import get_homography_params
 from robot_data_at_timestep import RobotDataAtTimestep  
 from image_stitcher import MapViewer
 from collections import defaultdict
@@ -192,7 +192,7 @@ class GlobalCostmap:
 
 if __name__ == "__main__":
     # Load homography matrix (assuming default path; adjust as needed)
-    H = HomographyMatrix().get_homography_matrix()
+    H = get_homography_params().homography_matrix()
     parser = argparse.ArgumentParser(description="Generate and update a global BEV cost map.")
     parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized pickle file and models subfolder inside.")
     parser.add_argument("-sim", "--use-sim-kmeans", action="store_true", help="Use the simulation k-means model instead of the default one")
@@ -220,17 +220,28 @@ if __name__ == "__main__":
     viz_encoder_path = os.path.join(models_dir, terrain_rep_files[0])
 
     # Define k-means model paths
-    DEFAULT_KMEANS_PATH = "scripts/clusters/kmeans_model.pkl"
+    DEFAULT_KMEANS_PATH = "scripts/clusters_ahg2/kmeans_model.pkl"
     SIM_KMEANS_PATH = "scripts/clusters_sim/sim_kmeans_model.pkl"
+
+    #PREFERENCES = {
+    #    # Black: 0, White: 255
+    #    0: 175,      #Cluster 0: Dark concrete, leaves, grass
+    #    1: 0,      #Cluster 1: Smooth concrete
+    #    2: 50,      #Cluster 2: Dark bricks, some grass
+    #    3: 0,      #Cluster 3: Aggregate concrete, smooth concrete
+    #    4: 225,      #Cluster 4: Grass
+    #    5: 225,      # Cluster 5: Leaves, Grass
+    #    #6: 0      # Cluster 6: Smooth concrete
+    #}
 
     PREFERENCES = {
         # Black: 0, White: 255
-        0: 175,      #Cluster 0: Dark concrete, leaves, grass
-        1: 0,      #Cluster 1: Smooth concrete
-        2: 50,      #Cluster 2: Dark bricks, some grass
-        3: 0,      #Cluster 3: Aggregate concrete, smooth concrete
+        0: 175,      #Cluster 0: Smooth concrete, some mulch
+        1: 50,      #Cluster 1: Bricks
+        2: 0,      #Cluster 2: Concrete
+        3: 50,      #Cluster 3: Bricks
         4: 225,      #Cluster 4: Grass
-        5: 225,      # Cluster 5: Leaves, Grass
+        #5: 225,      # Cluster 5: Leaves, Grass
         #6: 0      # Cluster 6: Smooth concrete
     }
 

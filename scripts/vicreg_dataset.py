@@ -5,8 +5,7 @@ import pickle
 
 import cv2
 import numpy as np
-from camera_intrinsics import CameraIntrinsics
-from homography_matrix import HomographyMatrix
+from homography_params import get_homography_params
 from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
@@ -164,11 +163,11 @@ def validate_vicreg_data(robot_data, vicreg_data):
 
 if __name__ == "__main__":
     # Load parameters for compute vicreg data from camera intrinsics yaml and homography yaml
-    H = HomographyMatrix().get_homography_matrix()
-    RT = HomographyMatrix().get_rigid_transform()
-    plane_normal = HomographyMatrix().get_plane_normal()
-    plane_distance = HomographyMatrix().get_plane_distance()
-    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
+    H = get_homography_params().homography_matrix()
+    RT = get_homography_params().rigid_transform()
+    plane_normal = get_homography_params().plane_norm()
+    plane_distance = get_homography_params().plane_dist()
+    K, _ = get_homography_params().camera_intrinsics()
 
     parser = argparse.ArgumentParser(description="Preprocess data for VICReg.")
     parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronzied pickle file inside.")

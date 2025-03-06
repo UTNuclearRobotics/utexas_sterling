@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from camera_intrinsics import CameraIntrinsics
+from homography_params import get_homography_params
 from homography_utils import *
 from utils import *
 import tkinter as tk
@@ -28,7 +28,7 @@ class HomographyFromChessboardImage:
         model_chessboard_2d = compute_model_chessboard_2d(self.cb_rows, self.cb_cols, self.cb_tile_width, center_at_zero=True)
 
         self.H, mask = cv2.findHomography(model_chessboard_2d, self.corners, cv2.RANSAC)
-        self.K, K_inv = CameraIntrinsics().get_camera_calibration_matrix()
+        self.K, K_inv = get_homography_params().camera_intrinsics()
         self.RT, self.plane_normal, self.plane_distance = decompose_homography(self.H, self.K)
 
         self.validate_chessboard_2d(model_chessboard_2d)
@@ -108,13 +108,13 @@ class HomographyFromChessboardImage:
         transformed_points = H @ hom_points
         return hom_to_cart(transformed_points)
 
-    def save_homography_to_yaml(self, filepath="homography.yaml"):
+    def save_homography_to_yaml(self, filepath):
         """
-        Save the homography matrix (self.H), rigid transform (self.RT), plane normal (self.plane_normal),
-        and plane distance (self.plane_distance) to a YAML file.
+        Add the homography matrix (self.H), rigid transform (self.RT), plane normal (self.plane_normal),
+        and plane distance (self.plane_distance) to an existing YAML file, preserving camera_intrinsics.
 
         Args:
-            filepath (str): Path to save the YAML file (default: 'homography.yaml').
+            filepath (str): Path to the YAML file (default: 'homography.yaml').
         
         Returns:
             None
@@ -132,19 +132,42 @@ class HomographyFromChessboardImage:
         # Convert self.plane_distance (scalar) to a float
         plane_distance = float(self.plane_distance)
 
-        # Structure the data for YAML
-        data = {
+        # Structure the new data to add
+        new_data = {
             "homography": homography_matrix,
             "rigid_transform": rigid_transform,
             "plane_normal": plane_normal,
             "plane_distance": plane_distance
         }
 
-        # Save to YAML file
-        with open(filepath, 'w') as yaml_file:
-            yaml.dump(data, yaml_file, default_flow_style=None)  # None preserves matrix/vector readability
-        
-        print(f"Homography data saved to {filepath}")
+        # Load existing data from the YAML file if it exists
+        existing_data = {}
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r') as yaml_file:
+                    existing_data = yaml.safe_load(yaml_file) or {}
+            except Exception as e:
+                print(f"Error reading existing YAML file {filepath}: {e}")
+                return
+        else:
+            # If file doesn't exist, initialize with camera_intrinsics as a base
+            existing_data["camera_intrinsics"] = {
+                "fx": 759.8603515625,
+                "fy": 759.8603515625,
+                "cx": 637.9826049804688,
+                "cy": 358.5901794433594
+            }
+
+        # Update existing data with new homography data, preserving camera_intrinsics
+        existing_data.update(new_data)
+
+        # Save the updated data back to the YAML file
+        try:
+            with open(filepath, 'w') as yaml_file:
+                yaml.dump(existing_data, yaml_file, default_flow_style=None)  # Preserve readability
+            print(f"Homography data added to {filepath}")
+        except Exception as e:
+            print(f"Error writing to YAML file {filepath}: {e}")
 
     def plot_BEV_chessboard(self):
         image = self.image.copy()
@@ -225,7 +248,7 @@ if __name__ == "__main__":
 
     # Get the directory of the image_path and construct the YAML filepath
     image_dir = os.path.dirname(args.image_path)  # Directory of the image
-    yaml_filename = "homography.yaml"  # Default filename
+    yaml_filename = "config.yaml"  # Default filename
     yaml_filepath = os.path.join(image_dir, yaml_filename)  # Full path for YAML file
 
     homography_processor = HomographyFromChessboardImage(

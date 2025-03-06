@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import joblib
 from homography_from_chessboard import HomographyFromChessboardImage
-from homography_matrix import HomographyMatrix
+from homography_params import get_homography_params
 from robot_data_at_timestep import RobotDataAtTimestep
 from termcolor import cprint
 from tqdm import tqdm
@@ -35,7 +35,7 @@ class BEVCostmap:
         self.sterling = SterlingPaternRepresentation(self.device).to(self.device)
         if not os.path.exists(viz_encoder_path):
             raise FileNotFoundError(f"Model file not found at: {viz_encoder_path}")
-        self.sterling.load_state_dict(torch.load(viz_encoder_path, weights_only=True, map_location=torch.device(self.device)))
+        self.sterling.load_state_dict(torch.load(viz_encoder_path, weights_only=True, map_location=torch.device(self.device)), strict=False)
 
         # Load K-means model
         if not os.path.exists(kmeans_path):
@@ -188,12 +188,12 @@ if __name__ == "__main__":
 
     # Get chessboard calibration image
 if __name__ == "__main__":
-    H = HomographyMatrix().get_homography_matrix()
+    H = get_homography_params().homography_matrix()
     #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
     robot_data = RobotDataAtTimestep(synced_pkl_path)
 
     viz_encoder_path = "bags/agh_courtyard_2/models/agh_courtyard_2_terrain_rep.pt"#"bags/ahg_courtyard_1/models/ahg_courtyard_1_terrain_rep.pt"
-    kmeans_path = "scripts/clusters/kmeans_model.pkl"
+    kmeans_path = "scripts/clusters_ahg2/kmeans_model.pkl"
 
     sim_encoder_path = "bags/panther_sim_recording_low_20250228_125700/models/panther_sim_recording_low_20250228_125700_terrain_rep.pt"#"bags/panther_recording_20250218_175547/models/panther_recording_20250218_175547_terrain_rep.pt"
     sim_kmeans_path = "scripts/clusters_sim/sim_kmeans_model.pkl"
@@ -212,16 +212,13 @@ if __name__ == "__main__":
 
     preferences_ahg_2 = {
         # Black: 0, White: 255
-        0: 0,      #Cluster 0: Concrete
-        1: 225,      #Cluster 1: Dark thing
-        2: 50,      #Cluster 2: concrete??
-        3: 225,      #Cluster 3: Dark thing
-        4: 225,      #Cluster 4: Dark thing
-        5: 225,      # Cluster 5: Dark thing
-        6: 50,      # Cluster 6: Bricks
-        7: 225,      # Cluster 7: Dark thing
-        8: 175,      # Cluster 8: Everything, but most grass and leaves
-        9: 0,      #Cluster 9: Concrete
+        0: 175,      #Cluster 0: Smooth concrete, some mulch
+        1: 50,      #Cluster 1: Bricks
+        2: 0,      #Cluster 2: Concrete
+        3: 50,      #Cluster 3: Bricks
+        4: 225,      #Cluster 4: Grass
+        #5: 225,      # Cluster 5: Leaves, Grass
+        #6: 0      # Cluster 6: Smooth concrete
     }
 
     sim_preferences = {

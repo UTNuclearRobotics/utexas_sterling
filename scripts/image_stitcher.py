@@ -2,9 +2,7 @@ import cv2
 import numpy as np
 from robot_data_at_timestep import RobotDataAtTimestep
 import os
-from camera_intrinsics import CameraIntrinsics
-from homography_from_chessboard import HomographyFromChessboardImage
-from homography_matrix import HomographyMatrix
+from homography_params import get_homography_params
 from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
 from tqdm import tqdm
@@ -594,7 +592,7 @@ if __name__ == "__main__":
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
 
-    H = HomographyMatrix().get_homography_matrix()
+    H = get_homography_params().homography_matrix()
     #H, dsize,_ = chessboard_homography.plot_BEV_full(image)
 
     robot_data = RobotDataAtTimestep(os.path.join(script_dir, "../bags/agh_courtyard_2/panther_recording_20250227_170607_synced.pkl"))

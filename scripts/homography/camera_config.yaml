@@ -1,9 +1,0 @@
-# Oak-D on Husarion Panthers
-camera_intrinsics:
-  fx: 759.8603515625
-  fy: 759.8603515625
-  cx: 637.9826049804688
-  cy: 358.5901794433594
-
-  # IMU: 50 Hz
-  # Camera: 10 Hz
