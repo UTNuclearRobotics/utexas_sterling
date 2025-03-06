@@ -22,7 +22,7 @@ class SterlingPaternRepresentation(nn.Module):
         #self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.rep_size, self.latent_size),
-            nn.PReLU(),
+            nn.ReLU(inplace=True),
             nn.Linear(self.latent_size, self.latent_size),
         )
 
@@ -39,11 +39,11 @@ class SterlingPaternRepresentation(nn.Module):
         # Encode visual patches
         patch1 = patch1.to(self.device)
         patch2 = patch2.to(self.device)
+        #inertial_data = inertial_data.to(self.device)
         v_encoded_1 = self.visual_encoder(patch1)
         v_encoded_1 = F.normalize(v_encoded_1, dim=-1)
         v_encoded_2 = self.visual_encoder(patch2)
         v_encoded_2 = F.normalize(v_encoded_2, dim=-1)
-
         #i_encoded = self.proprioceptive_encoder(inertial_data.float())
 
         # Project encoded representations to latent space
@@ -51,6 +51,7 @@ class SterlingPaternRepresentation(nn.Module):
         zv2 = self.projector(v_encoded_2)
         #zi = self.projector(i_encoded)
 
+        #return zv1, zv2, zi, v_encoded_1, v_encoded_2, i_encoded
         return zv1, zv2, v_encoded_1, v_encoded_2
     
     def encode_single_patch(self, patch):
@@ -69,6 +70,47 @@ class SterlingPaternRepresentation(nn.Module):
         v_encoded = F.normalize(v_encoded, dim=-1)  # Normalize the representation vector
         return v_encoded
     
+    def encode_IMU(self, inertial_data):
+        """
+        Encode a single patch and return its representation vector.
+        Args:
+            patch (torch.Tensor): Single patch image of shape (1, 3, H, W).
+        Returns:
+            torch.Tensor: Encoded and normalized representation vector.
+        """
+        # Ensure the input is on the correct device
+        inertial_data = inertial_data.to(self.device)
+
+        # Encode the patch
+        i_encoded = self.proprioceptive_encoder(inertial_data)
+        return i_encoded
+    
+    def get_terrain_embedding(self, patch, inertial_data):
+        """
+        Generate a single embedding combining visual and proprioceptive data.
+        Args:
+            patch (torch.Tensor): Single patch image of shape (1, 3, 128, 128)
+            inertial_data (torch.Tensor): Proprioceptive data (e.g., shape (1, num_features))
+        Returns:
+            torch.Tensor: Combined embedding vector
+        """
+        # Ensure inputs are on the correct device
+        patch = patch.to(self.device)
+        inertial_data = inertial_data.to(self.device)
+
+        # Encode visual and proprioceptive inputs
+        v_encoded = self.encode_single_patch(patch)  # Shape: (1, latent_size)
+        i_encoded = self.proprioceptive_encoder(inertial_data.float())  # Shape: (1, latent_size)
+
+        # Project to shared latent space
+        zv = self.projector(v_encoded)  # Shape: (1, latent_size)
+        zi = self.projector(i_encoded)  # Shape: (1, latent_size)
+
+        # Combine the representations (e.g., concatenate)
+        combined_embedding = torch.cat((zv, zi), dim=-1)  # Shape: (1, 2 * latent_size)
+
+        return combined_embedding
+    
     def training_step(self, batch, batch_idx):
         """
         Perform a single training step on the batch of data.
@@ -78,7 +120,8 @@ class SterlingPaternRepresentation(nn.Module):
         Returns:
             torch.Tensor: The computed loss value.
         """
-        patch1, patch2 = batch
+        patch1, patch2, inertial = batch
+        #zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
         zv1, zv2, _, _ = self.forward(patch1, patch2)
 
         # Compute VICReg loss
@@ -104,7 +147,7 @@ if __name__ == "__main__":
 
     # Create dataset and dataloader
     patches_pkl = load_bag_pkl(args.bag, "vicreg")
-    #IPT_pkl = load_bag_pkl(args.bag, "synced")
+    IPT_pkl = load_bag_pkl(args.bag, "synced")
 
     # Define the augmentation pipeline
     augment_transform = v2.Compose([
@@ -118,7 +161,7 @@ if __name__ == "__main__":
     ])
 
 
-    dataset = TerrainDataset(patches=patches_pkl, transform=augment_transform)
+    dataset = TerrainDataset(patches=patches_pkl, synced_data=IPT_pkl, transform=augment_transform)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Initialize model
