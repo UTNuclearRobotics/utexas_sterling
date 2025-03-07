@@ -19,7 +19,7 @@ class SterlingPaternRepresentation(nn.Module):
         self.latent_size = 128
         self.rep_size = self.latent_size
         self.visual_encoder = VisualEncoderModel(self.latent_size)
-        #self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
+        self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
         self.projector = nn.Sequential(
             nn.Linear(self.rep_size, self.latent_size),
             nn.ReLU(inplace=True),
@@ -29,7 +29,7 @@ class SterlingPaternRepresentation(nn.Module):
         self.vicreg_loss = VICRegLoss()
         self.l1_coeff = 0.5
 
-    def forward(self, patch1, patch2):
+    def forward(self, patch1, patch2, inertial_data):
         """
         Args:
             patch1 (torch.Tensor): First patch image of shape (3, 128, 128)
@@ -39,20 +39,20 @@ class SterlingPaternRepresentation(nn.Module):
         # Encode visual patches
         patch1 = patch1.to(self.device)
         patch2 = patch2.to(self.device)
-        #inertial_data = inertial_data.to(self.device)
+        inertial_data = inertial_data.to(self.device)
         v_encoded_1 = self.visual_encoder(patch1)
         v_encoded_1 = F.normalize(v_encoded_1, dim=-1)
         v_encoded_2 = self.visual_encoder(patch2)
         v_encoded_2 = F.normalize(v_encoded_2, dim=-1)
-        #i_encoded = self.proprioceptive_encoder(inertial_data.float())
+        i_encoded = self.proprioceptive_encoder(inertial_data.float())
 
         # Project encoded representations to latent space
         zv1 = self.projector(v_encoded_1)
         zv2 = self.projector(v_encoded_2)
-        #zi = self.projector(i_encoded)
+        zi = self.projector(i_encoded)
 
-        #return zv1, zv2, zi, v_encoded_1, v_encoded_2, i_encoded
-        return zv1, zv2, v_encoded_1, v_encoded_2
+        return zv1, zv2, zi, v_encoded_1, v_encoded_2, i_encoded
+        #return zv1, zv2, v_encoded_1, v_encoded_2
     
     def encode_single_patch(self, patch):
         """
@@ -121,16 +121,16 @@ class SterlingPaternRepresentation(nn.Module):
             torch.Tensor: The computed loss value.
         """
         patch1, patch2, inertial = batch
-        #zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
-        zv1, zv2, _, _ = self.forward(patch1, patch2)
+        zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
+        #zv1, zv2, _, _ = self.forward(patch1, patch2)
 
         # Compute VICReg loss
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)
-        #loss_vi = 0.5 * self.vicreg_loss(zv1,zi) + 0.5 * self.vicreg_loss(zv2,zi)
+        loss_vi = 0.5 * self.vicreg_loss(zv1,zi) + 0.5 * self.vicreg_loss(zv2,zi)
 
-        #loss = self.l1_coeff * loss_vpt_inv + (1.0-self.l1_coeff) * loss_vi
+        loss = self.l1_coeff * loss_vpt_inv + (1.0-self.l1_coeff) * loss_vi
 
-        return loss_vpt_inv
+        return loss
 
 if __name__ == "__main__":
     """

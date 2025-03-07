@@ -100,7 +100,7 @@ class PatchRenderer:
 
 
 class Cluster:
-    def __init__(self, data_pkl_path, model_path, batch_size=256):
+    def __init__(self, data_pkl_path, synced_pkl_path, model_path, batch_size=256):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load dataset
@@ -109,25 +109,33 @@ class Cluster:
         with open(data_pkl_path, "rb") as file:
             data_pkl = pickle.load(file)
 
+        if not os.path.exists(synced_pkl_path):
+            raise FileNotFoundError(f"Synced pickle file not found at: {synced_pkl_path}")
+        with open(synced_pkl_path, "rb") as file:
+            synced_pkl = pickle.load(file)
+
         # Load model weights
         self.model = SterlingPaternRepresentation("cpu").to("cpu")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at: {model_path}")
-        self.model.load_state_dict(torch.load(model_path, weights_only=True))
+        self.model.load_state_dict(torch.load(model_path, weights_only=True), strict=False)
 
         # Create dataset and dataloader
-        dataset = TerrainDataset(patches=data_pkl)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        self.dataset = TerrainDataset(patches=data_pkl, synced_data=synced_pkl, incl_orientation=False)
+        self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=False)
 
+        # Store patches and inertial data for clustering
         all_patches_list = []
-        for batch in dataloader:
-            # Each batch is a tuple (patch1, patch2); we only need patch1.
-            patch1, _ = batch  # patch1 shape: [batch_size, channels, height, width]
-            all_patches_list.append(patch1.cpu())  # Append to list, move to CPU if needed
+        all_inertial_list = []
+        for batch in self.dataloader:
+            # Each batch is a tuple (patch1, patch2, inertial)
+            patch1, _, inertial = batch
+            all_patches_list.append(patch1.cpu())  # Shape: [batch_size, channels, height, width]
+            all_inertial_list.append(inertial.cpu())  # Shape: [batch_size, 1, num_features]
 
-        # Concatenate all batches into a single tensor
-        all_patches_tensor = torch.cat(all_patches_list, dim=0)
-        self.patches = all_patches_tensor
+        # Concatenate all batches into single tensors
+        self.patches = torch.cat(all_patches_list, dim=0)  # Shape: [num_samples, channels, height, width]
+        self.inertial = torch.cat(all_inertial_list, dim=0)  # Shape: [num_samples, 1, num_features]
 
     def generate_clusters(
         self,
@@ -137,33 +145,41 @@ class Cluster:
         save_scaler_path="scripts/clusters_sim/scaler.pkl",
     ):
         """
-        Generate clusters using K-means algorithm.
+        Generate clusters using K-means algorithm on combined visual and inertial embeddings.
+
         Args:
             k (int): Number of clusters to generate.
             iterations (int): Number of iterations for K-means.
+            save_model_path (str): Path to save the K-means model.
+            save_scaler_path (str): Path to save the scaler (if used).
+
+        Returns:
+            list: List of lists containing indices of samples in each cluster.
         """
-        # K Means
-        # Move model to CPU and compute representations
+        # Move model to CPU and compute combined representations
         self.model.cpu()
         self.model.eval()
+        combined_embeddings = []
         with torch.no_grad():
-            representation_vectors = self.model.encode_single_patch(self.patches)
-            # Ensure representation_vectors is on CPU
-            representation_vectors = representation_vectors.detach().cpu()
-            representation_vectors_np = representation_vectors.numpy()
-            representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
+            for i in range(0, len(self.patches), self.dataloader.batch_size):
+                # Process in batches to avoid memory issues
+                patch_batch = self.patches[i:i + self.dataloader.batch_size]
+                inertial_batch = self.inertial[i:i + self.dataloader.batch_size]
+                embeddings = self.model.get_terrain_embedding(patch_batch, inertial_batch)
+                combined_embeddings.append(embeddings.cpu())
 
-        #scaler = MinMaxScaler()
-        #representation_vectors_np = scaler.fit_transform(representation_vectors_np)
+        # Concatenate all embeddings
+        representation_vectors = torch.cat(combined_embeddings, dim=0)  # Shape: [num_samples, 2 * latent_size]
+        representation_vectors_np = representation_vectors.numpy()
+        representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
 
         # Apply K-means clustering with sklearn
         kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
         kmeans.fit(representation_vectors_np)
         cluster_labels = kmeans.labels_
 
-        # Save the K-means model and scaler
+        # Save the K-means model
         joblib.dump(kmeans, save_model_path)
-        #joblib.dump(scaler, save_scaler_path)
 
         print("I made (K) clusters: ", k)
         print("Number of items in each cluster:")
@@ -175,7 +191,7 @@ class Cluster:
         for idx, cluster in enumerate(cluster_labels):
             all_cluster_image_indices[cluster].append(idx)  # Assign image index to corresponding cluster
 
-        # Plot clusters only for the best k
+        # Plot clusters
         self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), k)
 
         return all_cluster_image_indices
@@ -359,10 +375,16 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
 
     # Validate the pickle file exists
-    pkl = [file for file in os.listdir(bag_path) if file.endswith("vicreg.pkl")]
-    if len(pkl) != 1:
+    vicreg_pkl = [file for file in os.listdir(bag_path) if file.endswith("vicreg.pkl")]
+    if len(vicreg_pkl) != 1:
         raise FileNotFoundError(f"VICReg pickle file not found in: {bag_path}")
-    pkl_path = os.path.join(bag_path, pkl[0])
+    vicreg_pkl_path = os.path.join(bag_path, vicreg_pkl[0])
+
+    # Validate the pickle file exists
+    synced_pkl = [file for file in os.listdir(bag_path) if file.endswith("_synced.pkl")]
+    if len(synced_pkl) != 1:
+        raise FileNotFoundError(f"VICReg pickle file not found in: {bag_path}")
+    synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
 
     # Validate the pickle file exists
     model_path = os.path.join(bag_path, "models")
@@ -373,7 +395,8 @@ if __name__ == "__main__":
 
     # Generate clusters
     cluster = Cluster(
-        data_pkl_path=pkl_path,
+        data_pkl_path=vicreg_pkl_path,
+        synced_pkl_path=synced_pkl_path,
         model_path=pt_path,
     )
 

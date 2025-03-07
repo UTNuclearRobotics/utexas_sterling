@@ -1,6 +1,11 @@
 import sys
 import os
-
+import yaml
+import numpy as np
+import pickle
+from PIL import Image
+import torch
+from torch.utils.data import DataLoader
 import gi
 from gi.repository import GLib, Gtk, GdkPixbuf
 from cluster import Cluster, PatchRenderer
@@ -39,12 +44,17 @@ class ClusterUI(Gtk.Application):
 
         vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
+        ssf = SelectPickleFile(window)
+        vbox.append(ssf.get_component())
+
+        vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
         smf = SelectModelFile(window)
         vbox.append(smf.get_component())
 
         vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        gc = GenerateClusters(window, spf, smf)
+        gc = GenerateClusters(window, spf, ssf, smf)
         vbox.append(gc.get_component())
 
         # Show the window
@@ -148,16 +158,17 @@ class SelectModelFile:
 
 
 class GenerateClusters:
-    def __init__(self, parent_window, spf, smf):
+    def __init__(self, parent_window, spf, ssf, smf):
         self.parent_window = parent_window
         self.spf = spf
+        self.ssf = ssf
         self.smf = smf
 
         self.generated_flag = False
-
-        # self.vbox
-        # self.entry_clusters
-        # self.entry_iterations
+        self.cluster = None
+        self.all_cluster_image_indices = None
+        self.cluster_labels = None
+        self.dataset = None
 
     def get_component(self):
         self.vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -198,15 +209,16 @@ class GenerateClusters:
 
     def on_button_clicked(self, button):
         data_pkl_path = self.spf.data_pkl_path
+        synced_pkl_path = self.ssf.synced_pkl_path
         model_path = self.smf.model_path
 
-        if data_pkl_path is None or model_path is None:
+        if data_pkl_path is None or model_path is None or synced_pkl_path is None:
             error_dialog = Gtk.MessageDialog(
                 transient_for=self.parent_window,
                 modal=True,
                 message_type=Gtk.MessageType.ERROR,
                 buttons=Gtk.ButtonsType.OK,
-                text="Please select both a data pickle file and a model file before generating clusters.",
+                text="Please select both the pickle file and a model file before generating clusters.",
             )
             error_dialog.show()
             error_dialog.connect("response", lambda dialog, response: dialog.destroy())
@@ -234,26 +246,31 @@ class GenerateClusters:
         
         save_path = os.path.join(os.path.dirname(data_pkl_path), "clusters")
         if not os.path.exists(save_path):
-            # Make directory if it doesn't exist
             os.makedirs(save_path)
 
         # Generate clusters
-        cluster = Cluster(data_pkl_path, model_path)
-        all_cluster_image_indices = cluster.generate_clusters(
+        self.cluster = Cluster(data_pkl_path, synced_pkl_path, model_path)
+        self.all_cluster_image_indices = self.cluster.generate_clusters(
             num_clusters,
             num_iterations,
-            save_model_path=os.path.join(os.path.dirname(data_pkl_path), "clusters", "kmeans_model.pkl"),
-            save_scaler_path=os.path.join(os.path.dirname(data_pkl_path), "clusters", "scaler.pkl"),
+            save_model_path=os.path.join(save_path, "kmeans_model.pkl"),
         )
 
+        # Store the dataset and cluster labels for later use
+        self.dataset = self.cluster.dataset
+        self.cluster_labels = np.zeros(len(self.dataset), dtype=int)
+        for cluster_idx, indices in enumerate(self.all_cluster_image_indices):
+            for idx in indices:
+                self.cluster_labels[idx] = cluster_idx
+
         # Dynamic grid size
-        min_length = min(len(list) for index, list in enumerate(all_cluster_image_indices))
+        min_length = min(len(lst) for lst in self.all_cluster_image_indices)
         grid_size = 10
         while min_length < grid_size**2:
             grid_size -= 1
 
         # Render clusters
-        rendered_clusters = PatchRenderer.render_clusters(all_cluster_image_indices, cluster.patches)
+        rendered_clusters = PatchRenderer.render_clusters(self.all_cluster_image_indices, self.cluster.patches)
 
         self.images = []
         for i, cluster in enumerate(rendered_clusters):
@@ -264,28 +281,20 @@ class GenerateClusters:
             Convert a NumPy array to a GdkPixbuf.Pixbuf object.
             Supports RGB and RGBA formats.
             """
-            # Ensure input is a 3D array
             if array.ndim not in (3,):
                 raise ValueError("Input must be a 3D NumPy array with shape (height, width, channels)")
 
             height, width, channels = array.shape
-
-            # Validate channels
-            if channels not in (3, 4):  # RGB or RGBA
+            if channels not in (3, 4):
                 raise ValueError("Array must have 3 (RGB) or 4 (RGBA) channels")
 
-            # Convert array to bytes
             data = array.tobytes()
-
-            # Define rowstride (bytes per row)
             rowstride = width * channels
-
-            # Create and return GdkPixbuf
             return GdkPixbuf.Pixbuf.new_from_data(
                 data,
                 GdkPixbuf.Colorspace.RGB,
-                channels == 4,  # Has alpha if RGBA
-                8,  # Bits per sample
+                channels == 4,
+                8,
                 width,
                 height,
                 rowstride,
@@ -293,10 +302,11 @@ class GenerateClusters:
 
         hbox_images = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
+        self.labels_and_rankings = []
         for i, image in enumerate(self.images):
             pixbuf = numpy_to_pixbuf(image)
             image_widget = Gtk.Image.new_from_pixbuf(pixbuf)
-            image_widget.set_size_request(200, 200)  # Set the desired width and height
+            image_widget.set_size_request(200, 200)
 
             text_field = Gtk.Entry()
             text_field.set_placeholder_text(f"Label cluster{i + 1}...")
@@ -314,14 +324,13 @@ class GenerateClusters:
             vbox_image.append(ranking_field)
 
             hbox_images.append(vbox_image)
+            self.labels_and_rankings.append((text_field, ranking_field))
 
-        # Check if the last item is a VBox containing the save button
         if self.generated_flag:
             for i in range(3):
                 self.vbox.remove(self.vbox.get_last_child())
         self.generated_flag = True
 
-        # Add components to the VBox
         self.vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         self.vbox.append(hbox_images)
 
@@ -332,74 +341,134 @@ class GenerateClusters:
     def on_save_button_clicked(self, button):
         data_pkl_path = self.spf.data_pkl_path
         save_path = os.path.join(os.path.dirname(data_pkl_path), "clusters")
+        config_path = os.path.join(save_path, "config.yaml")
 
         if not os.path.exists(save_path):
-            # Make directory if it doesn't exist
             os.makedirs(save_path)
         else:
-            # Remove all .jpg and .yaml files in clusters directory
             for file in os.listdir(save_path):
                 file_path = os.path.join(save_path, file)
-                if os.path.isfile(file_path) and (file_path.endswith(".jpg") or file_path.endswith(".yaml")):
-                    os.unlink(file_path)
+                if os.path.isfile(file_path) and file_path.endswith(".jpg"):
+                    os.unlink(file_path)  # Remove only .jpg files, preserve config.yaml
 
-        labels_and_rankings = []
-        vbox = get_children(self.vbox)
-        hbox = get_children(vbox[-2])
-        for vbox_image in hbox:
-            entries = get_children(vbox_image)
-            if len(entries) == 5:
-                label_entry = entries[2]
-                label = label_entry.get_text()
+        # Collect user-provided labels and preferences
+        user_labels_and_rankings = []
+        for text_field, ranking_field in self.labels_and_rankings:
+            label = text_field.get_text()
+            ranking = ranking_field.get_text()
+            try:
+                ranking = float(ranking)
+            except ValueError:
+                error_dialog = Gtk.MessageDialog(
+                    transient_for=self.parent_window,
+                    modal=True,
+                    message_type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text=f"Invalid preference value: {ranking}. Please enter a valid number.",
+                )
+                error_dialog.show()
+                error_dialog.connect("response", lambda dialog, response: dialog.destroy())
+                return
+            user_labels_and_rankings.append((label, ranking))
 
-                ranking_entry = entries[4]
-                ranking = ranking_entry.get_text()
-
-                labels_and_rankings.append((label, ranking))
-
+        # Save cluster images
         for i, image in enumerate(self.images):
-            label, _ = labels_and_rankings[i]
+            label, _ = user_labels_and_rankings[i]
             image_path = os.path.join(save_path, f"{label}.jpg")
-            from PIL import Image
-            import numpy as np
-
-            # Convert NumPy array to PIL image
             pil_image = Image.fromarray(np.uint8(image))
-
-            # Save the PIL image as a JPG file
             pil_image.save(image_path, "JPEG")
 
-        import yaml
-        # Save labels and rankings to a YAML file
-        labels = [label for label, _ in labels_and_rankings]
-        preferences = [int(ranking) for _, ranking in labels_and_rankings]
-        data = {"labels": labels, "preferences": preferences}
-        with open(os.path.join(save_path, "terrain_preferences.yaml"), "w") as file:
-            yaml.dump(data, file)
-            
-        print("Labels:", labels)
-        print("Preferences:", preferences)
+        # Read existing config.yaml
+        existing_config = {}
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as file:
+                existing_config = yaml.safe_load(file) or {}
+        else:
+            existing_config = {}
+
+        # Create new terrains section, replacing any existing terrains
+        new_terrains = [
+            {'name': label, 'label': idx, 'preference': preference}
+            for idx, (label, preference) in enumerate(user_labels_and_rankings)
+        ]
+
+        # Map cluster labels to terrain labels and preferences for each sample
+        cluster_to_terrain = {}
+        for cluster_idx, (terrain_label, preference) in enumerate(user_labels_and_rankings):
+            cluster_to_terrain[cluster_idx] = {
+                'terrain_label': terrain_label,
+                'preference': preference,
+                'label': cluster_idx
+            }
+
+        # Assign terrain labels and preferences to each sample based on its cluster
+        terrain_labels = np.zeros(len(self.dataset), dtype=object)
+        preferences = np.zeros(len(self.dataset), dtype=float)
+        for idx in range(len(self.dataset)):
+            cluster_label = self.cluster_labels[idx]
+            terrain_info = cluster_to_terrain.get(cluster_label, {'terrain_label': 'unknown', 'preference': 0.0})
+            terrain_labels[idx] = terrain_info['terrain_label']
+            preferences[idx] = terrain_info['preference']
+
+        # Update samples section to only include the current dataset's samples
+        new_samples = [
+            {'sample_id': idx, 'terrain': terrain_labels[idx]}
+            for idx in range(len(self.dataset))
+        ]
+
+        # Attach labels to the dataset
+        self.dataset.cluster_labels = self.cluster_labels
+        self.dataset.terrain_labels = terrain_labels
+        self.dataset.preferences = preferences
+
+        # Create a mapping of sample indices to their data and labels
+        labeled_data = []
+        for idx in range(len(self.dataset)):
+            sample = {
+                'index': idx,
+                'patch': self.cluster.patches[idx],  # Visual data
+                'inertial': self.cluster.inertial[idx],  # Inertial data
+                'cluster_label': int(self.cluster_labels[idx]),
+                'terrain_label': terrain_labels[idx],
+                'preference': float(preferences[idx])
+            }
+            labeled_data.append(sample)
+
+        # Save the dataset to a pickle file
+        dataset_save_path = os.path.join(save_path, "labeled_dataset.pkl")
+        with open(dataset_save_path, "wb") as file:
+            pickle.dump(self.dataset, file)
+        print(f"Saved labeled dataset to: {dataset_save_path}")
+
+        # Update the existing config: replace terrains, update samples, preserve other sections
+        existing_config['terrains'] = new_terrains
+        existing_config['samples'] = new_samples  # Replace samples with new ones
+
+        # Save updated config.yaml
+        with open(config_path, "w") as file:
+            yaml.dump(existing_config, file)
+
+        print("Labels:", terrain_labels.tolist())
+        print("Preferences:", preferences.tolist())
+        print(f"Updated config at: {config_path}")
 
         success_dialog = Gtk.MessageDialog(
             transient_for=self.parent_window,
             modal=True,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
-            text="Labels and preferences have been saved successfully.",
+            text="Existing terrains replaced, samples updated in config.yaml, and dataset saved to labeled_dataset.pkl.",
         )
         success_dialog.show()
         success_dialog.connect("response", lambda dialog, response: dialog.destroy())
-
 
 def get_children(box):
     children = []
     child = box.get_first_child()
     while child:
         children.append(child)
-        # print(type(child))  # Print the type of each child widget
         child = child.get_next_sibling()
     return children
-
 
 app = ClusterUI()
 exit_status = app.run(sys.argv)
