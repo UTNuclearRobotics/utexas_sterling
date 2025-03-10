@@ -234,7 +234,70 @@ class SynchronizeRosbag:
         cprint(f"Data saved successfully: {file_path}", "green")
         cprint(f"Total synced messages: {len(self.synced_msgs['imu'])}", "green")
 
+    def calculate_avg_inter_group_time_difference(self):
+        """
+        Calculate the average time difference between consecutive synchronized triplets
+        and the total recording time of the synchronized messages.
+        """
+        if len(self.synced_msgs["image"]) < 2:
+            print("Need at least 2 synchronized triplets to calculate inter-group time differences.")
+            return
 
+        num_triplets = len(self.synced_msgs["image"])
+        print(f"\nAnalyzing inter-group time differences for {num_triplets} synchronized triplets:")
+        print(f"Time threshold used for synchronization: {self.TIME_THRESHOLD} seconds")
+
+        # Calculate total recording time (using image timestamps as reference)
+        first_image_time = self.synced_msgs["image"][0]["timestamp"]
+        last_image_time = self.synced_msgs["image"][-1]["timestamp"]
+        total_recording_time = last_image_time - first_image_time
+
+        # Lists to store inter-group differences for each message type
+        diffs_image = []
+        diffs_imu = []
+        diffs_odom = []
+
+        # Calculate differences between consecutive triplets
+        print(f"{'Index':<6} {'Image Diff (s)':<15} {'IMU Diff (s)':<15} {'Odom Diff (s)':<15}")
+        for i in range(num_triplets - 1):
+            image_diff = self.synced_msgs["image"][i + 1]["timestamp"] - self.synced_msgs["image"][i]["timestamp"]
+            imu_diff = self.synced_msgs["imu"][i + 1]["timestamp"] - self.synced_msgs["imu"][i]["timestamp"]
+            odom_diff = self.synced_msgs["odom"][i + 1]["timestamp"] - self.synced_msgs["odom"][i]["timestamp"]
+
+            diffs_image.append(image_diff)
+            diffs_imu.append(imu_diff)
+            diffs_odom.append(odom_diff)
+
+            print(f"{i:<6} {image_diff:<15.6f} {imu_diff:<15.6f} {odom_diff:<15.6f}")
+
+        # Compute averages
+        avg_diff_image = np.mean(diffs_image)
+        avg_diff_imu = np.mean(diffs_imu)
+        avg_diff_odom = np.mean(diffs_odom)
+        overall_avg_diff = np.mean([avg_diff_image, avg_diff_imu, avg_diff_odom])
+
+        # Display results
+        print("\nTotal Recording Time (based on synchronized image messages):")
+        print(f"Total time: {total_recording_time:.6f} seconds")
+        print(f"First timestamp: {first_image_time:.6f} seconds")
+        print(f"Last timestamp: {last_image_time:.6f} seconds")
+
+        print("\nAverage Inter-Group Time Differences:")
+        print(f"Image: {avg_diff_image:.6f} seconds")
+        print(f"IMU: {avg_diff_imu:.6f} seconds")
+        print(f"Odom: {avg_diff_odom:.6f} seconds")
+        print(f"Overall Average (across all types): {overall_avg_diff:.6f} seconds")
+
+        # Relate total time to number of triplets
+        expected_avg_diff = total_recording_time / (num_triplets - 1) if num_triplets > 1 else 0
+        print(f"\nExpected average difference (total time / (num_triplets - 1)): {expected_avg_diff:.6f} seconds")
+
+        # Additional statistics (image-based)
+        print("\nAdditional Statistics (Image-based):")
+        print(f"Min difference: {min(diffs_image):.6f} seconds")
+        print(f"Max difference: {max(diffs_image):.6f} seconds")
+        print(f"Std deviation: {np.std(diffs_image):.6f} seconds")
+        
 if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Process a ROS2 bag to a pickle file.")
@@ -270,3 +333,4 @@ if __name__ == "__main__":
     )
     processor.read_rosbag()
     processor.save_data()
+    processor.calculate_avg_inter_group_time_difference()

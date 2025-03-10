@@ -191,8 +191,11 @@ class Cluster:
         for idx, cluster in enumerate(cluster_labels):
             all_cluster_image_indices[cluster].append(idx)  # Assign image index to corresponding cluster
 
-        # Plot clusters
-        self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), k)
+        # Plot clusters, passing the directory of save_model_path
+        save_plot_dir = os.path.dirname(save_model_path)
+        self.plot_clusters(representation_vectors, torch.tensor(cluster_labels), k, save_plot_path=save_plot_dir)
+
+        return all_cluster_image_indices
 
         return all_cluster_image_indices
 
@@ -315,7 +318,7 @@ class Cluster:
         plt.close()  # Close the plot to avoid memory overload
         plt.show()
 
-    def plot_clusters(self, representation_vectors, min_indices, k):
+    def plot_clusters(self, representation_vectors, min_indices, k, save_plot_path=None):
         """
         Visualizes the k-means clusters after performing dimensionality reduction
         using PCA.
@@ -352,10 +355,14 @@ class Cluster:
         plt.legend()
         plt.grid(True)
 
-        # Save the plot
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, f"clusters_k{k}.png"))
-        plt.show()
+        # Save the plot to the specified directory
+        if save_plot_path:
+            os.makedirs(save_plot_path, exist_ok=True)
+            plot_file_path = os.path.join(save_plot_path, f"clusters_k{k}.png")
+            plt.savefig(plot_file_path, dpi=300, bbox_inches='tight')
+            print(f"Saved cluster plot to: {plot_file_path}")
+        
+        plt.close()
 
 
 if __name__ == "__main__":

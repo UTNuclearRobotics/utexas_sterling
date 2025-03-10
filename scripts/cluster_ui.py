@@ -39,12 +39,12 @@ class ClusterUI(Gtk.Application):
         vbox.set_margin_end(10)
         scrolled_window.set_child(vbox)
 
-        spf = SelectPickleFile(window)
+        spf = SelectVicregFile(window)
         vbox.append(spf.get_component())
 
         vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        ssf = SelectPickleFile(window)
+        ssf = SelectSyncedFile(window)
         vbox.append(ssf.get_component())
 
         vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
@@ -61,7 +61,7 @@ class ClusterUI(Gtk.Application):
         window.present()
 
 
-class SelectPickleFile:
+class SelectVicregFile:
     def __init__(self, parent_window):
         self.parent_window = parent_window
         self.data_pkl_path = None
@@ -73,7 +73,7 @@ class SelectPickleFile:
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
 
-        vbox.append(Gtk.Label(label="Data pickle file selected:"))
+        vbox.append(Gtk.Label(label="Vicreg pickle file selected:"))
 
         # Pickle file status
         self.label = Gtk.Label(label="None")
@@ -106,6 +106,53 @@ class SelectPickleFile:
 
             self.data_pkl_path = file_path
             self.label.set_markup(f"<span foreground='green'>{self.data_pkl_path}</span>")
+        dialog.destroy()
+
+class SelectSyncedFile:
+    def __init__(self, parent_window):
+        self.parent_window = parent_window
+        self.synced_pkl_path = None
+
+    def get_component(self):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        vbox.set_margin_top(10)
+        vbox.set_margin_bottom(10)
+        vbox.set_margin_start(10)
+        vbox.set_margin_end(10)
+
+        vbox.append(Gtk.Label(label="Synced pickle file selected:"))
+
+        # Pickle file status
+        self.label = Gtk.Label(label="None")
+        vbox.append(self.label)
+
+        # Pickle file chooser button
+        file_chooser_button = Gtk.Button(label="Open")
+        file_chooser_button.connect("clicked", self.on_file_chooser_button_clicked)
+        vbox.append(file_chooser_button)
+
+        return vbox
+
+    def on_file_chooser_button_clicked(self, button):
+        dialog = Gtk.FileChooserDialog(
+            title="Select Data Pickle File",
+            transient_for=self.parent_window,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, "_Open", Gtk.ResponseType.ACCEPT)
+        dialog.connect("response", self.on_file_chooser_response)
+        dialog.show()
+
+    def on_file_chooser_response(self, dialog, response):
+        if response == Gtk.ResponseType.ACCEPT:
+            file_path = dialog.get_file().get_path()
+            if not file_path.endswith(".pkl"):
+                self.label.set_markup("<span foreground='red'>Error: Selected file is not a .pkl file</span>")
+                dialog.destroy()
+                return
+
+            self.synced_pkl_path= file_path
+            self.label.set_markup(f"<span foreground='green'>{self.synced_pkl_path}</span>")
         dialog.destroy()
 
 
@@ -274,7 +321,7 @@ class GenerateClusters:
 
         self.images = []
         for i, cluster in enumerate(rendered_clusters):
-            self.images.append(PatchRenderer.image_grid(cluster, grid_size))
+            self.images.append(PatchRenderer.image_grid(cluster))
 
         def numpy_to_pixbuf(array):
             """
@@ -306,7 +353,7 @@ class GenerateClusters:
         for i, image in enumerate(self.images):
             pixbuf = numpy_to_pixbuf(image)
             image_widget = Gtk.Image.new_from_pixbuf(pixbuf)
-            image_widget.set_size_request(200, 200)
+            image_widget.set_size_request(400, 400)
 
             text_field = Gtk.Entry()
             text_field.set_placeholder_text(f"Label cluster{i + 1}...")
@@ -386,22 +433,19 @@ class GenerateClusters:
         else:
             existing_config = {}
 
-        # Create new terrains section, replacing any existing terrains
+        # Create new terrains section with cluster-level data only
         new_terrains = [
             {'name': label, 'label': idx, 'preference': preference}
             for idx, (label, preference) in enumerate(user_labels_and_rankings)
         ]
 
-        # Map cluster labels to terrain labels and preferences for each sample
-        cluster_to_terrain = {}
-        for cluster_idx, (terrain_label, preference) in enumerate(user_labels_and_rankings):
-            cluster_to_terrain[cluster_idx] = {
-                'terrain_label': terrain_label,
-                'preference': preference,
-                'label': cluster_idx
-            }
+        # Map cluster labels to terrain labels and preferences for internal use
+        cluster_to_terrain = {
+            cluster_idx: {'terrain_label': terrain_label, 'preference': preference}
+            for cluster_idx, (terrain_label, preference) in enumerate(user_labels_and_rankings)
+        }
 
-        # Assign terrain labels and preferences to each sample based on its cluster
+        # Assign terrain labels to each sample based on its cluster
         terrain_labels = np.zeros(len(self.dataset), dtype=object)
         preferences = np.zeros(len(self.dataset), dtype=float)
         for idx in range(len(self.dataset)):
@@ -410,18 +454,12 @@ class GenerateClusters:
             terrain_labels[idx] = terrain_info['terrain_label']
             preferences[idx] = terrain_info['preference']
 
-        # Update samples section to only include the current dataset's samples
-        new_samples = [
-            {'sample_id': idx, 'terrain': terrain_labels[idx]}
-            for idx in range(len(self.dataset))
-        ]
-
-        # Attach labels to the dataset
+        # Update the dataset with cluster and terrain labels
         self.dataset.cluster_labels = self.cluster_labels
         self.dataset.terrain_labels = terrain_labels
         self.dataset.preferences = preferences
 
-        # Create a mapping of sample indices to their data and labels
+        # Create a mapping of sample indices to their data and labels for the pickle file
         labeled_data = []
         for idx in range(len(self.dataset)):
             sample = {
@@ -440,16 +478,21 @@ class GenerateClusters:
             pickle.dump(self.dataset, file)
         print(f"Saved labeled dataset to: {dataset_save_path}")
 
-        # Update the existing config: replace terrains, update samples, preserve other sections
+        # Update the existing config: replace terrains only (samples optional)
         existing_config['terrains'] = new_terrains
-        existing_config['samples'] = new_samples  # Replace samples with new ones
+        # Optional: Include samples section without preferences
+        new_samples = [
+            {'sample_id': idx, 'terrain': terrain_labels[idx]}
+            for idx in range(len(self.dataset))
+        ]
+        #existing_config['samples'] = new_samples  # Comment out if samples not needed in YAML
 
         # Save updated config.yaml
         with open(config_path, "w") as file:
             yaml.dump(existing_config, file)
 
-        print("Labels:", terrain_labels.tolist())
-        print("Preferences:", preferences.tolist())
+        #print("Labels:", terrain_labels.tolist())
+        #print("Preferences:", preferences.tolist())
         print(f"Updated config at: {config_path}")
 
         success_dialog = Gtk.MessageDialog(

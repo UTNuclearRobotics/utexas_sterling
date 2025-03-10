@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from scipy.signal import periodogram, butter, filtfilt
 from scipy.spatial.transform import Rotation
 
-IMU_TOPIC_RATE = 100
+IMU_TOPIC_RATE = 20
 
 class TerrainDataset(Dataset):
     def __init__(self, patches, synced_data, transform=None, dtype=torch.float32, incl_orientation=False):
@@ -32,7 +32,7 @@ class TerrainDataset(Dataset):
             lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
             self.imu_data = np.concatenate([ang_vels, lin_accs], axis=1)
 
-        samples_per_window = 201
+        samples_per_window = IMU_TOPIC_RATE * 2
         num_windows = (len(self.imu_data) - samples_per_window + 1) // 1
         if num_windows <= 0:
             num_windows = 1
@@ -82,15 +82,15 @@ class TerrainDataset(Dataset):
 
     def __getitem__(self, idx):
         imu_timestep_start = idx // 5
-        if imu_timestep_start >= len(self.imu_data) - 200:
-            raise ValueError(f"Patch batch index {idx} exceeds IMU data length {len(self.imu_data)}")
+        #if imu_timestep_start >= len(self.imu_data) - 200:
+        #    raise ValueError(f"Patch batch index {idx} exceeds IMU data length {len(self.imu_data)}")
         
         start_idx = imu_timestep_start
-        end_idx = min(imu_timestep_start + 200, len(self.imu_data))
+        end_idx = min(imu_timestep_start + IMU_TOPIC_RATE*2, len(self.imu_data))
         imu_segment = self.imu_data[start_idx:end_idx]
         
-        if imu_segment.shape[0] < 201:
-            imu_segment = np.pad(imu_segment, ((0, 201 - imu_segment.shape[0]), (0, 0)), mode='constant')
+        if imu_segment.shape[0] < IMU_TOPIC_RATE*2:
+            imu_segment = np.pad(imu_segment, ((0, IMU_TOPIC_RATE*2 - imu_segment.shape[0]), (0, 0)), mode='constant')
 
         patch_batch = self.raw_patches[idx]
         patch_array = np.array(patch_batch)
@@ -134,18 +134,18 @@ def visualize_psd(dataset, idx):
     # Recompute PSD for visualization
     num_imu_samples = len(dataset.imu_data)  # 8,901
     patch_timestep_start = idx // 5  # Map patch batch idx to patch timestep start (0 to 5,390)
-    if patch_timestep_start >= num_imu_samples - 200:  # Ensure we don’t exceed IMU data
+    if patch_timestep_start >= num_imu_samples - IMU_TOPIC_RATE*2:  # Ensure we don’t exceed IMU data
         raise ValueError(f"Patch batch index {idx} exceeds IMU data length {num_imu_samples}")
     
     start_idx = patch_timestep_start  # Start at the patch timestep
-    end_idx = min(patch_timestep_start + 200, num_imu_samples)  # Extend 2 seconds forward (201 samples if possible)
+    end_idx = min(patch_timestep_start + 1+IMU_TOPIC_RATE*2, num_imu_samples)  # Extend 2 seconds forward (201 samples if possible)
     imu_segment = dataset.imu_data[start_idx:end_idx]
     
     print(f"Start idx: {start_idx}, End idx: {end_idx}")
     print(f"IMU segment length before padding: {imu_segment.shape[0]}")
     
-    if imu_segment.shape[0] < 201:  # Expect 201 samples for 2 seconds at 100 Hz
-        padding = np.zeros((201 - imu_segment.shape[0], 
+    if imu_segment.shape[0] < (1+IMU_TOPIC_RATE*2):  # Expect 201 samples for 2 seconds at 100 Hz
+        padding = np.zeros(((1+IMU_TOPIC_RATE*2) - imu_segment.shape[0], 
                             6 if not dataset.incl_orientation else 10))
         imu_segment = np.vstack((imu_segment, padding))
         print(f"Padded to: {imu_segment.shape}")
@@ -167,8 +167,8 @@ def visualize_psd(dataset, idx):
         if patch_batch_idx < len(dataset.raw_patches):
             # Recalculate IMU data for the same timestep to verify
             imu_segment_check = dataset.imu_data[start_idx:end_idx]
-            if imu_segment_check.shape[0] < 201:
-                padding = np.zeros((201 - imu_segment_check.shape[0], 
+            if imu_segment_check.shape[0] < (1+IMU_TOPIC_RATE*2):
+                padding = np.zeros(((1+IMU_TOPIC_RATE*2) - imu_segment_check.shape[0], 
                                     6 if not dataset.incl_orientation else 10))
                 imu_segment_check = np.vstack((imu_segment_check, padding))
             
@@ -379,7 +379,7 @@ def inspect_cluster_samples(dataset, cluster_labels, num_samples=3):
             plt.axis('off')
             plt.show()
 
-"""
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
     parser.add_argument("-bag", "-b", type=str, required=True, help="Bag directory with VICReg dataset pickle file inside.")
@@ -406,4 +406,3 @@ if __name__ == "__main__":
 
     #for idx in range(15000, len(dataset), 10):
     #    visualize_psd(dataset, idx)
-"""

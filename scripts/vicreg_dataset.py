@@ -15,7 +15,7 @@ def ComputeVicRegData(H, K, plane_normal, plane_distance, robot_data, history_si
     """
     Highly optimized version for high-speed processing with numpy vectorization and batch operations.
     """
-    n_timesteps = robot_data.getNTimesteps() #- 3500 subtract for agh2 to improve terrain training
+    n_timesteps = robot_data.getNTimesteps() #- 3500 #subtract for agh2 to improve terrain training
     patches = []
 
     # Define shifts
