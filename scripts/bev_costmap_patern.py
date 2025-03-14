@@ -70,6 +70,7 @@ class BEVCostmap:
             preferences = self.uvis(representation_vectors)  # [B, 1]
             # Scale to 0-255 range for costmap compatibility
             preferences = torch.sigmoid(preferences) * 255  # Assuming uvis outputs need normalization
+            #preferences = preferences * 255
             costs = preferences.squeeze(-1).cpu().numpy().astype(np.uint8)
         return costs
 

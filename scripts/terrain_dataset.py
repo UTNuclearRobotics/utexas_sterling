@@ -183,7 +183,8 @@ class TerrainDataset(Dataset):
             imu_sample = torch.tensor(normalized_features, dtype=self.dtype).reshape(1, -1)
 
             return patch1, patch2, imu_sample
-    
+
+""" 
 def visualize_psd(dataset, idx):
     print(f"Visualizing PSD and patches for idx={idx}")
     print(f"IMU data length: {len(dataset.imu_data)}")
@@ -468,3 +469,5 @@ if __name__ == "__main__":
 
     #for idx in range(15000, len(dataset), 10):
     #    visualize_psd(dataset, idx)
+
+"""
