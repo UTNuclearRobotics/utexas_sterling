@@ -457,23 +457,13 @@ class GenerateClusters:
             terrain_labels[idx] = terrain_info['terrain_label']
             preferences[idx] = terrain_info['preference']
 
-        # Update the dataset with cluster and terrain labels
-        self.dataset.cluster_labels = self.cluster_labels
-        self.dataset.terrain_labels = terrain_labels
-        self.dataset.preferences = preferences
-
-        # Create a mapping of sample indices to their data and labels for the pickle file
-        labeled_data = []
-        for idx in range(len(self.dataset)):
-            sample = {
-                'index': idx,
-                'patch': self.cluster.patches[idx],  # Visual data
-                'inertial': self.cluster.inertial[idx],  # Inertial data
-                'cluster_label': int(self.cluster_labels[idx]),
-                'terrain_label': terrain_labels[idx],
-                'preference': float(preferences[idx])
-            }
-            labeled_data.append(sample)
+        # Update the dataset with all relevant data
+        self.dataset.patches = self.cluster.patches  # Add visual data
+        self.dataset.inertial = self.cluster.inertial  # Add inertial data
+        self.dataset.cluster_labels = self.cluster_labels  # Cluster labels
+        self.dataset.terrain_labels = terrain_labels  # Terrain labels
+        self.dataset.preferences = preferences  # Preferences
+        self.dataset.is_labeled = True  # Explicitly set to labeled mode
 
         # Save the dataset to a pickle file
         dataset_save_path = os.path.join(save_path, "labeled_dataset.pkl")

@@ -13,64 +13,90 @@ IMU_TOPIC_RATE = 20
 
 class TerrainDataset(Dataset):
     def __init__(self, patches=None, synced_data=None, labeled_data=None, transform=None, dtype=torch.float32, incl_orientation=False):
-        print("Loading TerrainDataset version with is_labeled")
         self.dtype = dtype
         self.transform = transform
         self.incl_orientation = incl_orientation
 
-        if labeled_data is not None:
-            # Labeled data mode
-            self.patches = [sample['patch'] for sample in labeled_data]
-            self.inertial = [sample['inertial'] for sample in labeled_data]
-            self.terrain_labels = [sample['terrain_label'] for sample in labeled_data]
-            self.preferences = [sample['preference'] for sample in labeled_data]
-            self.is_labeled = True
-        else:
-            # Unlabeled data mode (self-supervised)
-            if patches is None or synced_data is None:
-                raise ValueError("Must provide patches and synced_data for unlabeled mode")
-            self.raw_patches = patches
-            self.robot_data = synced_data
-            self.imu_data = self.robot_data["imu"]
-            self.is_labeled = False
+        try:
+            if labeled_data is not None:
+                # Debug attribute presence
+                has_patches = hasattr(labeled_data, 'patches')
+                has_terrain_labels = hasattr(labeled_data, 'terrain_labels')
+                has_inertial = hasattr(labeled_data, 'inertial')
+                has_preferences = hasattr(labeled_data, 'preferences')
+                print(f"Attributes - patch: {has_patches}, terrain_label: {has_terrain_labels}, inertial: {has_inertial}, preferences: {has_preferences}")
 
-            ang_vels = np.array([sample["angular_velocity"] for sample in self.imu_data])
-            lin_accs = np.array([sample["linear_acceleration"] for sample in self.imu_data])
-
-            if self.incl_orientation:
-                orientations = np.array([sample["orientation"] for sample in self.imu_data])
-                lin_accs = np.array([self.remove_gravity(lin_accs[i], orientations[i]) 
-                                    for i in range(len(lin_accs))])
-                self.imu_data = np.concatenate([ang_vels, lin_accs, orientations], axis=1)
+                # Check if it's a TerrainDataset-like object
+                if isinstance(labeled_data, Dataset):
+                    print("Detected Dataset subclass, attempting to load as dataset object")
+                    if not (has_patches and has_terrain_labels):
+                        print("Warning: Missing required attributes 'patches' or 'terrain_labels'")
+                    self.patches = getattr(labeled_data, 'patches', None)
+                    self.terrain_labels = getattr(labeled_data, 'terrain_labels', None)
+                    self.inertial = getattr(labeled_data, 'inertial', None)
+                    self.preferences = getattr(labeled_data, 'preferences', None)
+                    if self.patches is None or self.terrain_labels is None:
+                        raise ValueError("Loaded dataset object missing required 'patches' or 'terrain_labels'")
+                    self.is_labeled = True
+                    print("Labeled data mode activated (dataset object detected)")
+                elif isinstance(labeled_data, (list, tuple)) and all(isinstance(sample, dict) for sample in labeled_data):
+                    print("Labeled data mode activated (list of dicts detected)")
+                    self.patches = [sample['patch'] for sample in labeled_data]
+                    self.inertial = [sample['inertial'] for sample in labeled_data]
+                    self.terrain_labels = [sample['terrain_label'] for sample in labeled_data]
+                    self.preferences = [sample['preference'] for sample in labeled_data]
+                    self.is_labeled = True
+                else:
+                    raise ValueError(f"Unsupported labeled_data type or structure: {type(labeled_data)}")
             else:
-                lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
-                self.imu_data = np.concatenate([ang_vels, lin_accs], axis=1)
+                print("Unlabeled data mode activated")
+                if patches is None or synced_data is None:
+                    raise ValueError("Must provide patches and synced_data for unlabeled mode")
+                self.raw_patches = patches
+                self.robot_data = synced_data
+                self.imu_data = self.robot_data["imu"]
+                self.is_labeled = False
 
-            samples_per_window = IMU_TOPIC_RATE * 2
-            num_windows = (len(self.imu_data) - samples_per_window + 1) // 1
-            if num_windows <= 0:
-                num_windows = 1
+                ang_vels = np.array([sample["angular_velocity"] for sample in self.imu_data])
+                lin_accs = np.array([sample["linear_acceleration"] for sample in self.imu_data])
 
-            self.psd_features = []
-            for i in range(num_windows):
-                start = i
-                end = start + samples_per_window
-                window = self.imu_data[start:end]
-                if len(window) < samples_per_window:
-                    window = np.pad(window, ((0, samples_per_window - len(window)), (0, 0)), mode='constant')
-                imu_subset = window[:, [0, 1, 2, 3, 4, 5]]  # All 6 channels
-                if not self.incl_orientation:
-                    for j in range(3, 6):
-                        imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
-                
-                psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()  # 606 values
-                std = np.std(imu_subset, axis=0)  # 6 values
-                features = np.concatenate([std, psd])  # 6 std + 606 PSD = 612
-                self.psd_features.append(features)
+                if self.incl_orientation:
+                    orientations = np.array([sample["orientation"] for sample in self.imu_data])
+                    lin_accs = np.array([self.remove_gravity(lin_accs[i], orientations[i]) 
+                                        for i in range(len(lin_accs))])
+                    self.imu_data = np.concatenate([ang_vels, lin_accs, orientations], axis=1)
+                else:
+                    lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
+                    self.imu_data = np.concatenate([ang_vels, lin_accs], axis=1)
 
-            self.psd_features = np.array(self.psd_features)  # Shape: (num_windows, 612)
-            self.imu_min = np.min(self.psd_features, axis=0)
-            self.imu_max = np.max(self.psd_features, axis=0)
+                samples_per_window = IMU_TOPIC_RATE * 2
+                num_windows = (len(self.imu_data) - samples_per_window + 1) // 1
+                if num_windows <= 0:
+                    num_windows = 1
+
+                self.psd_features = []
+                for i in range(num_windows):
+                    start = i
+                    end = start + samples_per_window
+                    window = self.imu_data[start:end]
+                    if len(window) < samples_per_window:
+                        window = np.pad(window, ((0, samples_per_window - len(window)), (0, 0)), mode='constant')
+                    imu_subset = window[:, [0, 1, 2, 3, 4, 5]]
+                    if not self.incl_orientation:
+                        for j in range(3, 6):
+                            imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
+                    
+                    psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
+                    std = np.std(imu_subset, axis=0)
+                    features = np.concatenate([std, psd])
+                    self.psd_features.append(features)
+
+                self.psd_features = np.array(self.psd_features)
+                self.imu_min = np.min(self.psd_features, axis=0)
+                self.imu_max = np.max(self.psd_features, axis=0)
+        except Exception as e:
+            print(f"Error in TerrainDataset.__init__: {e}")
+            raise
 
     def remove_gravity(self, linear_acceleration, orientation):
         if orientation is None:
@@ -96,23 +122,30 @@ class TerrainDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.is_labeled:
-            # Labeled data mode
-            patch = torch.tensor(self.patches[idx], dtype=self.dtype).permute(2, 0, 1)  # [H, W, C] -> [C, H, W]
-            inertial = torch.tensor(self.inertial[idx], dtype=self.dtype)
+            # Handle patches
+            patch_data = self.patches[idx]
+            if isinstance(patch_data, torch.Tensor):
+                patch = patch_data.clone().detach().to(dtype=self.dtype)
+            else:
+                patch = torch.tensor(patch_data, dtype=self.dtype)
+            if patch.shape[-3:] != (3, 128, 128):  # Check if already in (C, H, W)
+                patch = patch.permute(2, 0, 1)  # From (H, W, C) to (C, H, W)
+
+            # Handle inertial
+            inertial_data = self.inertial[idx] if self.inertial is not None and idx < len(self.inertial) else None
+            if inertial_data is not None:
+                inertial = inertial_data.clone().detach().to(dtype=self.dtype) if isinstance(inertial_data, torch.Tensor) else torch.tensor(inertial_data, dtype=self.dtype)
+            else:
+                inertial = None
+
             terrain_label = self.terrain_labels[idx]
-            preference = torch.tensor(self.preferences[idx], dtype=self.dtype)
+            preference = torch.tensor([self.preferences[idx]], dtype=self.dtype) if self.preferences is not None and idx < len(self.preferences) else torch.tensor([0.0], dtype=self.dtype)
 
             if self.transform:
                 patch = self.transform(patch)
 
-            return {
-                'patch': patch,
-                'inertial': inertial,
-                'terrain_label': terrain_label,
-                'preference': preference
-            }
+            return patch, inertial, terrain_label, preference
         else:
-            # Unlabeled data mode (self-supervised)
             imu_timestep_start = idx // 5
             start_idx = imu_timestep_start
             end_idx = min(imu_timestep_start + IMU_TOPIC_RATE*2, len(self.imu_data))
@@ -143,9 +176,9 @@ class TerrainDataset(Dataset):
                 for j in range(3, 6):
                     imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
 
-            psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()  # 606 values
-            std = np.std(imu_subset, axis=0)  # 6 values
-            imu_features = np.concatenate([std, psd])  # 612 features
+            psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
+            std = np.std(imu_subset, axis=0)
+            imu_features = np.concatenate([std, psd])
             normalized_features = self.normalize_imu(imu_features)
             imu_sample = torch.tensor(normalized_features, dtype=self.dtype).reshape(1, -1)
 

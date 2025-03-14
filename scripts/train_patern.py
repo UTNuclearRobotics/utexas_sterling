@@ -8,6 +8,8 @@ from torch.utils.data import DataLoader, random_split
 from utils import load_bag_pkl, load_bag_pt_model
 from visual_encoder_model import VisualEncoderModel
 from proprioception_model import ProprioceptionModel
+import pickle
+import sys
 
 
 class PaternPreAdaptation(nn.Module):
@@ -58,37 +60,72 @@ class PaternPreAdaptation(nn.Module):
         return phi_vis, phi_pro, uvis_pred, upro_pred
 
     def training_step(self, batch, batch_idx):
-        patches = batch['patch']
-        inertial = batch['inertial']
-        terrain_labels = batch['terrain_label']
-        preferences = batch['preference'].to(self.device)
+        patches, inertial, terrain_labels, preferences = batch
+        preferences = preferences.to(self.device)
 
-        terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long).to(self.device)
+        terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         phi_vis, phi_pro, uvis_pred, upro_pred = self.forward(patches, inertial)
 
-        anchor_idx = torch.arange(len(terrain_labels), device=self.device)
-        pos_mask = torch.eq(terrain_labels_tensor.unsqueeze(1), terrain_labels_tensor.unsqueeze(0)) & ~torch.eye(len(terrain_labels), dtype=torch.bool, device=self.device)
-        neg_mask = ~torch.eq(terrain_labels_tensor.unsqueeze(1), terrain_labels_tensor.unsqueeze(0))
+        batch_size = len(terrain_labels)
+        labels_expanded = terrain_labels_tensor.unsqueeze(1)
+        pos_mask = (labels_expanded == labels_expanded.t()) & ~torch.eye(batch_size, dtype=torch.bool, device=self.device)
+        neg_mask = (labels_expanded != labels_expanded.t())
 
-        pos_idx = [torch.where(pos_mask[i])[0][0] if pos_mask[i].any() else i for i in range(len(terrain_labels))]
-        neg_idx = [torch.where(neg_mask[i])[0][0] for i in range(len(terrain_labels))]
-        pos_idx = torch.tensor(pos_idx, device=self.device)
-        neg_idx = torch.tensor(neg_idx, device=self.device)
+        pos_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        neg_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        for i in range(batch_size):
+            pos_candidates = pos_mask[i].nonzero(as_tuple=False).flatten()
+            neg_candidates = neg_mask[i].nonzero(as_tuple=False).flatten()
+            pos_indices[i] = pos_candidates[torch.randint(0, len(pos_candidates), (1,), device=self.device)] if len(pos_candidates) > 0 else i
+            neg_indices[i] = neg_candidates[torch.randint(0, len(neg_candidates), (1,), device=self.device)] if len(neg_candidates) > 0 else i
 
-        vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_idx], phi_vis[neg_idx])
-        pro_loss = self.triplet_loss(phi_pro, phi_pro[pos_idx], phi_pro[neg_idx])
+        vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
+        pro_loss = self.triplet_loss(phi_pro, phi_pro[pos_indices], phi_pro[neg_indices])
 
-        ranking_loss = 0
-        count = 0
-        for i in range(len(preferences)):
-            for j in range(len(preferences)):
-                if preferences[i] > preferences[j]:
-                    ranking_loss += F.relu(1.0 - (uvis_pred[i] - uvis_pred[j]))
-                    count += 1
-        ranking_loss = ranking_loss / (count + 1e-6) if count > 0 else torch.tensor(0.0, device=self.device)
+        pref_diff = preferences.unsqueeze(1) - preferences.unsqueeze(0)
+        pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
+        ranking_mask = pref_diff > 0
+        ranking_loss = F.relu(1.0 - pred_diff[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
+
         total_loss = vis_loss + pro_loss + ranking_loss + mse_loss
+        #print(f"Train Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, ranking_loss={ranking_loss.item():.4f}, mse_loss={mse_loss.item():.4f}, total_loss={total_loss.item():.4f}")
+        #print(f"uvis_pred norm: {torch.norm(uvis_pred).item():.4f}, upro_pred norm: {torch.norm(upro_pred).item():.4f}")
+        return total_loss
+
+    def validation_step(self, batch, batch_idx):
+        patches, inertial, terrain_labels, preferences = batch
+        preferences = preferences.to(self.device)
+
+        terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
+        phi_vis, phi_pro, uvis_pred, upro_pred = self.forward(patches, inertial)
+
+        batch_size = len(terrain_labels)
+        labels_expanded = terrain_labels_tensor.unsqueeze(1)
+        pos_mask = (labels_expanded == labels_expanded.t()) & ~torch.eye(batch_size, dtype=torch.bool, device=self.device)
+        neg_mask = (labels_expanded != labels_expanded.t())
+
+        pos_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        neg_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        for i in range(batch_size):
+            pos_candidates = pos_mask[i].nonzero(as_tuple=False).flatten()
+            neg_candidates = neg_mask[i].nonzero(as_tuple=False).flatten()
+            pos_indices[i] = pos_candidates[torch.randint(0, len(pos_candidates), (1,), device=self.device)] if len(pos_candidates) > 0 else i
+            neg_indices[i] = neg_candidates[torch.randint(0, len(neg_candidates), (1,), device=self.device)] if len(neg_candidates) > 0 else i
+
+        vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
+        pro_loss = self.triplet_loss(phi_pro, phi_pro[pos_indices], phi_pro[neg_indices])
+
+        pref_diff = preferences.unsqueeze(1) - preferences.unsqueeze(0)
+        pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
+        ranking_mask = pref_diff > 0
+        ranking_loss = F.relu(1.0 - pred_diff[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
+
+        mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
+
+        total_loss = vis_loss + pro_loss + ranking_loss + mse_loss
+        #print(f"Val Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, ranking_loss={ranking_loss.item():.4f}, mse_loss={mse_loss.item():.4f}, total_loss={total_loss.item():.4f}")
         return total_loss
 
     def save_models(self, save_dir):
@@ -100,19 +137,27 @@ class PaternPreAdaptation(nn.Module):
         print(f"Saved PATERN− models to {save_dir}")
 
 if __name__ == "__main__":
-    # Parse command line arguments
     parser = argparse.ArgumentParser(description="Pre-Adaptation Training for PATERN with 128D")
     parser.add_argument("-bag_path", type=str, required=True, help="Base bag directory (e.g., bags/agh_courtyard_2)")
+    parser.add_argument("-batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
-    parser.add_argument("-batch_size", type=int, default=256, help="Batch size for training")
     args = parser.parse_args()
 
     # Load labeled dataset
-    labeled_pkl_path = os.path.join(args.bag_path, "clusters")
-    labeled_data = load_bag_pkl(labeled_pkl_path, "labeled_dataset")  # Adjust identifier as needed
+    labeled_pkl_path = os.path.join(args.bag_path, "clusters", "labeled_dataset.pkl")
+    print(f"Attempting to load: {labeled_pkl_path}")
+    try:
+        with open(labeled_pkl_path, 'rb') as f:
+            labeled_data = pickle.load(f)
+        print("Successfully loaded labeled_data with pickle")
+    except Exception as e:
+        print(f"Failed to load {labeled_pkl_path}: {e}")
+        sys.exit(1)
+    print(f"labeled_data type: {type(labeled_data)}, length or attributes: {len(labeled_data) if isinstance(labeled_data, (list, tuple)) else dir(labeled_data)[:10]}")
     if not labeled_data:
-        raise FileNotFoundError(f"Failed to load labeled dataset from {labeled_pkl_path}")
-    
+        print("Warning: labeled_data is empty")
+        sys.exit(1)
+
     # Search for pre-trained weights
     models_dir = os.path.join(args.bag_path, "models")
     save_dir = models_dir
@@ -122,52 +167,52 @@ if __name__ == "__main__":
             if file_name.endswith("terrain_rep.pt"):
                 pretrained_weights_path = os.path.join(models_dir, file_name)
                 break
-
-    # Verify file existence
-    if pretrained_weights_path is None:
-        print(f"Warning: No file ending with 'terrain_rep.pt' found in {models_dir}, proceeding without loading weights")
-    else:
-        print(f"Found pre-trained weights at: {pretrained_weights_path}")
+    print(f"Pre-trained weights: {pretrained_weights_path or 'None'}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load dataset
-    dataset = TerrainDataset(labeled_data=labeled_data, transform=None)
-    train_size = int(0.75 * len(dataset))  # 75-25 split
-    val_size = len(dataset) - train_size
+    # Create dataset and dataloader
+    print("Creating TerrainDataset instance")
+    try:
+        dataset = TerrainDataset(labeled_data=labeled_data, transform=None)
+        print("TerrainDataset created successfully")
+    except Exception as e:
+        print(f"Failed to create TerrainDataset: {e}")
+        sys.exit(1)
+    train_size = int(0.75 * len(dataset))  # 75% for training
+    val_size = len(dataset) - train_size  # 25% for validation
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    # Initialize model
-    model = PaternPreAdaptation(
-        device=device,
-        pretrained_weights_path=pretrained_weights_path,
-        latent_size=128
-    ).to(device)
+    model = PaternPreAdaptation(device=device, pretrained_weights_path=pretrained_weights_path, latent_size=128).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5, amsgrad=True)  # Lowered LR
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-6)
 
-    # Define optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5, amsgrad=True)
-
-    # Scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=5, T_mult=2, eta_min=1e-6
-    )
-
-    # Training loop
+    print("Starting training")
     for epoch in range(args.epochs):
+        # Training phase
         model.train()
-        total_loss = 0
+        total_train_loss = 0
         for batch_idx, batch in enumerate(train_loader):
             optimizer.zero_grad()
             loss = model.training_step(batch, batch_idx)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
             optimizer.step()
-            total_loss += loss.item()
+            total_train_loss += loss.item()
+        avg_train_loss = total_train_loss / len(train_loader)
 
-        avg_loss = total_loss / len(train_loader)
+        # Validation phase
+        model.eval()
+        total_val_loss = 0
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(val_loader):
+                val_loss = model.validation_step(batch, batch_idx)
+                total_val_loss += val_loss.item()
+        avg_val_loss = total_val_loss / len(val_loader)
+
         scheduler.step()
-        print(f"Epoch [{epoch+1}/{args.epochs}], Loss: {avg_loss:.4f}")
-
-    # Save models
+        print(f"Epoch [{epoch+1}/{args.epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+    
     model.save_models(save_dir)

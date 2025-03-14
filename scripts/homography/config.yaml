@@ -12,7 +12,7 @@ rigid_transform:
 - [0.0068225644195473644, -0.9740739337931108, -0.02889754152086681, 953.5343405900574]
 - [0.0, 0.0, 0.0, 1.0]
 terrains:
-- {name: concrete, label: 0, preference: 1.0}
-- {name: bricks, label: 1, preference: 0.0}
-- {name: mulch, label: 2, preference: 10.0}
-- {name: grass, label: 3, preference: 10.0}
+- {name: bricks, label: 0, preference: 0.0}
+- {name: concrete, label: 1, preference: 2.0}
+- {name: mulch_grass, label: 2, preference: 10.0}
+- {name: aggregate concrete, label: 3, preference: 0.0}
