@@ -388,7 +388,10 @@ class GenerateClusters:
     def on_save_button_clicked(self, button):
         data_pkl_path = self.spf.data_pkl_path
         save_path = os.path.join(os.path.dirname(data_pkl_path), "clusters")
-        config_path = os.path.join(save_path, "config.yaml")
+        # Get the directory of the current script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "homography", "config.yaml")
+        config_path = os.path.abspath(config_path)  # Normalize the path
 
         if not os.path.exists(save_path):
             os.makedirs(save_path)
@@ -489,7 +492,7 @@ class GenerateClusters:
 
         # Save updated config.yaml
         with open(config_path, "w") as file:
-            yaml.dump(existing_config, file)
+            yaml.dump(existing_config, file, default_flow_style=None, sort_keys=False)
 
         #print("Labels:", terrain_labels.tolist())
         #print("Preferences:", preferences.tolist())
