@@ -126,8 +126,10 @@ def load_bag_pkl(bag_path, suffix):
 
 def load_bag_pt_model(bag_path, suffix, model=None):
     model_path = os.path.join(bag_path, "models")
+    # Create models directory if it doesn't exist
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model path does not exist: {model_path}")
+        os.makedirs(model_path)
+        cprint("Created models directory", "yellow")
 
     # Validate the PyTorch model file exists
     pt_model = [file for file in os.listdir(model_path) if file.endswith(f"{suffix}.pt")]

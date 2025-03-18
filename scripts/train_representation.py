@@ -130,8 +130,9 @@ if __name__ == "__main__":
     # Check if weights were loaded
     weights_loaded = False
     if os.path.exists(models_dir):
-        weight_files = ["fvis.pt", "fpro.pt"]
-        weights_loaded = all(os.path.exists(os.path.join(models_dir, file_name)) for file_name in weight_files)
+        weight_files = ["fvis.pt", "fpro.pt"] + [file for file in os.listdir(models_dir) if file.endswith("terrain_rep.pt")]
+        weights_loaded = any(os.path.exists(os.path.join(models_dir, file_name)) 
+                            for file_name in weight_files)
 
     # Define optimizer with a lower learning rate for fine-tuning
     lr = 1e-4 if weights_loaded else 3e-4  # Lower LR if fine-tuning

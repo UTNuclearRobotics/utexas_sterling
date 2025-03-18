@@ -231,7 +231,18 @@ if __name__ == "__main__":
     video_writer = None
     frame_size = None
 
+    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
+        cur_img = robot_data.getImageAtTimestep(timestep)
+        cur_rt = robot_data.getOdomAtTimestep(timestep)
+        bev_img = plot_BEV_full(cur_img, H,patch_size=(128,128))
+        costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
+        visualize = bev_costmap.visualize_costmap(costmap, 128)
 
+        combined_frame = cv2.vconcat([visualize, bev_img])
+        cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
+        cv2.imshow("Cost Map", combined_frame)
+        cv2.waitKey(10)
+"""
     try:
         for timestep in tqdm(range(start_timestep, 4500), desc="Processing patches at timesteps"):
             try:
@@ -294,6 +305,9 @@ if __name__ == "__main__":
         else:
             print("No frames processed. Video not saved.")
         gc.collect()
+
+"""
+
 # Building costmap from global map only
 """
     global_img = cv2.imread("full_map.png")

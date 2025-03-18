@@ -21,29 +21,7 @@ class PaternPreAdaptation(nn.Module):
         # Initialize encoders
         self.visual_encoder = VisualEncoderModel(latent_size=self.latent_size)
         self.proprioceptive_encoder = ProprioceptionModel(latent_size=self.latent_size)
-
-        # Load pre-trained weights if provided
-        if pretrained_weights_path and os.path.exists(pretrained_weights_path):
-            weight_files = {
-                "visual_encoder": "fvis.pt",
-                "proprioceptive_encoder": "fpro.pt",
-                "uvis": "uvis.pt",
-                "upro": "upro.pt",
-                "cost_head": "cost_head.pt"
-            }
-            all_files_exist = all(os.path.exists(os.path.join(pretrained_weights_path, file_name)) for file_name in weight_files.values())
-            if all_files_exist:
-                for submodule_name, file_name in weight_files.items():
-                    file_path = os.path.join(pretrained_weights_path, file_name)
-                    state_dict = torch.load(file_path, weights_only=True, map_location=device)
-                    submodule = getattr(self, submodule_name)
-                    submodule.load_state_dict(state_dict)
-                    print(f"Loaded {submodule_name} weights from {file_path} for fine-tuning")
-            else:
-                print(f"Warning: Not all required weight files found in {pretrained_weights_path}. Initializing from scratch.")
-        else:
-            print(f"No pre-trained weights directory found at {pretrained_weights_path}. Initializing from scratch.")
-
+        
         # Utility functions (2-layer MLP on 128D vectors with scaling to 0-255)
         self.uvis = nn.Sequential(
             nn.Linear(self.latent_size, self.latent_size//2),
@@ -66,6 +44,28 @@ class PaternPreAdaptation(nn.Module):
             nn.Linear(64, 1),
             nn.ReLU()
         )
+
+        # Load pre-trained weights if provided
+        if pretrained_weights_path and os.path.exists(pretrained_weights_path):
+            weight_files = {
+                "visual_encoder": "fvis.pt",
+                "proprioceptive_encoder": "fpro.pt",
+                "uvis": "uvis.pt",
+                "upro": "upro.pt",
+                "cost_head": "cost_head.pt"
+            }
+            all_files_exist = all(os.path.exists(os.path.join(pretrained_weights_path, file_name)) for file_name in weight_files.values())
+            if all_files_exist:
+                for submodule_name, file_name in weight_files.items():
+                    file_path = os.path.join(pretrained_weights_path, file_name)
+                    state_dict = torch.load(file_path, weights_only=True, map_location=device)
+                    submodule = getattr(self, submodule_name)
+                    submodule.load_state_dict(state_dict)
+                    print(f"Loaded {submodule_name} weights from {file_path} for fine-tuning")
+            else:
+                print(f"Warning: Not all required weight files found in {pretrained_weights_path}. Initializing from scratch.")
+        else:
+            print(f"No pre-trained weights directory found at {pretrained_weights_path}. Initializing from scratch.")
 
         # Initialize weights and biases to encourage positive outputs
         nn.init.kaiming_normal_(self.cost_head[0].weight, mode='fan_in', nonlinearity='relu')
@@ -132,7 +132,8 @@ class PaternPreAdaptation(nn.Module):
 
         cost_loss = F.mse_loss(final_cost, scaled_preferences)
 
-        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
+        total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
+        #total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
 
         #print(f"Train Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, "
         #      f"ranking_loss={ranking_loss.item():.4f}, modality_mse_loss={modality_mse_loss.item():.4f}, "
@@ -265,7 +266,7 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # Initialize model
-    model = PaternPreAdaptation(device=device, pretrained_weights_dir=models_dir, latent_size=128).to(device)
+    model = PaternPreAdaptation(device=device, pretrained_weights_path=models_dir, latent_size=128).to(device)
 
     # Check if weights were loaded (you can add a flag in PaternPreAdaptation)
     weights_loaded = False
