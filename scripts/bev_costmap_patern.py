@@ -10,7 +10,7 @@ from homography_params import get_homography_params
 from robot_data_at_timestep import RobotDataAtTimestep
 from termcolor import cprint
 from tqdm import tqdm
-from train_patern import PaternPreAdaptation
+from train_patern_minus import PaternPreAdaptation
 from homography_utils import plot_BEV_full
 import gc
 

@@ -1,17 +1,16 @@
 import argparse
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from terrain_dataset import TerrainDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from utils import load_bag_pkl, load_bag_pt_model
 from vicreg import VICRegLoss
-from visual_encoder_model import VisualEncoderModel
-from proprioception_model import ProprioceptionModel
+from scripts.models import VisualEncoderModel, ProprioceptionModel
 from torchvision import transforms
 import torchvision.transforms.v2 as v2
 import os
+from torch.utils.data import random_split
 
 class SterlingRepresentation(nn.Module):
     def __init__(self, device, pretrained_weights_dir=None):
@@ -24,21 +23,16 @@ class SterlingRepresentation(nn.Module):
         self.visual_encoder = VisualEncoderModel(self.latent_size)
         self.proprioceptive_encoder = ProprioceptionModel(self.latent_size)
 
-        # Load pre-trained weights if provided
+        # Load pre-trained weights if provided (files ending with terrain_rep.pt)
         if pretrained_weights_dir and os.path.exists(pretrained_weights_dir):
-            weight_files = {
-                "visual_encoder": "fvis.pt",
-                "proprioceptive_encoder": "fpro.pt"
-            }
-            for submodule_name, file_name in weight_files.items():
-                file_path = os.path.join(pretrained_weights_dir, file_name)
-                if os.path.exists(file_path):
-                    state_dict = torch.load(file_path, weights_only=True, map_location=self.device)
-                    submodule = getattr(self, submodule_name)
-                    submodule.load_state_dict(state_dict)
-                    print(f"Loaded {submodule_name} weights from {file_path} for fine-tuning")
-                else:
-                    print(f"Warning: {file_name} not found in {pretrained_weights_dir}. Initializing {submodule_name} from scratch.")
+            terrain_rep_files = [file for file in os.listdir(pretrained_weights_dir) if file.endswith("terrain_rep.pt")]
+            if terrain_rep_files:
+                file_path = os.path.join(pretrained_weights_dir, terrain_rep_files[0])  # Load the first matching file
+                state_dict = torch.load(file_path, weights_only=True, map_location=self.device)
+                self.load_state_dict(state_dict, strict=False)
+                print(f"Loaded full model weights from {file_path} for fine-tuning")
+            else:
+                print(f"Warning: No files ending with terrain_rep.pt found in {pretrained_weights_dir}. Initializing from scratch.")
         else:
             print(f"No pre-trained weights directory found at {pretrained_weights_dir}. Initializing from scratch.")
 
@@ -99,16 +93,27 @@ class SterlingRepresentation(nn.Module):
         loss = self.l1_coeff * loss_vpt_inv + (1.0 - self.l1_coeff) * loss_vi
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        patch1, patch2, inertial = batch
+        zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
+
+        loss_vpt_inv = self.vicreg_loss(zv1, zv2)
+        loss_vi = 0.5 * self.vicreg_loss(zv1, zi) + 0.5 * self.vicreg_loss(zv2, zi)
+
+        loss = self.l1_coeff * loss_vpt_inv + (1.0 - self.l1_coeff) * loss_vi
+        return loss
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
     parser.add_argument("-bag", "-b", type=str, required=True, help="Bag directory with VICReg dataset pickle file inside.")
     parser.add_argument("-batch_size", "-batch", type=int, default=256, help="Batch size for training")
     parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
+    parser.add_argument("-val_split", type=float, default=0.2, help="Fraction of dataset to use for validation (0.0 to 1.0)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Create dataset and dataloader
+    # Create dataset
     patches_pkl = load_bag_pkl(args.bag, "vicreg")
     IPT_pkl = load_bag_pkl(args.bag, "_synced")
 
@@ -120,7 +125,15 @@ if __name__ == "__main__":
     ])
 
     dataset = TerrainDataset(patches=patches_pkl, synced_data=IPT_pkl, transform=augment_transform)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+
+    # Split dataset into training and validation
+    val_size = int(args.val_split * len(dataset))
+    train_size = len(dataset) - val_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    # Create dataloaders
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # Initialize model with pre-trained weights
     models_dir = os.path.join(args.bag, "models")
@@ -130,7 +143,7 @@ if __name__ == "__main__":
     # Check if weights were loaded
     weights_loaded = False
     if os.path.exists(models_dir):
-        weight_files = ["fvis.pt", "fpro.pt"] + [file for file in os.listdir(models_dir) if file.endswith("terrain_rep.pt")]
+        weight_files = [file for file in os.listdir(models_dir) if file.endswith("terrain_rep.pt")]
         weights_loaded = any(os.path.exists(os.path.join(models_dir, file_name)) 
                             for file_name in weight_files)
 
@@ -153,16 +166,18 @@ if __name__ == "__main__":
         for param in model.proprioceptive_encoder.parameters():
             param.requires_grad = False
 
-    # Training loop
+    # Training and validation loop
+    best_val_loss = float('inf')
     for epoch in range(args.epochs):
+        # Training phase
         model.train()
-        total_loss = 0
-        for batch_idx, batch in enumerate(dataloader):
+        total_train_loss = 0
+        for batch_idx, batch in enumerate(train_dataloader):
             optimizer.zero_grad()
             loss = model.training_step(batch, batch_idx)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
+            total_train_loss += loss.item()
 
         # Unfreeze after freeze_epochs
         if epoch == freeze_epochs - 1 and freeze_epochs > 0:
@@ -172,8 +187,23 @@ if __name__ == "__main__":
                 param.requires_grad = True
             print("Unfrozen visual and proprioceptive encoders for full fine-tuning.")
 
-        avg_loss = total_loss / len(dataloader)
-        scheduler.step()
-        print(f"Epoch [{epoch+1}/{args.epochs}], Loss: {avg_loss:.4f}")
+        avg_train_loss = total_train_loss / len(train_dataloader)
 
-    torch.save(model.state_dict(), save_path)
+        # Validation phase
+        model.eval()
+        total_val_loss = 0
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(val_dataloader):
+                val_loss = model.validation_step(batch, batch_idx)
+                total_val_loss += val_loss.item()
+
+        avg_val_loss = total_val_loss / len(val_dataloader)
+        scheduler.step()
+
+        print(f"Epoch [{epoch+1}/{args.epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+
+        # Save model if validation loss improves
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), save_path)
+            print(f"Saved model with validation loss: {best_val_loss:.4f}")

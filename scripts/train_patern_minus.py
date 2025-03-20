@@ -6,8 +6,7 @@ import torch.nn.functional as F
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, random_split
 from utils import load_bag_pkl, load_bag_pt_model
-from visual_encoder_model import VisualEncoderModel
-from proprioception_model import ProprioceptionModel
+from scripts.models import VisualEncoderModel, ProprioceptionModel, UtilityFuncVisual, UtilityFuncProprioceptive, CostNet
 import pickle
 import sys
 
@@ -23,27 +22,9 @@ class PaternPreAdaptation(nn.Module):
         self.proprioceptive_encoder = ProprioceptionModel(latent_size=self.latent_size)
         
         # Utility functions (2-layer MLP on 128D vectors with scaling to 0-255)
-        self.uvis = nn.Sequential(
-            nn.Linear(self.latent_size, self.latent_size//2),
-            nn.ReLU(),
-            nn.Linear(self.latent_size//2, 1),
-            nn.ReLU()
-        )
-        self.upro = nn.Sequential(
-            nn.Linear(self.latent_size, self.latent_size//2),
-            nn.ReLU(),
-            nn.Linear(self.latent_size//2, 1),
-            nn.ReLU()
-        )
-
-        self.cost_head = nn.Sequential(
-            nn.Linear(1, 128),  # Increased capacity
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.ReLU()
-        )
+        self.uvis = UtilityFuncVisual(latent_size=self.latent_size)
+        self.upro = UtilityFuncProprioceptive(latent_size=self.latent_size)
+        self.cost_head = CostNet(latent_size=self.latent_size)
 
         # Load pre-trained weights if provided
         if pretrained_weights_path and os.path.exists(pretrained_weights_path):
@@ -99,12 +80,22 @@ class PaternPreAdaptation(nn.Module):
     def training_step(self, batch, batch_idx):
         patches, inertial, terrain_labels, preferences = batch
         preferences = preferences.to(self.device).float()
-        scaled_preferences = preferences * 25.5
+        
+        # Normalize preferences to 0-255 range
+        pref_min = preferences.min()
+        pref_max = preferences.max()
+        if pref_max > pref_min:  # Avoid division by zero
+            scaled_preferences = ((preferences - pref_min) / (pref_max - pref_min)) * 255.0
+        else:
+            scaled_preferences = preferences * 0.0  # If all preferences are same, set to 0
 
         phi_vis, phi_pro, uvis_pred, upro_pred, final_cost = self.forward(patches, inertial)
 
-        # Scale predictions to 0-255
-        uvis_pred = uvis_pred * 255.0 / uvis_pred.max() if uvis_pred.max() > 0 else uvis_pred
+        # Scale predictions to 0-255 based on their own range
+        if uvis_pred.max() > uvis_pred.min():
+            uvis_pred = ((uvis_pred - uvis_pred.min()) / (uvis_pred.max() - uvis_pred.min())) * 255.0
+        else:
+            uvis_pred = uvis_pred * 0.0
 
         terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         batch_size = len(terrain_labels)
@@ -123,17 +114,16 @@ class PaternPreAdaptation(nn.Module):
         vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
         pro_loss = self.triplet_loss(phi_pro, phi_pro[pos_indices], phi_pro[neg_indices])
 
-        pref_diff = preferences.unsqueeze(1) - preferences.unsqueeze(0)
+        pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)  # Use scaled preferences
         pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
         ranking_mask = pref_diff > 0
-        ranking_loss = F.relu(1.0 - (pred_diff / 25.5)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
+        ranking_loss = F.relu(1.0 - (pred_diff / 255.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         modality_mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
-
         cost_loss = F.mse_loss(final_cost, scaled_preferences)
 
-        total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
-        #total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
+        #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
+        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
 
         #print(f"Train Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, "
         #      f"ranking_loss={ranking_loss.item():.4f}, modality_mse_loss={modality_mse_loss.item():.4f}, "
@@ -146,13 +136,27 @@ class PaternPreAdaptation(nn.Module):
     def validation_step(self, batch, batch_idx):
         patches, inertial, terrain_labels, preferences = batch
         preferences = preferences.to(self.device).float()
-        scaled_preferences = preferences * 25.5
+        
+        # Normalize preferences to 0-255 range
+        pref_min = preferences.min()
+        pref_max = preferences.max()
+        if pref_max > pref_min:
+            scaled_preferences = ((preferences - pref_min) / (pref_max - pref_min)) * 255.0
+        else:
+            scaled_preferences = preferences * 0.0
 
         phi_vis, phi_pro, uvis_pred, upro_pred, final_cost = self.forward(patches, inertial)
 
-        # Scale predictions to 0-255
-        uvis_pred = uvis_pred * 255.0 / uvis_pred.max() if uvis_pred.max() > 0 else uvis_pred
-        final_cost = final_cost * 255.0 / final_cost.max() if final_cost.max() > 0 else final_cost
+        # Scale predictions to 0-255 based on their own range
+        if uvis_pred.max() > uvis_pred.min():
+            uvis_pred = ((uvis_pred - uvis_pred.min()) / (uvis_pred.max() - uvis_pred.min())) * 255.0
+        else:
+            uvis_pred = uvis_pred * 0.0
+            
+        if final_cost.max() > final_cost.min():
+            final_cost = ((final_cost - final_cost.min()) / (final_cost.max() - final_cost.min())) * 255.0
+        else:
+            final_cost = final_cost * 0.0
 
         terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         batch_size = len(terrain_labels)
@@ -166,18 +170,19 @@ class PaternPreAdaptation(nn.Module):
             neg_candidates = neg_mask[i].nonzero(as_tuple=False).flatten()
             pos_indices[i] = pos_candidates[torch.randint(0, len(pos_candidates), (1,), device=self.device)] if len(pos_candidates) > 0 else i
             neg_indices[i] = neg_candidates[torch.randint(0, len(neg_candidates), (1,), device=self.device)] if len(neg_candidates) > 0 else i
+
         vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
         pro_loss = self.triplet_loss(phi_pro, phi_pro[pos_indices], phi_pro[neg_indices])
 
-        pref_diff = preferences.unsqueeze(1) - preferences.unsqueeze(0)
+        pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)
         pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
         ranking_mask = pref_diff > 0
-        ranking_loss = F.relu(1.0 - (pred_diff / 25.5)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
+        ranking_loss = F.relu(1.0 - (pred_diff / 255.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         modality_mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
-
         cost_loss = F.mse_loss(final_cost, scaled_preferences)
 
+        #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
         total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
         return total_loss
     
@@ -221,6 +226,7 @@ if __name__ == "__main__":
     parser.add_argument("-bag","-b", type=str, required=True, help="Base bag directory (e.g., bags/agh_courtyard_2)")
     parser.add_argument("-batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
+    parser.add_argument("-val_split", type=float, default=0.2, help="Fraction of dataset to use for validation (0.0 to 1.0)")
     args = parser.parse_args()
 
     # Load labeled dataset
@@ -259,9 +265,12 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Failed to create TerrainDataset: {e}")
         sys.exit(1)
-    train_size = int(0.75 * len(dataset))  # 75% for training
-    val_size = len(dataset) - train_size  # 25% for validation
+    # Split dataset into training and validation
+    val_size = int(args.val_split * len(dataset))
+    train_size = len(dataset) - val_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    # Create dataloaders
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
