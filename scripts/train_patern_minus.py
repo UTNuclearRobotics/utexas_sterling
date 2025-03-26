@@ -7,8 +7,9 @@ from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, random_split
 from utils import load_bag_pkl, load_bag_pt_model
 from models import VisualEncoderModel, ProprioceptionModel, UtilityFuncVisual, UtilityFuncProprioceptive, CostNet
+import pickle
 import sys
-from tqdm import tqdm
+import h5py
 
 
 class PaternPreAdaptation(nn.Module):
@@ -48,12 +49,13 @@ class PaternPreAdaptation(nn.Module):
         else:
             print(f"No pre-trained weights directory found at {pretrained_weights_path}. Initializing from scratch.")
 
-        # Initialize weights and biases of CostNet layers
-        # Replace [0], [2], [4] with actual layer attributes (adjust based on your CostNet)
-        for name, layer in self.cost_head.named_children():
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight, mode='fan_in', nonlinearity='relu')
-                layer.bias.data.fill_(1.0)  # Positive bias to avoid ReLU zeroing out
+        # Initialize weights and biases for CostNet layers
+        nn.init.kaiming_normal_(self.cost_head.model[0].weight, mode='fan_in', nonlinearity='relu')
+        self.cost_head.model[0].bias.data.fill_(1.0)  # First Linear layer
+        nn.init.kaiming_normal_(self.cost_head.model[2].weight, mode='fan_in', nonlinearity='relu')
+        self.cost_head.model[2].bias.data.fill_(1.0)  # Second Linear layer
+        nn.init.kaiming_normal_(self.cost_head.model[4].weight, mode='fan_in', nonlinearity='relu')
+        self.cost_head.model[4].bias.data.fill_(1.0)  # Third Linear layer
 
         self.triplet_loss = nn.TripletMarginLoss(margin=1.0)
 
@@ -95,7 +97,7 @@ class PaternPreAdaptation(nn.Module):
             uvis_pred = ((uvis_pred - uvis_pred.min()) / (uvis_pred.max() - uvis_pred.min())) * 255.0
         else:
             uvis_pred = uvis_pred * 0.0
-
+        
         terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         batch_size = len(terrain_labels)
         labels_expanded = terrain_labels_tensor.unsqueeze(1)
@@ -127,9 +129,9 @@ class PaternPreAdaptation(nn.Module):
         #print(f"Train Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, "
         #      f"ranking_loss={ranking_loss.item():.4f}, modality_mse_loss={modality_mse_loss.item():.4f}, "
         #      f"cost_loss={cost_loss.item():.4f}, total_loss={total_loss.item():.4f}")
-        print(f"uvis_pred range: {uvis_pred.min().item():.4f} to {uvis_pred.max().item():.4f}")
+        #print(f"uvis_pred range: {uvis_pred.min().item():.4f} to {uvis_pred.max().item():.4f}")
         print(f"final_cost range: {final_cost.min().item():.4f} to {final_cost.max().item():.4f}")
-        print(f"scaled_preferences range: {scaled_preferences.min().item():.4f} to {scaled_preferences.max().item():.4f}")
+        #print(f"scaled_preferences range: {scaled_preferences.min().item():.4f} to {scaled_preferences.max().item():.4f}")
         return total_loss
 
     def validation_step(self, batch, batch_idx):
@@ -199,8 +201,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
         # Training phase
         model.train()
         total_train_loss = 0
-        # Wrap train_loader with tqdm for a progress bar
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")):
+        for batch_idx, batch in enumerate(train_loader):
             optimizer.zero_grad()
             loss = model.training_step(batch, batch_idx)
             loss.backward()
@@ -213,8 +214,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
         model.eval()
         total_val_loss = 0
         with torch.no_grad():
-            # Wrap val_loader with tqdm for a progress bar
-            for batch_idx, batch in enumerate(tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]")):
+            for batch_idx, batch in enumerate(val_loader):
                 val_loss = model.validation_step(batch, batch_idx)
                 total_val_loss += val_loss.item()
         avg_val_loss = total_val_loss / len(val_loader)
@@ -224,7 +224,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pre-Adaptation Training for PATERN with 128D")
-    parser.add_argument("-bag", "-b", type=str, required=True, help="Base bag directory (e.g., bags/agh_courtyard_2)")
+    parser.add_argument("-bag","-b", type=str, required=True, help="Base bag directory (e.g., bags/agh_courtyard_2)")
     parser.add_argument("-batch_size", type=int, default=32, help="Batch size for training")
     parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
     parser.add_argument("-val_split", type=float, default=0.2, help="Fraction of dataset to use for validation (0.0 to 1.0)")
@@ -252,40 +252,28 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Create dataset and dataloader with HDF5 lazy loading
-    print("Creating TerrainDataset instance with HDF5 lazy loading")
+    # Create dataset and dataloader
+    print("Creating TerrainDataset instance")
     try:
         dataset = TerrainDataset(labeled_dataset=labeled_hdf5_path, transform=None)
-        print(f"TerrainDataset created successfully with {len(dataset)} samples")
+        print("TerrainDataset created successfully")
     except Exception as e:
         print(f"Failed to create TerrainDataset: {e}")
         sys.exit(1)
-    
+        
     # Split dataset into training and validation
     val_size = int(args.val_split * len(dataset))
     train_size = len(dataset) - val_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True,
-    )
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # Initialize model
     model = PaternPreAdaptation(device=device, pretrained_weights_path=models_dir, latent_size=128).to(device)
 
-    # Check if weights were loaded
+    # Check if weights were loaded (you can add a flag in PaternPreAdaptation)
     weights_loaded = False
     if os.path.exists(models_dir):
         weight_files = ["fvis.pt", "fpro.pt", "uvis.pt", "upro.pt", "cost_head.pt"]

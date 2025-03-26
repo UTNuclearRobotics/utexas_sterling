@@ -13,6 +13,6 @@ rigid_transform:
 - [0.0, 0.0, 0.0, 1.0]
 terrains:
 - {name: concrete, label: 0, preference: 1.0}
-- {name: mulch, label: 1, preference: 10.0}
+- {name: pavement, label: 1, preference: 0.0}
 - {name: grass, label: 2, preference: 9.0}
-- {name: pavement, label: 3, preference: 0.0}
+- {name: mulch, label: 3, preference: 10.0}

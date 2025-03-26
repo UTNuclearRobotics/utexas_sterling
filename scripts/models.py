@@ -177,7 +177,7 @@ class CostNet(nn.Module):
         super(CostNet, self).__init__()
         self.latent_size = latent_size
         self.model = nn.Sequential(
-            nn.Linear(1, self.latent_size),
+            nn.Linear(1, self.latent_size),  # Input is 128D
             nn.ReLU(),
             nn.Linear(self.latent_size, self.latent_size//2),
             nn.ReLU(),
