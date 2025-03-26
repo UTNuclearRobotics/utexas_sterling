@@ -626,6 +626,8 @@ if __name__ == "__main__":
         for timestep in tqdm(range(start, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
             try:
                 cur_img = robot_data.getImageAtTimestep(timestep)
+                #JUSTIN - This is where images come in.
+                #CALL This script with no arguments
                 cur_rt = robot_data.getOdomAtTimestep(timestep)
                 if cur_img is None:
                     print(f"Missing image data at timestep {timestep}")

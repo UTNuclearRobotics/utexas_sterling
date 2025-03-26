@@ -1,0 +1,19 @@
+Update Ryan / Undistort and all that
+
+Load in vicreg and synced.
+
+terrain_dataset.py
+
+vicreg pkl
+synced pkl
+
+Inputs to terrain_dataset
+
+Training part lives in train_representation
+
+Run synchronize_rosbag.py Get synced bag. Run vicreg_dataset.py Both take the bag directory
+
+UTBox
+Bagged data
+trained_models
+agh_courtyard_2
