@@ -9,11 +9,23 @@ from torch.utils.data import DataLoader
 import gi
 from gi.repository import GLib, Gtk, GdkPixbuf
 from cluster import Cluster, PatchRenderer
+from terrain_dataset import TerrainDataset
+from multiprocessing import Pool
+from functools import partial
+import h5py
+import gc
+from tqdm import tqdm
 
 gi.require_version("Gtk", "4.0")
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 
+def save_image(args):
+    """Helper function for parallel image saving."""
+    i, image, label, save_path = args
+    image_path = os.path.join(save_path, f"{label}.jpg")
+    pil_image = Image.fromarray(np.uint8(image))
+    pil_image.save(image_path, "JPEG")
 
 class ClusterUI(Gtk.Application):
     def __init__(self):
@@ -64,7 +76,7 @@ class ClusterUI(Gtk.Application):
 class SelectVicregFile:
     def __init__(self, parent_window):
         self.parent_window = parent_window
-        self.data_pkl_path = None
+        self.data_h5_path = None
 
     def get_component(self):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -73,7 +85,7 @@ class SelectVicregFile:
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
 
-        vbox.append(Gtk.Label(label="Vicreg pickle file selected:"))
+        vbox.append(Gtk.Label(label="Vicreg .h5 file selected:"))
 
         # Pickle file status
         self.label = Gtk.Label(label="None")
@@ -88,7 +100,7 @@ class SelectVicregFile:
 
     def on_file_chooser_button_clicked(self, button):
         dialog = Gtk.FileChooserDialog(
-            title="Select Data Pickle File",
+            title="Select Data .h5 File",
             transient_for=self.parent_window,
             action=Gtk.FileChooserAction.OPEN,
         )
@@ -99,19 +111,19 @@ class SelectVicregFile:
     def on_file_chooser_response(self, dialog, response):
         if response == Gtk.ResponseType.ACCEPT:
             file_path = dialog.get_file().get_path()
-            if not file_path.endswith(".pkl"):
-                self.label.set_markup("<span foreground='red'>Error: Selected file is not a .pkl file</span>")
+            if not file_path.endswith(".h5"):
+                self.label.set_markup("<span foreground='red'>Error: Selected file is not a .h5 file</span>")
                 dialog.destroy()
                 return
 
-            self.data_pkl_path = file_path
-            self.label.set_markup(f"<span foreground='green'>{self.data_pkl_path}</span>")
+            self.data_h5_path = file_path
+            self.label.set_markup(f"<span foreground='green'>{self.data_h5_path}</span>")
         dialog.destroy()
 
 class SelectSyncedFile:
     def __init__(self, parent_window):
         self.parent_window = parent_window
-        self.synced_pkl_path = None
+        self.synced_h5_path = None
 
     def get_component(self):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -120,7 +132,7 @@ class SelectSyncedFile:
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
 
-        vbox.append(Gtk.Label(label="Synced pickle file selected:"))
+        vbox.append(Gtk.Label(label="Synced .h5 file selected:"))
 
         # Pickle file status
         self.label = Gtk.Label(label="None")
@@ -135,7 +147,7 @@ class SelectSyncedFile:
 
     def on_file_chooser_button_clicked(self, button):
         dialog = Gtk.FileChooserDialog(
-            title="Select Data Pickle File",
+            title="Select Data .h5 File",
             transient_for=self.parent_window,
             action=Gtk.FileChooserAction.OPEN,
         )
@@ -146,13 +158,13 @@ class SelectSyncedFile:
     def on_file_chooser_response(self, dialog, response):
         if response == Gtk.ResponseType.ACCEPT:
             file_path = dialog.get_file().get_path()
-            if not file_path.endswith(".pkl"):
-                self.label.set_markup("<span foreground='red'>Error: Selected file is not a .pkl file</span>")
+            if not file_path.endswith(".h5"):
+                self.label.set_markup("<span foreground='red'>Error: Selected file is not a .h5 file</span>")
                 dialog.destroy()
                 return
 
-            self.synced_pkl_path= file_path
-            self.label.set_markup(f"<span foreground='green'>{self.synced_pkl_path}</span>")
+            self.synced_h5_path= file_path
+            self.label.set_markup(f"<span foreground='green'>{self.synced_h5_path}</span>")
         dialog.destroy()
 
 
@@ -203,13 +215,12 @@ class SelectModelFile:
             self.label.set_markup(f"<span foreground='green'>{self.model_path}</span>")
         dialog.destroy()
 
-
 class GenerateClusters:
     def __init__(self, parent_window, spf, ssf, smf):
         self.parent_window = parent_window
-        self.spf = spf
-        self.ssf = ssf
-        self.smf = smf
+        self.spf = spf  # Object with data_pkl_path (now vicreg_h5_path)
+        self.ssf = ssf  # Object with synced_pkl_path (now synced_h5_path)
+        self.smf = smf  # Object with model_path
 
         self.generated_flag = False
         self.cluster = None
@@ -225,7 +236,6 @@ class GenerateClusters:
         self.vbox.set_margin_end(10)
 
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
         label = Gtk.Label(label="Number of Clusters:")
         hbox.append(label)
 
@@ -233,11 +243,9 @@ class GenerateClusters:
         self.entry_clusters.set_placeholder_text("Enter number of clusters...")
         self.entry_clusters.set_text("5")
         hbox.append(self.entry_clusters)
-
         self.vbox.append(hbox)
 
         hbox_iterations = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
         label_iterations = Gtk.Label(label="Number of Iterations:")
         hbox_iterations.append(label_iterations)
 
@@ -245,7 +253,6 @@ class GenerateClusters:
         self.entry_iterations.set_placeholder_text("Enter number of iterations...")
         self.entry_iterations.set_text("100")
         hbox_iterations.append(self.entry_iterations)
-
         self.vbox.append(hbox_iterations)
 
         button = Gtk.Button(label="Generate Clusters")
@@ -255,17 +262,17 @@ class GenerateClusters:
         return self.vbox
 
     def on_button_clicked(self, button):
-        data_pkl_path = self.spf.data_pkl_path
-        synced_pkl_path = self.ssf.synced_pkl_path
+        vicreg_h5_path = self.spf.data_h5_path  # Now an .h5 path
+        synced_h5_path = self.ssf.synced_h5_path  # Now an .h5 path
         model_path = self.smf.model_path
 
-        if data_pkl_path is None or model_path is None or synced_pkl_path is None:
+        if not all([vicreg_h5_path, synced_h5_path, model_path]):
             error_dialog = Gtk.MessageDialog(
                 transient_for=self.parent_window,
                 modal=True,
                 message_type=Gtk.MessageType.ERROR,
                 buttons=Gtk.ButtonsType.OK,
-                text="Please select both the pickle file and a model file before generating clusters.",
+                text="Please select both the VICReg .h5 file, synced .h5 file, and a model file before generating clusters.",
             )
             error_dialog.show()
             error_dialog.connect("response", lambda dialog, response: dialog.destroy())
@@ -290,65 +297,81 @@ class GenerateClusters:
             error_dialog.show()
             error_dialog.connect("response", lambda dialog, response: dialog.destroy())
             return
-        
-        save_path = os.path.join(os.path.dirname(data_pkl_path), "clusters")
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
 
-        # Generate clusters
-        self.cluster = Cluster(data_pkl_path, synced_pkl_path, model_path)
+        save_path = os.path.join(os.path.dirname(vicreg_h5_path), "clusters")
+        os.makedirs(save_path, exist_ok=True)
+
+        # Generate clusters with lazy loading
+        self.cluster = Cluster(vicreg_h5_path, synced_h5_path, model_path, batch_size=10000)
         self.all_cluster_image_indices = self.cluster.generate_clusters(
             num_clusters,
             num_iterations,
             save_model_path=os.path.join(save_path, "kmeans_model.pkl"),
         )
 
-        # Store the dataset and cluster labels for later use
+        # Store the dataset (still lazy-loading)
         self.dataset = self.cluster.dataset
         self.cluster_labels = np.zeros(len(self.dataset), dtype=int)
         for cluster_idx, indices in enumerate(self.all_cluster_image_indices):
             for idx in indices:
                 self.cluster_labels[idx] = cluster_idx
 
-        # Dynamic grid size
-        min_length = min(len(lst) for lst in self.all_cluster_image_indices)
-        grid_size = 10
-        while min_length < grid_size**2:
-            grid_size -= 1
+        # Target at least 1500 samples per cluster
+        min_samples = 1500  # Fixed minimum number of samples to show
 
-        # Render clusters
-        rendered_clusters = PatchRenderer.render_clusters(self.all_cluster_image_indices, self.cluster.patches)
-
+        # Render clusters incrementally without storing all patches in memory
         self.images = []
-        for i, cluster in enumerate(rendered_clusters):
-            self.images.append(PatchRenderer.image_grid(cluster))
+        renderer = PatchRenderer()
+
+        for cluster_indices in self.all_cluster_image_indices:
+            # Determine how many samples to take: 1500 or all available if less than 1500
+            num_samples = min(min_samples, len(cluster_indices))
+            
+            # Randomly select indices (without replacement)
+            if num_samples < len(cluster_indices):
+                selected_indices = np.random.choice(
+                    cluster_indices,  # Array/list of indices to sample from
+                    size=num_samples,  # Number of indices to select
+                    replace=False  # No duplicates
+                )
+            else:
+                selected_indices = cluster_indices  # Use all if fewer than 1500
+            
+            cluster_patches = []
+
+            # Process randomly selected samples incrementally
+            for idx in selected_indices:
+                patch1, _, _ = self.dataset[idx]
+                # Render patch with RGB input (from VICReg .h5) and RGB output for display
+                patch_np = renderer.render_patch(patch1, input_format="RGB", output_format="RGB")
+                cluster_patches.append(patch_np)
+
+            # Create a grid for this cluster
+            if num_samples > 0:
+                num_rows = int(np.ceil(np.sqrt(num_samples)))  # Rough square root for balanced grid
+                num_cols = int(np.ceil(num_samples / num_rows))  # Adjust columns to fit all samples
+                rendered_cluster = renderer.image_grid(
+                    cluster_patches,
+                    image_size=(64, 64),
+                    output_format="RGB"
+                )
+                self.images.append(rendered_cluster)
+            
+            # Clean up to free memory
+            del cluster_patches
+            gc.collect()  # Optional: Force garbage collection if memory is tight
 
         def numpy_to_pixbuf(array):
-            """
-            Convert a NumPy array to a GdkPixbuf.Pixbuf object.
-            Supports RGB and RGBA formats.
-            """
-            if array.ndim not in (3,):
-                raise ValueError("Input must be a 3D NumPy array with shape (height, width, channels)")
-
             height, width, channels = array.shape
             if channels not in (3, 4):
                 raise ValueError("Array must have 3 (RGB) or 4 (RGBA) channels")
-
             data = array.tobytes()
             rowstride = width * channels
             return GdkPixbuf.Pixbuf.new_from_data(
-                data,
-                GdkPixbuf.Colorspace.RGB,
-                channels == 4,
-                8,
-                width,
-                height,
-                rowstride,
+                data, GdkPixbuf.Colorspace.RGB, channels == 4, 8, width, height, rowstride
             )
-
+        
         hbox_images = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
         self.labels_and_rankings = []
         for i, image in enumerate(self.images):
             pixbuf = numpy_to_pixbuf(image)
@@ -374,7 +397,7 @@ class GenerateClusters:
             self.labels_and_rankings.append((text_field, ranking_field))
 
         if self.generated_flag:
-            for i in range(3):
+            for _ in range(3):
                 self.vbox.remove(self.vbox.get_last_child())
         self.generated_flag = True
 
@@ -386,20 +409,18 @@ class GenerateClusters:
         self.vbox.append(save_button)
 
     def on_save_button_clicked(self, button):
-        data_pkl_path = self.spf.data_pkl_path
-        save_path = os.path.join(os.path.dirname(data_pkl_path), "clusters")
-        # Get the directory of the current script
+        vicreg_h5_path = self.spf.data_h5_path
+        save_path = os.path.join(os.path.dirname(vicreg_h5_path), "clusters")
         script_dir = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(script_dir, "homography", "config.yaml")
-        config_path = os.path.abspath(config_path)  # Normalize the path
+        dataset_save_path = os.path.join(save_path, "labeled_data.h5")
 
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-        else:
-            for file in os.listdir(save_path):
-                file_path = os.path.join(save_path, file)
-                if os.path.isfile(file_path) and file_path.endswith(".jpg"):
-                    os.unlink(file_path)  # Remove only .jpg files, preserve config.yaml
+        # Precompute paths and ensure directory exists
+        os.makedirs(save_path, exist_ok=True)
+        for file in os.listdir(save_path):
+            file_path = os.path.join(save_path, file)
+            if os.path.isfile(file_path) and file_path.endswith(".jpg"):
+                os.unlink(file_path)
 
         # Collect user-provided labels and preferences
         user_labels_and_rankings = []
@@ -421,71 +442,92 @@ class GenerateClusters:
                 return
             user_labels_and_rankings.append((label, ranking))
 
-        # Save cluster images
-        for i, image in enumerate(self.images):
-            label, _ = user_labels_and_rankings[i]
-            image_path = os.path.join(save_path, f"{label}.jpg")
-            pil_image = Image.fromarray(np.uint8(image))
-            pil_image.save(image_path, "JPEG")
+        # Parallelize image saving
+        num_images = len(self.images)
+        if num_images > 1:  # Only parallelize if worth it
+            with Pool(processes=min(os.cpu_count(), num_images)) as pool:
+                pool.map(save_image, [(i, self.images[i], user_labels_and_rankings[i][0], save_path) 
+                                    for i in range(num_images)])
+        else:
+            for i, image in enumerate(self.images):
+                save_image((i, image, user_labels_and_rankings[i][0], save_path))
 
-        # Read existing config.yaml
+        # Prepare config
         existing_config = {}
         if os.path.exists(config_path):
             with open(config_path, 'r') as file:
                 existing_config = yaml.safe_load(file) or {}
-        else:
-            existing_config = {}
 
-        # Create new terrains section with cluster-level data only
         new_terrains = [
             {'name': label, 'label': idx, 'preference': preference}
             for idx, (label, preference) in enumerate(user_labels_and_rankings)
         ]
-
-        # Map cluster labels to terrain labels and preferences for internal use
         cluster_to_terrain = {
-            cluster_idx: {'terrain_label': terrain_label, 'preference': preference}
-            for cluster_idx, (terrain_label, preference) in enumerate(user_labels_and_rankings)
+            cluster_idx: {'terrain_label': label, 'preference': preference}
+            for cluster_idx, (label, preference) in enumerate(user_labels_and_rankings)
         }
 
-        # Assign terrain labels to each sample based on its cluster
-        terrain_labels = np.zeros(len(self.dataset), dtype=object)
-        preferences = np.zeros(len(self.dataset), dtype=float)
-        for idx in range(len(self.dataset)):
-            cluster_label = self.cluster_labels[idx]
-            terrain_info = cluster_to_terrain.get(cluster_label, {'terrain_label': 'unknown', 'preference': 0.0})
-            terrain_labels[idx] = terrain_info['terrain_label']
-            preferences[idx] = terrain_info['preference']
+        # Preallocate and batch-write HDF5 data
+        num_samples = len(self.dataset)
+        with h5py.File(dataset_save_path, 'w') as h5f:
+            # Preallocate datasets with known sizes
+            patch_shape = (num_samples, 3, 128, 128)  # Adjust if shape varies
+            inertial_exists = self.dataset[0][2] is not None
+            inertial_shape = self.dataset[0][2].shape if inertial_exists else None
+            
+            patches_dset = h5f.create_dataset('patches', shape=patch_shape, dtype=np.float32, 
+                                            compression='lzf')  # Faster compression
+            if inertial_exists:
+                inertial_dset = h5f.create_dataset('inertial', shape=(num_samples, *inertial_shape), 
+                                                dtype=np.float32, compression='lzf')
+            terrain_labels_dset = h5f.create_dataset('terrain_labels', shape=(num_samples,), 
+                                                    dtype=h5py.string_dtype(encoding='utf-8'))
+            preferences_dset = h5f.create_dataset('preferences', shape=(num_samples,), dtype=np.float32)
 
-        # Update the dataset with all relevant data
-        self.dataset.patches = self.cluster.patches  # Add visual data
-        self.dataset.inertial = self.cluster.inertial  # Add inertial data
-        self.dataset.cluster_labels = self.cluster_labels  # Cluster labels
-        self.dataset.terrain_labels = terrain_labels  # Terrain labels
-        self.dataset.preferences = preferences  # Preferences
-        self.dataset.is_labeled = True  # Explicitly set to labeled mode
+            # Batch process and write
+            batch_size = 1000  # Adjust based on memory vs. speed trade-off
+            for start_idx in tqdm(range(0, num_samples, batch_size), desc="Writing labeled data batches"):
+                end_idx = min(start_idx + batch_size, num_samples)
+                batch_patches = []
+                batch_inertial = [] if inertial_exists else None
+                batch_labels = []
+                batch_prefs = []
 
-        # Save the dataset to a pickle file
-        dataset_save_path = os.path.join(save_path, "labeled_dataset.pkl")
-        with open(dataset_save_path, "wb") as file:
-            pickle.dump(self.dataset, file)
-        print(f"Saved labeled dataset to: {dataset_save_path}")
+                for idx in range(start_idx, end_idx):
+                    patch = self.dataset[idx][0]
+                    if isinstance(patch, torch.Tensor):
+                        patch = patch.numpy()
+                    elif not isinstance(patch, np.ndarray):
+                        patch = np.array(patch)
+                    if patch.shape[-3:] != (3, 128, 128):
+                        patch = patch.transpose(2, 0, 1)
 
-        # Update the existing config: replace terrains only (samples optional)
+                    inertial = self.dataset[idx][2] if inertial_exists else None
+                    if inertial is not None and isinstance(inertial, torch.Tensor):
+                        inertial = inertial.numpy()
+
+                    terrain_label = cluster_to_terrain[self.cluster_labels[idx]]['terrain_label']
+                    preference = cluster_to_terrain[self.cluster_labels[idx]]['preference']
+
+                    batch_patches.append(patch)
+                    if inertial_exists:
+                        batch_inertial.append(inertial)
+                    batch_labels.append(terrain_label)
+                    batch_prefs.append(preference)
+
+                # Write batch to HDF5
+                patches_dset[start_idx:end_idx] = np.stack(batch_patches)
+                if inertial_exists:
+                    inertial_dset[start_idx:end_idx] = np.stack(batch_inertial)
+                terrain_labels_dset[start_idx:end_idx] = batch_labels
+                preferences_dset[start_idx:end_idx] = batch_prefs
+
+        print(f"Saved labeled data to: {dataset_save_path}")
+
+        # Update config
         existing_config['terrains'] = new_terrains
-        # Optional: Include samples section without preferences
-        new_samples = [
-            {'sample_id': idx, 'terrain': terrain_labels[idx]}
-            for idx in range(len(self.dataset))
-        ]
-        #existing_config['samples'] = new_samples  # Comment out if samples not needed in YAML
-
-        # Save updated config.yaml
         with open(config_path, "w") as file:
             yaml.dump(existing_config, file, default_flow_style=None, sort_keys=False)
-
-        #print("Labels:", terrain_labels.tolist())
-        #print("Preferences:", preferences.tolist())
         print(f"Updated config at: {config_path}")
 
         success_dialog = Gtk.MessageDialog(
@@ -493,7 +535,7 @@ class GenerateClusters:
             modal=True,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
-            text="Existing terrains replaced, samples updated in config.yaml, and dataset saved to labeled_dataset.pkl.",
+            text="Terrains updated in config.yaml and labeled data saved.",
         )
         success_dialog.show()
         success_dialog.connect("response", lambda dialog, response: dialog.destroy())

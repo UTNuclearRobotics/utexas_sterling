@@ -1,105 +1,153 @@
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-import matplotlib.pyplot as plt
-import argparse, os, pickle
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+import h5py
 from scipy.signal import periodogram, butter, filtfilt
 from scipy.spatial.transform import Rotation
+import cv2
+import os
 
 IMU_TOPIC_RATE = 20
 
 class TerrainDataset(Dataset):
-    def __init__(self, patches=None, synced_data=None, labeled_data=None, transform=None, dtype=torch.float32, incl_orientation=False):
+    def __init__(self, synced_h5_path=None, vicreg_h5_path=None, labeled_dataset=None, transform=None, dtype=torch.float32, incl_orientation=False):
         self.dtype = dtype
         self.transform = transform
         self.incl_orientation = incl_orientation
 
-        try:
-            if labeled_data is not None:
-                # Debug attribute presence
-                has_patches = hasattr(labeled_data, 'patches')
-                has_terrain_labels = hasattr(labeled_data, 'terrain_labels')
-                has_inertial = hasattr(labeled_data, 'inertial')
-                has_preferences = hasattr(labeled_data, 'preferences')
-                print(f"Attributes - patch: {has_patches}, terrain_label: {has_terrain_labels}, inertial: {has_inertial}, preferences: {has_preferences}")
-
-                # Check if it's a TerrainDataset-like object
-                if isinstance(labeled_data, Dataset):
-                    print("Detected Dataset subclass, attempting to load as dataset object")
-                    if not (has_patches and has_terrain_labels):
-                        print("Warning: Missing required attributes 'patches' or 'terrain_labels'")
-                    self.patches = getattr(labeled_data, 'patches', None)
-                    self.terrain_labels = getattr(labeled_data, 'terrain_labels', None)
-                    self.inertial = getattr(labeled_data, 'inertial', None)
-                    self.preferences = getattr(labeled_data, 'preferences', None)
-                    if self.patches is None or self.terrain_labels is None:
-                        raise ValueError("Loaded dataset object missing required 'patches' or 'terrain_labels'")
-                    self.is_labeled = True
-                    print("Labeled data mode activated (dataset object detected)")
-                elif isinstance(labeled_data, (list, tuple)) and all(isinstance(sample, dict) for sample in labeled_data):
-                    print("Labeled data mode activated (list of dicts detected)")
-                    self.patches = [sample['patch'] for sample in labeled_data]
-                    self.inertial = [sample['inertial'] for sample in labeled_data]
-                    self.terrain_labels = [sample['terrain_label'] for sample in labeled_data]
-                    self.preferences = [sample['preference'] for sample in labeled_data]
-                    self.is_labeled = True
-                else:
-                    raise ValueError(f"Unsupported labeled_data type or structure: {type(labeled_data)}")
+        if labeled_dataset is not None:
+            if isinstance(labeled_dataset, str):  # Handle HDF5 file path
+                print("Labeled data mode activated (HDF5 file path detected)")
+                self.is_labeled = True
+                self.hdf5_path = labeled_dataset
+                
+                # Load the full dataset into memory
+                with h5py.File(self.hdf5_path, 'r') as h5f:
+                    if not all(key in h5f for key in ['patches', 'terrain_labels']):
+                        raise ValueError("HDF5 file missing required datasets: 'patches' or 'terrain_labels'")
+                    
+                    # Load all data into memory
+                    self.patches = np.array(h5f['patches'])  # Shape: (N, H, W, C) or similar
+                    self.terrain_labels = [label.decode('utf-8') for label in h5f['terrain_labels']]
+                    self.inertial = np.array(h5f['inertial']) if 'inertial' in h5f else None
+                    self.preferences = np.array(h5f['preferences'], dtype=np.float32) if 'preferences' in h5f else np.zeros(len(self.patches), dtype=np.float32)
+                    self.length = len(self.patches)
+                
+                # Convert patches to torch tensor and adjust dimensions if needed
+                self.patches = torch.from_numpy(self.patches).to(dtype=self.dtype)
+                if self.patches.shape[-3:] != (3, 128, 128):
+                    self.patches = self.patches.permute(0, 3, 1, 2)  # Adjust to (N, C, H, W)
+                
+                # Convert inertial to tensor if it exists
+                if self.inertial is not None:
+                    self.inertial = torch.from_numpy(self.inertial).to(dtype=self.dtype)
+                
+                # Convert preferences to tensor
+                self.preferences = torch.from_numpy(self.preferences).to(dtype=self.dtype)
+                
+                print(f"Loaded full dataset into memory: {self.length} samples")
+                
+            elif isinstance(labeled_dataset, Dataset):
+                print("Detected Dataset subclass, attempting to load as dataset object")
+                self.patches = getattr(labeled_dataset, 'patches', None)
+                self.terrain_labels = getattr(labeled_dataset, 'terrain_labels', None)
+                self.inertial = getattr(labeled_dataset, 'inertial', None)
+                self.preferences = getattr(labeled_dataset, 'preferences', None)
+                if self.patches is None or self.terrain_labels is None:
+                    raise ValueError("Loaded dataset object missing required 'patches' or 'terrain_labels'")
+                self.is_labeled = True
+                print("Labeled data mode activated (dataset object detected)")
+                self.length = len(self.patches)
+            elif isinstance(labeled_dataset, (list, tuple)) and all(isinstance(sample, dict) for sample in labeled_dataset):
+                print("Labeled data mode activated (list of dicts detected)")
+                self.patches = [sample['patch'] for sample in labeled_dataset]
+                self.inertial = [sample['inertial'] for sample in labeled_dataset]
+                self.terrain_labels = [sample['terrain_label'] for sample in labeled_dataset]
+                self.preferences = [sample['preference'] for sample in labeled_dataset]
+                self.is_labeled = True
+                self.length = len(self.patches)
             else:
-                print("Unlabeled data mode activated")
-                if patches is None or synced_data is None:
-                    raise ValueError("Must provide patches and synced_data for unlabeled mode")
-                self.raw_patches = patches
-                self.robot_data = synced_data
-                self.imu_data = self.robot_data["imu"]
-                self.is_labeled = False
+                raise ValueError(f"Unsupported labeled_dataset type or structure: {type(labeled_dataset)}")
+        else:
+            if synced_h5_path is None or vicreg_h5_path is None:
+                raise ValueError("Must provide synced_h5_path and vicreg_h5_path for unlabeled mode")
+            if not os.path.exists(synced_h5_path) or not os.path.exists(vicreg_h5_path):
+                raise FileNotFoundError(f"Files not found: {synced_h5_path}, {vicreg_h5_path}")
 
-                ang_vels = np.array([sample["angular_velocity"] for sample in self.imu_data])
-                lin_accs = np.array([sample["linear_acceleration"] for sample in self.imu_data])
+            self.synced_h5_path = synced_h5_path
+            self.vicreg_h5_path = vicreg_h5_path
+            self.is_labeled = False
 
-                if self.incl_orientation:
-                    orientations = np.array([sample["orientation"] for sample in self.imu_data])
-                    lin_accs = np.array([self.remove_gravity(lin_accs[i], orientations[i]) 
-                                        for i in range(len(lin_accs))])
-                    self.imu_data = np.concatenate([ang_vels, lin_accs, orientations], axis=1)
-                else:
-                    lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
-                    self.imu_data = np.concatenate([ang_vels, lin_accs], axis=1)
+            with h5py.File(synced_h5_path, 'r') as synced_f:
+                if not all(key in synced_f for key in ['image', 'imu', 'odom']):
+                    raise ValueError("Synced .h5 file missing required groups: 'image', 'imu', 'odom'")
+                self.imu_length = len(synced_f['imu'])
 
-                samples_per_window = IMU_TOPIC_RATE * 2
-                num_windows = (len(self.imu_data) - samples_per_window + 1) // 1
-                if num_windows <= 0:
-                    num_windows = 1
+            with h5py.File(vicreg_h5_path, 'r') as vicreg_f:
+                self.vicreg_length = len(vicreg_f)
 
-                self.psd_features = []
-                for i in range(num_windows):
-                    start = i
-                    end = start + samples_per_window
-                    window = self.imu_data[start:end]
-                    if len(window) < samples_per_window:
-                        window = np.pad(window, ((0, samples_per_window - len(window)), (0, 0)), mode='constant')
-                    imu_subset = window[:, [0, 1, 2, 3, 4, 5]]
+            self.length = self.vicreg_length
+            self._compute_imu_normalization_params()
+
+    def _compute_imu_normalization_params(self):
+        samples_per_window = IMU_TOPIC_RATE * 2
+        num_windows = max(1, (self.imu_length - samples_per_window + 1) // 1)
+        chunk_size = 1000
+
+        with h5py.File(self.synced_h5_path, 'r') as f:
+            imu_group = f['imu']
+            all_psd_features = []
+
+            for start in range(0, num_windows, chunk_size):
+                end = min(start + chunk_size, num_windows)
+                chunk_features = []
+
+                for i in range(start, end):
+                    window_start = i
+                    window_end = min(window_start + samples_per_window, self.imu_length)
+                    pad_size = samples_per_window - (window_end - window_start) if window_end < window_start + samples_per_window else 0
+
+                    # Load and concatenate IMU data for this window
+                    imu_window = np.array([
+                        np.concatenate([
+                            imu_group[str(j)]['angular_velocity'][:],
+                            imu_group[str(j)]['linear_acceleration'][:],
+                            imu_group[str(j)]['orientation'][:] if self.incl_orientation else np.zeros(4)
+                        ])
+                        for j in range(window_start, window_end)
+                    ])  # Shape: (window_size, 10) or (window_size, 6) if not incl_orientation
+
+                    if pad_size > 0:
+                        imu_window = np.pad(imu_window, ((0, pad_size), (0, 0)), mode='constant')
+
+                    # Process IMU data
+                    ang_vels = imu_window[:, :3]
+                    lin_accs = imu_window[:, 3:6]
+                    if self.incl_orientation:
+                        orientations = imu_window[:, 6:]
+                        lin_accs = np.array([self.remove_gravity(lin_accs[j], orientations[j]) 
+                                           for j in range(len(lin_accs))])
+                    else:
+                        lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
+
+                    imu_subset = np.hstack([ang_vels, lin_accs])[:, [0, 1, 2, 3, 4, 5]]
                     if not self.incl_orientation:
                         for j in range(3, 6):
                             imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
-                    
+
                     psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
                     std = np.std(imu_subset, axis=0)
                     features = np.concatenate([std, psd])
-                    self.psd_features.append(features)
+                    chunk_features.append(features)
 
-                self.psd_features = np.array(self.psd_features)
-                self.imu_min = np.min(self.psd_features, axis=0)
-                self.imu_max = np.max(self.psd_features, axis=0)
-        except Exception as e:
-            print(f"Error in TerrainDataset.__init__: {e}")
-            raise
+                all_psd_features.extend(chunk_features)
+
+            self.psd_features = np.array(all_psd_features)
+            self.imu_min = np.min(self.psd_features, axis=0)
+            self.imu_max = np.max(self.psd_features, axis=0)
 
     def remove_gravity(self, linear_acceleration, orientation):
-        if orientation is None:
+        if orientation is None or not self.incl_orientation:
             return linear_acceleration
         gravity_world = np.array([0, 0, -9.81])
         rot = Rotation.from_quat(orientation)
@@ -118,46 +166,27 @@ class TerrainDataset(Dataset):
         return (imu_sample - self.imu_min) / (self.imu_max - self.imu_min + 1e-7)
 
     def __len__(self):
-        return len(self.patches if self.is_labeled else self.raw_patches)
+        return self.length
 
     def __getitem__(self, idx):
         if self.is_labeled:
-            # Handle patches
-            patch_data = self.patches[idx]
-            if isinstance(patch_data, torch.Tensor):
-                patch = patch_data.clone().detach().to(dtype=self.dtype)
-            else:
-                patch = torch.tensor(patch_data, dtype=self.dtype)
-            if patch.shape[-3:] != (3, 128, 128):  # Check if already in (C, H, W)
-                patch = patch.permute(2, 0, 1)  # From (H, W, C) to (C, H, W)
-
-            # Handle inertial
-            inertial_data = self.inertial[idx] if self.inertial is not None and idx < len(self.inertial) else None
-            if inertial_data is not None:
-                inertial = inertial_data.clone().detach().to(dtype=self.dtype) if isinstance(inertial_data, torch.Tensor) else torch.tensor(inertial_data, dtype=self.dtype)
-            else:
-                inertial = None
-
+            patch = self.patches[idx].clone().detach()
+            inertial = self.inertial[idx].clone().detach() if self.inertial is not None else None
+            if inertial is not None and inertial.dim() == 1:  # If inertial is (48,)
+                inertial = inertial.unsqueeze(0)  # Add channel dim: (1, 48)
             terrain_label = self.terrain_labels[idx]
-            preference = torch.tensor([self.preferences[idx]], dtype=self.dtype) if self.preferences is not None and idx < len(self.preferences) else torch.tensor([0.0], dtype=self.dtype)
+            preference = self.preferences[idx].clone().detach().unsqueeze(0)
 
             if self.transform:
                 patch = self.transform(patch)
 
             return patch, inertial, terrain_label, preference
         else:
-            imu_timestep_start = idx // 5
-            start_idx = imu_timestep_start
-            end_idx = min(imu_timestep_start + IMU_TOPIC_RATE*2, len(self.imu_data))
-            imu_segment = self.imu_data[start_idx:end_idx]
-
-            if imu_segment.shape[0] < IMU_TOPIC_RATE*2:
-                imu_segment = np.pad(imu_segment, ((0, IMU_TOPIC_RATE*2 - imu_segment.shape[0]), (0, 0)), mode='constant')
-
-            patch_batch = self.raw_patches[idx]
-            patch_array = np.array(patch_batch)
-            if len(patch_array.shape) != 4:
-                raise ValueError(f"Unexpected patch array shape: {patch_array.shape}")
+            # [Unchanged, keeping original unlabeled mode logic]
+            with h5py.File(self.vicreg_h5_path, 'r') as vicreg_f:
+                timestep_group = vicreg_f[f'timestep_{idx}']
+                patch_batch = [timestep_group[f'patch_{i}'][:] for i in range(len(timestep_group))]
+                patch_array = np.array(patch_batch)
 
             sample = torch.tensor(patch_array, dtype=self.dtype).permute(0, 3, 1, 2)
             num_patches = sample.shape[0]
@@ -171,7 +200,34 @@ class TerrainDataset(Dataset):
                 patch1 = self.transform(patch1)
                 patch2 = self.transform(patch2)
 
-            imu_subset = imu_segment[:, [0, 1, 2, 3, 4, 5]]
+            imu_timestep_start = idx // 5
+            start_idx = imu_timestep_start
+            end_idx = min(start_idx + IMU_TOPIC_RATE * 2, self.imu_length)
+
+            with h5py.File(self.synced_h5_path, 'r') as synced_f:
+                imu_group = synced_f['imu']
+                imu_segment = np.array([
+                    np.concatenate([
+                        imu_group[str(i)]['angular_velocity'][:],
+                        imu_group[str(i)]['linear_acceleration'][:],
+                        imu_group[str(i)]['orientation'][:] if self.incl_orientation else np.zeros(4)
+                    ])
+                    for i in range(start_idx, end_idx)
+                ])
+
+            if imu_segment.shape[0] < IMU_TOPIC_RATE * 2:
+                imu_segment = np.pad(imu_segment, ((0, IMU_TOPIC_RATE * 2 - imu_segment.shape[0]), (0, 0)), mode='constant')
+
+            ang_vels = imu_segment[:, :3]
+            lin_accs = imu_segment[:, 3:6]
+            if self.incl_orientation:
+                orientations = imu_segment[:, 6:]
+                lin_accs = np.array([self.remove_gravity(lin_accs[i], orientations[i]) 
+                                   for i in range(len(lin_accs))])
+            else:
+                lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
+
+            imu_subset = np.hstack([ang_vels, lin_accs])[:, [0, 1, 2, 3, 4, 5]]
             if not self.incl_orientation:
                 for j in range(3, 6):
                     imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, random_split
-from scripts.models import VisualEncoderModel, ProprioceptionModel, UtilityFuncVisual, UtilityFuncProprioceptive, CostNet
+from models import VisualEncoderModel, ProprioceptionModel, UtilityFuncVisual, UtilityFuncProprioceptive, CostNet
 import pickle
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA

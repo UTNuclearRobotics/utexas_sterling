@@ -6,7 +6,7 @@ from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, Subset
 from utils import load_bag_pkl, load_bag_pt_model
 from vicreg import VICRegLoss
-from scripts.models import VisualEncoderModel, ProprioceptionModel
+from models import VisualEncoderModel, ProprioceptionModel
 from torchvision import transforms
 import torchvision.transforms.v2 as v2
 import os

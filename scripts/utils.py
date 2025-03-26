@@ -123,6 +123,13 @@ def load_bag_pkl(bag_path, suffix):
 
     return pkl_data
 
+def load_bag_h5(bag_dir, suffix):
+    """Utility function to load HDF5 file paths from a bag directory."""
+    file_path = os.path.join(bag_dir, f"{os.path.basename(bag_dir)}_{suffix}.h5")
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"No {suffix}.h5 file found at {file_path}")
+    return file_path
+
 
 def load_bag_pt_model(bag_path, suffix, model=None):
     model_path = os.path.join(bag_path, "models")

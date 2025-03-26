@@ -12,6 +12,7 @@ The main functionalities include:
 import argparse
 import os
 import pickle
+import h5py
 
 import cv2
 from cv_bridge import CvBridge
@@ -45,17 +46,11 @@ class SynchronizeRosbag:
             self.odometry_topic = "/panther/odometry/filtered"
             self.imu_topic = "/panther/imu/data"
 
-        # Bridge for conversions between Image and CompressedImage
         self.br = CvBridge()
-
-        # Initialize queues
         self.image_msgs = deque()
         self.imu_msgs = deque()
         self.odom_msgs = deque()
-
-        # Lists to store synchronized messages
         self.synced_msgs = {"image": [], "imu": [], "odom": []}
-
         self.camera_info = None
 
     def image_callback(self, msg):
@@ -210,7 +205,7 @@ class SynchronizeRosbag:
 
     def save_data(self):
         if self.VISUAL:
-            # Initialize the video writer
+            # Video writing code remains unchanged
             frame_size = (self.camera_info.width, self.camera_info.height)
             fps = 10
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -226,12 +221,38 @@ class SynchronizeRosbag:
             video_writer.release()
             cprint(f"Video saved successfully: {video_save_path}", "green")
 
-        # Save the data as a pickle file
+        # Save the data as an HDF5 file instead of pickle
         os.makedirs(self.SAVE_PATH, exist_ok=True)
-        file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + "_synced.pkl")
-        with open(file_path, "wb") as file:
-            pickle.dump(self.synced_msgs, file)
-        cprint(f"Data saved successfully: {file_path}", "green")
+        file_path = os.path.join(self.SAVE_PATH, self.BAG_PATH.split("/")[-1] + "_synced.h5")
+        
+        with h5py.File(file_path, 'w') as h5f:
+            # Create groups for each message type
+            image_group = h5f.create_group('image')
+            imu_group = h5f.create_group('imu')
+            odom_group = h5f.create_group('odom')
+
+            # Save image data
+            for i, msg in enumerate(self.synced_msgs['image']):
+                subgroup = image_group.create_group(str(i))
+                subgroup.create_dataset('timestamp', data=msg['timestamp'])
+                subgroup.create_dataset('data', data=msg['data'])
+
+            # Save IMU data
+            for i, msg in enumerate(self.synced_msgs['imu']):
+                subgroup = imu_group.create_group(str(i))
+                subgroup.create_dataset('timestamp', data=msg['timestamp'])
+                subgroup.create_dataset('orientation', data=msg['orientation'])
+                subgroup.create_dataset('angular_velocity', data=msg['angular_velocity'])
+                subgroup.create_dataset('linear_acceleration', data=msg['linear_acceleration'])
+
+            # Save odometry data
+            for i, msg in enumerate(self.synced_msgs['odom']):
+                subgroup = odom_group.create_group(str(i))
+                subgroup.create_dataset('timestamp', data=msg['timestamp'])
+                subgroup.create_dataset('pose', data=msg['pose'])
+                subgroup.create_dataset('twist', data=msg['twist'])
+
+        cprint(f"Data saved successfully as HDF5: {file_path}", "green")
         cprint(f"Total synced messages: {len(self.synced_msgs['imu'])}", "green")
 
     def calculate_avg_inter_group_time_difference(self):
@@ -299,8 +320,7 @@ class SynchronizeRosbag:
         print(f"Std deviation: {np.std(diffs_image):.6f} seconds")
         
 if __name__ == "__main__":
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Process a ROS2 bag to a pickle file.")
+    parser = argparse.ArgumentParser(description="Process a ROS2 bag to an HDF5 file.")
     parser.add_argument("--bag_path", "-b", type=str, required=True, help="Path to the ROS2 bag file.")
     parser.add_argument(
         "--save_path",
@@ -310,7 +330,6 @@ if __name__ == "__main__":
         help="Path to save the processed data.",
     )
     parser.add_argument("--visual", "-v", action="store_true", default=False, help="Save video of processed rosbag.")
-
     parser.add_argument("--simulation", "-sim", action="store_true", default=False, help="Rosbag is from a Gazebo simulation.")
     parser.add_argument("--threshold", "-th", type=float, default=0.05, help="Threshold for syncing messages within a certain time window")
     args = parser.parse_args()
@@ -324,7 +343,6 @@ if __name__ == "__main__":
         "blue",
     )
 
-    # Process the rosbag
     processor = SynchronizeRosbag(
         bag_path=os.path.normpath(args.bag_path),
         visual=args.visual,
