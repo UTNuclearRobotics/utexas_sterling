@@ -25,7 +25,7 @@ class PaternPreAdaptation(nn.Module):
         # Utility functions (2-layer MLP on 128D vectors with scaling to 0-255)
         self.uvis = UtilityFuncVisual(latent_size=self.latent_size)
         self.upro = UtilityFuncProprioceptive(latent_size=self.latent_size)
-        self.cost_head = CostNet(latent_size=self.latent_size)
+        self.cost_head = CostNet()
 
         # Load pre-trained weights if provided
         if pretrained_weights_path and os.path.exists(pretrained_weights_path):
@@ -83,12 +83,8 @@ class PaternPreAdaptation(nn.Module):
         preferences = preferences.to(self.device).float()
         
         # Normalize preferences to 0-255 range
-        pref_min = preferences.min()
-        pref_max = preferences.max()
-        if pref_max > pref_min:  # Avoid division by zero
-            scaled_preferences = ((preferences - pref_min) / (pref_max - pref_min)) * 255.0
-        else:
-            scaled_preferences = preferences * 0.0  # If all preferences are same, set to 0
+        # Use dataset's precomputed scaling
+        scaled_preferences = self.train_loader.dataset.dataset.get_scaled_preferences(preferences)
 
         phi_vis, phi_pro, uvis_pred, upro_pred, final_cost = self.forward(patches, inertial)
 
@@ -121,7 +117,7 @@ class PaternPreAdaptation(nn.Module):
         ranking_loss = F.relu(1.0 - (pred_diff / 255.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         modality_mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
-        cost_loss = F.mse_loss(final_cost, scaled_preferences)
+        cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
 
         #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
         total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
@@ -139,12 +135,8 @@ class PaternPreAdaptation(nn.Module):
         preferences = preferences.to(self.device).float()
         
         # Normalize preferences to 0-255 range
-        pref_min = preferences.min()
-        pref_max = preferences.max()
-        if pref_max > pref_min:
-            scaled_preferences = ((preferences - pref_min) / (pref_max - pref_min)) * 255.0
-        else:
-            scaled_preferences = preferences * 0.0
+        # Use dataset's precomputed scaling
+        scaled_preferences = self.val_loader.dataset.dataset.get_scaled_preferences(preferences)
 
         phi_vis, phi_pro, uvis_pred, upro_pred, final_cost = self.forward(patches, inertial)
 
@@ -153,11 +145,6 @@ class PaternPreAdaptation(nn.Module):
             uvis_pred = ((uvis_pred - uvis_pred.min()) / (uvis_pred.max() - uvis_pred.min())) * 255.0
         else:
             uvis_pred = uvis_pred * 0.0
-            
-        if final_cost.max() > final_cost.min():
-            final_cost = ((final_cost - final_cost.min()) / (final_cost.max() - final_cost.min())) * 255.0
-        else:
-            final_cost = final_cost * 0.0
 
         terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         batch_size = len(terrain_labels)
@@ -181,10 +168,10 @@ class PaternPreAdaptation(nn.Module):
         ranking_loss = F.relu(1.0 - (pred_diff / 255.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         modality_mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
-        cost_loss = F.mse_loss(final_cost, scaled_preferences)
+        cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
 
         #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
-        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
+        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 2.0 * cost_loss
         return total_loss
     
     def save_models(self, save_dir):
@@ -225,7 +212,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pre-Adaptation Training for PATERN with 128D")
     parser.add_argument("-bag","-b", type=str, required=True, help="Base bag directory (e.g., bags/agh_courtyard_2)")
-    parser.add_argument("-batch_size", type=int, default=32, help="Batch size for training")
+    parser.add_argument("-batch_size", type=int, default=256, help="Batch size for training")
     parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
     parser.add_argument("-val_split", type=float, default=0.2, help="Fraction of dataset to use for validation (0.0 to 1.0)")
     args = parser.parse_args()
@@ -272,6 +259,8 @@ if __name__ == "__main__":
 
     # Initialize model
     model = PaternPreAdaptation(device=device, pretrained_weights_path=models_dir, latent_size=128).to(device)
+    model.train_loader = train_loader  # Pass loader to model
+    model.val_loader = val_loader     # Pass loader to model
 
     # Check if weights were loaded (you can add a flag in PaternPreAdaptation)
     weights_loaded = False

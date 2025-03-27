@@ -207,34 +207,35 @@ class BEVCostmap:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get BEV cost visual using trained preference predictor.")
-    parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized pickle file inside.")
+    parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized HDF5 file inside.")
     args = parser.parse_args()
 
     bag_path = args.b
     if not os.path.exists(bag_path):
         raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
-    synced_pkl = [file for file in os.listdir(bag_path) if file.endswith("_synced.pkl")]
-    if len(synced_pkl) != 1:
-        raise FileNotFoundError(f"Synced pickle file not found in: {bag_path}")
-    synced_pkl_path = os.path.join(bag_path, synced_pkl[0])
+    h5_files = [file for file in os.listdir(bag_path) if file.endswith("_synced.h5")]
+    if len(h5_files) != 1:
+        raise FileNotFoundError(f"Synchronized HDF5 file not found or multiple found in: {bag_path}")
+    h5_file_path = os.path.join(bag_path, h5_files[0])
 
     H = get_homography_params().homography_matrix()
-    robot_data = RobotDataAtTimestep(synced_pkl_path)
+    # Assuming RobotDataAtTimestep needs to be modified to handle HDF5
+    # You'll need to adjust this based on your HDF5 file structure
+    robot_data = RobotDataAtTimestep(h5_file_path)  
 
     # Search for pre-trained weights
     models_dir = os.path.join(args.b, "models")
-
-    bev_costmap = BEVCostmap(models_dir, save_path=args.b)
+    bev_costmap = BEVCostmap(models_dir)
     max_timesteps = robot_data.getNTimesteps()
     start_timestep = min(1400, max_timesteps)
     frame_count = 0
     video_writer = None
     frame_size = None
 
-    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(2500, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
-        bev_img = plot_BEV_full(cur_img, H,patch_size=(128,128))
+        bev_img = plot_BEV_full(cur_img, H, patch_size=(128,128))
         costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
         visualize = bev_costmap.visualize_costmap(costmap, 128)
 

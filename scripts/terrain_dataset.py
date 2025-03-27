@@ -32,6 +32,14 @@ class TerrainDataset(Dataset):
                     self.inertial = np.array(h5f['inertial']) if 'inertial' in h5f else None
                     self.preferences = np.array(h5f['preferences'], dtype=np.float32) if 'preferences' in h5f else np.zeros(len(self.patches), dtype=np.float32)
                     self.length = len(self.patches)
+
+                    # Always compute pref_min and pref_max
+                    self.pref_min = self.preferences.min()
+                    self.pref_max = self.preferences.max()
+                    print(f"Global preferences range: {self.pref_min} to {self.pref_max}")
+                    if self.pref_max <= self.pref_min:
+                        print("Warning: Preferences max <= min; setting default range 0-1")
+                        self.pref_min, self.pref_max = 0.0, 1.0  # Fallback range
                 
                 # Convert patches to torch tensor and adjust dimensions if needed
                 self.patches = torch.from_numpy(self.patches).to(dtype=self.dtype)
@@ -58,6 +66,14 @@ class TerrainDataset(Dataset):
                 self.is_labeled = True
                 print("Labeled data mode activated (dataset object detected)")
                 self.length = len(self.patches)
+                # Precompute min/max for preferences if available
+                if self.preferences is not None:
+                    self.pref_min = self.preferences.min()
+                    self.pref_max = self.preferences.max()
+                    print(f"Global preferences range: {self.pref_min} to {self.pref_max}")
+                    if self.pref_max <= self.pref_min:
+                        raise ValueError("Preferences max <= min; cannot scale data meaningfully.")
+                    
             elif isinstance(labeled_dataset, (list, tuple)) and all(isinstance(sample, dict) for sample in labeled_dataset):
                 print("Labeled data mode activated (list of dicts detected)")
                 self.patches = [sample['patch'] for sample in labeled_dataset]
@@ -66,6 +82,13 @@ class TerrainDataset(Dataset):
                 self.preferences = [sample['preference'] for sample in labeled_dataset]
                 self.is_labeled = True
                 self.length = len(self.patches)
+                # Convert preferences to tensor and precompute min/max
+                self.preferences = torch.tensor(self.preferences, dtype=self.dtype)
+                self.pref_min = self.preferences.min()
+                self.pref_max = self.preferences.max()
+                print(f"Global preferences range: {self.pref_min} to {self.pref_max}")
+                if self.pref_max <= self.pref_min:
+                    raise ValueError("Preferences max <= min; cannot scale data meaningfully.")
             else:
                 raise ValueError(f"Unsupported labeled_dataset type or structure: {type(labeled_dataset)}")
         else:
@@ -145,6 +168,10 @@ class TerrainDataset(Dataset):
             self.psd_features = np.array(all_psd_features)
             self.imu_min = np.min(self.psd_features, axis=0)
             self.imu_max = np.max(self.psd_features, axis=0)
+    
+    def get_scaled_preferences(self, preferences):
+        """Helper method to scale preferences using precomputed min/max."""
+        return ((preferences - self.pref_min) / (self.pref_max - self.pref_min)) * 255.0
 
     def remove_gravity(self, linear_acceleration, orientation):
         if orientation is None or not self.incl_orientation:
