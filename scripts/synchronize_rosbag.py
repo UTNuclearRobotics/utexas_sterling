@@ -155,7 +155,7 @@ class SynchronizeRosbag:
             raise FileNotFoundError(f"Path does not exist: bag_path:={self.BAG_PATH}")
 
         # Validate the path is a rosbag by checking for metadata.yaml and .db3 file
-        yaml_files = [file for file in os.listdir(self.BAG_PATH) if file.endswith(".yaml")]
+        yaml_files = [file for file in os.listdir(self.BAG_PATH) if file.endswith("metadata.yaml")]
         db3_files = [file for file in os.listdir(self.BAG_PATH) if file.endswith(".db3")]
         if len(yaml_files) != 1 or len(db3_files) != 1:
             raise FileNotFoundError(

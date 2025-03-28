@@ -6,14 +6,16 @@ from scipy.signal import periodogram, butter, filtfilt
 from scipy.spatial.transform import Rotation
 import cv2
 import os
+import tempfile
 
 IMU_TOPIC_RATE = 20
 
 class TerrainDataset(Dataset):
-    def __init__(self, synced_h5_path=None, vicreg_h5_path=None, labeled_dataset=None, transform=None, dtype=torch.float32, incl_orientation=False):
+    def __init__(self, synced_h5_path=None, vicreg_h5_path=None, labeled_dataset=None, transform=None, dtype=torch.float32, incl_orientation=False, train=False):
         self.dtype = dtype
         self.transform = transform
         self.incl_orientation = incl_orientation
+        self.train = train
 
         if labeled_dataset is not None:
             if isinstance(labeled_dataset, str):  # Handle HDF5 file path
@@ -92,8 +94,9 @@ class TerrainDataset(Dataset):
             else:
                 raise ValueError(f"Unsupported labeled_dataset type or structure: {type(labeled_dataset)}")
         else:
+            print("Unlabeled data mode activated")
             if synced_h5_path is None or vicreg_h5_path is None:
-                raise ValueError("Must provide synced_h5_path and vicreg_h5_path for unlabeled mode")
+                raise ValueError("Must provide synced_h5_path and vicreg_h5_path")
             if not os.path.exists(synced_h5_path) or not os.path.exists(vicreg_h5_path):
                 raise FileNotFoundError(f"Files not found: {synced_h5_path}, {vicreg_h5_path}")
 
@@ -102,15 +105,109 @@ class TerrainDataset(Dataset):
             self.is_labeled = False
 
             with h5py.File(synced_h5_path, 'r') as synced_f:
-                if not all(key in synced_f for key in ['image', 'imu', 'odom']):
-                    raise ValueError("Synced .h5 file missing required groups: 'image', 'imu', 'odom'")
-                self.imu_length = len(synced_f['imu'])
+                imu_group = synced_f['imu']
+                self.imu_length = len(imu_group)
+                print("Loading IMU data...")
+                imu_data = np.array([
+                    np.concatenate([
+                        imu_group[str(i)]['angular_velocity'][:],
+                        imu_group[str(i)]['linear_acceleration'][:],
+                        imu_group[str(i)]['orientation'][:] if self.incl_orientation else np.zeros(4)
+                    ])
+                    for i in range(self.imu_length)
+                ])
 
             with h5py.File(vicreg_h5_path, 'r') as vicreg_f:
                 self.vicreg_length = len(vicreg_f)
 
+            if self.train:
+                print("Precomputing patch pairs to disk cache...")
+                # Create temporary files for memory-mapped arrays
+                self.patch1_file = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
+                self.patch2_file = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
+                
+                # Initialize memory-mapped arrays
+                self.patch1_data = np.memmap(
+                    self.patch1_file.name, dtype=np.float32, mode='w+', 
+                    shape=(self.vicreg_length, 128, 128, 3)
+                )
+                self.patch2_data = np.memmap(
+                    self.patch2_file.name, dtype=np.float32, mode='w+', 
+                    shape=(self.vicreg_length, 128, 128, 3)
+                )
+                
+                # Populate memory-mapped arrays
+                with h5py.File(vicreg_h5_path, 'r') as vicreg_f:
+                    for i in range(self.vicreg_length):
+                        timestep_group = vicreg_f[f'timestep_{i}']
+                        num_patches = len(timestep_group)
+                        if num_patches > 1:
+                            patch1_idx = i % (num_patches // 2)
+                            patch2_idx = num_patches // 2 + (i % (num_patches - num_patches // 2))
+                            self.patch1_data[i] = timestep_group[f'patch_{patch1_idx}'][:]
+                            self.patch2_data[i] = timestep_group[f'patch_{patch2_idx}'][:]
+                        else:
+                            self.patch1_data[i] = np.zeros((128, 128, 3), dtype=np.float32)
+                            self.patch2_data[i] = np.zeros((128, 128, 3), dtype=np.float32)
+                
+                # Flush to disk
+                self.patch1_data.flush()
+                self.patch2_data.flush()
+                print(f"Patch pairs cached to disk. Shape: {(self.vicreg_length, 128, 128, 3)}")
+            else:
+                self.patch1_data = None
+                self.patch2_data = None
+                self.patch1_file = None
+                self.patch2_file = None
+
+            samples_per_window = IMU_TOPIC_RATE * 2
+            self.num_timesteps = self.vicreg_length // 5
+            all_psd_features = []
+            for timestep in range(self.num_timesteps):
+                start_idx = timestep
+                end_idx = min(start_idx + samples_per_window, self.imu_length)
+                imu_window = imu_data[start_idx:end_idx]
+                if len(imu_window) < samples_per_window:
+                    imu_window = np.pad(imu_window, ((0, samples_per_window - len(imu_window)), (0, 0)), 'constant')
+                ang_vels = imu_window[:, :3]
+                lin_accs = imu_window[:, 3:6]
+                if self.incl_orientation:
+                    orientations = imu_window[:, 6:]
+                    lin_accs = np.array([self.remove_gravity(lin_accs[j], orientations[j]) for j in range(len(lin_accs))])
+                else:
+                    lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), 1, arr=lin_accs)
+                imu_subset = np.hstack([ang_vels, lin_accs])[:, [0, 1, 2, 3, 4, 5]]
+                if not self.incl_orientation:
+                    for j in range(3, 6):
+                        imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
+                psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
+                std = np.std(imu_subset, axis=0)
+                features = np.concatenate([std, psd])
+                all_psd_features.append(features)
+
+            psd_features = torch.from_numpy(np.array(all_psd_features)).to(dtype=self.dtype)
+            self.imu_min = torch.min(psd_features, dim=0)[0]
+            self.imu_max = torch.max(psd_features, dim=0)[0]
+            self.psd_features = self.normalize_imu(psd_features).contiguous()
             self.length = self.vicreg_length
-            self._compute_imu_normalization_params()
+            print(f"Dataset initialized with {self.length} samples")
+
+    def __del__(self):
+        """Clean up memory-mapped files when dataset is destroyed."""
+        if self.train and hasattr(self, 'patch1_file') and self.patch1_file is not None:
+            try:
+                self.patch1_data.flush()
+                self.patch1_file.close()
+                os.unlink(self.patch1_file.name)
+            except Exception as e:
+                print(f"Warning: Failed to clean up patch1 cache: {e}")
+        if self.train and hasattr(self, 'patch2_file') and self.patch2_file is not None:
+            try:
+                self.patch2_data.flush()
+                self.patch2_file.close()
+                os.unlink(self.patch2_file.name)
+            except Exception as e:
+                print(f"Warning: Failed to clean up patch2 cache: {e}")
 
     def _compute_imu_normalization_params(self):
         samples_per_window = IMU_TOPIC_RATE * 2
@@ -188,9 +285,10 @@ class TerrainDataset(Dataset):
         return filtfilt(b, a, data)
 
     def normalize_imu(self, imu_sample):
-        if np.allclose(self.imu_max - self.imu_min, 0, atol=1e-8):
-            return imu_sample
-        return (imu_sample - self.imu_min) / (self.imu_max - self.imu_min + 1e-7)
+        """Normalize IMU features using precomputed min/max."""
+        if torch.allclose(self.imu_max - self.imu_min, torch.tensor(0.0, dtype=self.dtype), atol=1e-8):
+            return imu_sample  # Avoid division by zero
+        return (imu_sample - self.imu_min) / (self.imu_max - self.imu_min + 1e-7)  # Add epsilon for stability
 
     def __len__(self):
         return self.length
@@ -209,64 +307,23 @@ class TerrainDataset(Dataset):
 
             return patch, inertial, terrain_label, preference
         else:
-            # [Unchanged, keeping original unlabeled mode logic]
-            with h5py.File(self.vicreg_h5_path, 'r') as vicreg_f:
-                timestep_group = vicreg_f[f'timestep_{idx}']
-                patch_batch = [timestep_group[f'patch_{i}'][:] for i in range(len(timestep_group))]
-                patch_array = np.array(patch_batch)
-
-            sample = torch.tensor(patch_array, dtype=self.dtype).permute(0, 3, 1, 2)
-            num_patches = sample.shape[0]
-
-            patch1_idx = torch.randint(0, num_patches // 2, (1,)).item() if num_patches > 0 else 0
-            patch2_idx = torch.randint(num_patches // 2, num_patches, (1,)).item() if num_patches > 0 else 0
-            patch1 = sample[patch1_idx] if num_patches > 0 else torch.zeros((3, 128, 128), dtype=self.dtype)
-            patch2 = sample[patch2_idx] if num_patches > 0 else torch.zeros((3, 128, 128), dtype=self.dtype)
-
-            if self.transform and num_patches > 0:
-                patch1 = self.transform(patch1)
-                patch2 = self.transform(patch2)
-
-            imu_timestep_start = idx // 5
-            start_idx = imu_timestep_start
-            end_idx = min(start_idx + IMU_TOPIC_RATE * 2, self.imu_length)
-
-            with h5py.File(self.synced_h5_path, 'r') as synced_f:
-                imu_group = synced_f['imu']
-                imu_segment = np.array([
-                    np.concatenate([
-                        imu_group[str(i)]['angular_velocity'][:],
-                        imu_group[str(i)]['linear_acceleration'][:],
-                        imu_group[str(i)]['orientation'][:] if self.incl_orientation else np.zeros(4)
-                    ])
-                    for i in range(start_idx, end_idx)
-                ])
-
-            if imu_segment.shape[0] < IMU_TOPIC_RATE * 2:
-                imu_segment = np.pad(imu_segment, ((0, IMU_TOPIC_RATE * 2 - imu_segment.shape[0]), (0, 0)), mode='constant')
-
-            ang_vels = imu_segment[:, :3]
-            lin_accs = imu_segment[:, 3:6]
-            if self.incl_orientation:
-                orientations = imu_segment[:, 6:]
-                lin_accs = np.array([self.remove_gravity(lin_accs[i], orientations[i]) 
-                                   for i in range(len(lin_accs))])
+            if self.train and self.patch1_data is not None:
+                patch1 = torch.from_numpy(self.patch1_data[idx]).permute(2, 0, 1).to(dtype=self.dtype)
+                patch2 = torch.from_numpy(self.patch2_data[idx]).permute(2, 0, 1).to(dtype=self.dtype)
             else:
-                lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
-
-            imu_subset = np.hstack([ang_vels, lin_accs])[:, [0, 1, 2, 3, 4, 5]]
-            if not self.incl_orientation:
-                for j in range(3, 6):
-                    imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
-
-            psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
-            std = np.std(imu_subset, axis=0)
-            imu_features = np.concatenate([std, psd])
-            normalized_features = self.normalize_imu(imu_features)
-            imu_sample = torch.tensor(normalized_features, dtype=self.dtype).reshape(1, -1)
-
+                with h5py.File(self.vicreg_h5_path, 'r') as vicreg_f:
+                    timestep_group = vicreg_f[f'timestep_{idx}']
+                    num_patches = len(timestep_group)
+                    if num_patches > 1:
+                        patch1_idx = idx % (num_patches // 2)
+                        patch2_idx = num_patches // 2 + (idx % (num_patches - num_patches // 2))
+                        patch1 = torch.from_numpy(timestep_group[f'patch_{patch1_idx}'][:]).permute(2, 0, 1).to(self.dtype)
+                        patch2 = torch.from_numpy(timestep_group[f'patch_{patch2_idx}'][:]).permute(2, 0, 1).to(self.dtype)
+                    else:
+                        patch1 = torch.zeros((3, 128, 128), dtype=self.dtype)
+                        patch2 = torch.zeros((3, 128, 128), dtype=self.dtype)
+            imu_sample = self.psd_features[min(idx // 5, len(self.psd_features) - 1)]
             return patch1, patch2, imu_sample
-
 """ 
 def visualize_psd(dataset, idx):
     print(f"Visualizing PSD and patches for idx={idx}")

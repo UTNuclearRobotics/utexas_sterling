@@ -177,12 +177,13 @@ class CostNet(nn.Module):
         super(CostNet, self).__init__()
         self.latent_size = latent_size
         self.model = nn.Sequential(
-            nn.Linear(1, self.latent_size),  # Input: scalar uvis_pred
-            nn.ReLU(),
-            nn.Linear(self.latent_size, self.latent_size//2),
+            nn.Linear(1, self.latent_size//2),  # Input: scalar uvis_pred
             nn.ReLU(),
             nn.Linear(self.latent_size//2, 1),
-            nn.ReLU()
         )
+        self.output_scale = nn.Sigmoid()  # Outputs between 0 and 1
+
     def forward(self, x):
-        return self.model(x)
+        x = self.model(x)
+        x = self.output_scale(x) * 255.0  # Scale to 0-255
+        return x

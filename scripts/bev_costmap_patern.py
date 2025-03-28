@@ -56,8 +56,9 @@ class BEVCostmap:
 
         # Set the model to evaluation mode
         self.model.eval()
-
-        self.processed_imgs = {"bev": [], "cost": []}
+        
+        if self.save_path is not None:
+            self.processed_imgs = {"bev": [], "cost": []}
 
     def predict_preferences(self, cells):
         """Predict preferences for a batch of cells using the trained uvis model."""
@@ -127,8 +128,9 @@ class BEVCostmap:
         costmap_3ch = np.stack([costmap_resized] * 3, axis=-1).astype(np.uint8)  # (H, W, 3)
 
         # Append to self.processed_imgs
-        self.processed_imgs["bev"].append(bev_img)
-        self.processed_imgs["cost"].append(costmap_3ch)
+        if self.save_path is not None:
+            self.processed_imgs["bev"].append(bev_img)
+            self.processed_imgs["cost"].append(costmap_3ch)
 
         return costmap
 
@@ -232,7 +234,7 @@ if __name__ == "__main__":
     video_writer = None
     frame_size = None
 
-    for timestep in tqdm(range(2500, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = plot_BEV_full(cur_img, H, patch_size=(128,128))

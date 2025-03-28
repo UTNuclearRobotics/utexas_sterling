@@ -4,13 +4,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, Subset
-from utils import load_bag_pkl, load_bag_pt_model
+from utils import load_bag_pkl, load_bag_pt_model, load_bag_h5
 from vicreg import VICRegLoss
 from models import VisualEncoderModel, ProprioceptionModel
-from torchvision import transforms
 import torchvision.transforms.v2 as v2
 import os
 from torch.utils.data import random_split
+from tqdm import tqdm
+from torch.cuda.amp import GradScaler, autocast
+
 
 class SterlingRepresentation(nn.Module):
     def __init__(self, device, pretrained_weights_dir=None):
@@ -86,54 +88,57 @@ class SterlingRepresentation(nn.Module):
     def training_step(self, batch, batch_idx):
         patch1, patch2, inertial = batch
         zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
-
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)
         loss_vi = 0.5 * self.vicreg_loss(zv1, zi) + 0.5 * self.vicreg_loss(zv2, zi)
-
         loss = self.l1_coeff * loss_vpt_inv + (1.0 - self.l1_coeff) * loss_vi
         return loss
 
     def validation_step(self, batch, batch_idx):
         patch1, patch2, inertial = batch
         zv1, zv2, zi, _, _, _ = self.forward(patch1, patch2, inertial)
-
         loss_vpt_inv = self.vicreg_loss(zv1, zv2)
         loss_vi = 0.5 * self.vicreg_loss(zv1, zi) + 0.5 * self.vicreg_loss(zv2, zi)
-
         loss = self.l1_coeff * loss_vpt_inv + (1.0 - self.l1_coeff) * loss_vi
         return loss
-    
+
+def custom_collate(batch):
+    patch1s, patch2s, imus = zip(*batch)
+    patch1s = torch.stack(patch1s)
+    patch2s = torch.stack(patch2s)
+    imus = torch.stack(imus)
+    return patch1s, patch2s, imus
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
-    parser.add_argument("-bag", "-b", type=str, required=True, help="Bag directory with VICReg dataset pickle file inside.")
-    parser.add_argument("-batch_size", "-batch", type=int, default=256, help="Batch size for training")
-    parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
-    parser.add_argument("-val_split", type=float, default=0.2, help="Fraction of dataset to use for validation (0.0 to 1.0)")
+    parser.add_argument("-bag", "-b", type=str, required=True)
+    parser.add_argument("-batch_size", "-batch", type=int, default=1024)  # Updated default
+    parser.add_argument("-epochs", type=int, default=50)
+    parser.add_argument("-val_split", type=float, default=0.2)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Create dataset
-    patches_pkl = load_bag_pkl(args.bag, "vicreg")
-    IPT_pkl = load_bag_pkl(args.bag, "_synced")
+    vicreg_h5_path = load_bag_h5(args.bag, "vicreg")
+    synced_h5_path = load_bag_h5(args.bag, "synced")
 
-    # Define the augmentation pipeline
     augment_transform = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
         v2.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.01),
-        v2.ToTensor(),
-    ])
+    ]).to(device)  # Move to GPU
 
-    dataset = TerrainDataset(patches=patches_pkl, synced_data=IPT_pkl, transform=augment_transform)
-
-    # Split dataset into training and validation
+    dataset = TerrainDataset(synced_h5_path=synced_h5_path, vicreg_h5_path=vicreg_h5_path, train=True)
     val_size = int(args.val_split * len(dataset))
     train_size = len(dataset) - val_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    # Create dataloaders
-    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_dataloader = DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True, 
+        num_workers=4, pin_memory=True, collate_fn=custom_collate
+    )
+    val_dataloader = DataLoader(
+        val_dataset, batch_size=args.batch_size, shuffle=False, 
+        num_workers=4, pin_memory=True, collate_fn=custom_collate
+    )
 
     # Initialize model with pre-trained weights
     models_dir = os.path.join(args.bag, "models")
@@ -168,7 +173,7 @@ if __name__ == "__main__":
 
     # Training and validation loop
     best_val_loss = float('inf')
-    for epoch in range(args.epochs):
+    for epoch in tqdm(range(args.epochs), desc="Epochs"):
         # Training phase
         model.train()
         total_train_loss = 0

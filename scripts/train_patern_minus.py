@@ -7,9 +7,9 @@ from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, random_split
 from utils import load_bag_pkl, load_bag_pt_model
 from models import VisualEncoderModel, ProprioceptionModel, UtilityFuncVisual, UtilityFuncProprioceptive, CostNet
-import pickle
 import sys
 import h5py
+from tqdm import tqdm
 
 
 class PaternPreAdaptation(nn.Module):
@@ -54,9 +54,7 @@ class PaternPreAdaptation(nn.Module):
         self.cost_head.model[0].bias.data.fill_(1.0)  # First Linear layer
         nn.init.kaiming_normal_(self.cost_head.model[2].weight, mode='fan_in', nonlinearity='relu')
         self.cost_head.model[2].bias.data.fill_(1.0)  # Second Linear layer
-        nn.init.kaiming_normal_(self.cost_head.model[4].weight, mode='fan_in', nonlinearity='relu')
-        self.cost_head.model[4].bias.data.fill_(1.0)  # Third Linear layer
-
+        
         self.triplet_loss = nn.TripletMarginLoss(margin=1.0)
 
     def forward(self, patches, inertial=None):
@@ -75,24 +73,14 @@ class PaternPreAdaptation(nn.Module):
 
         # Use only uvis_pred for final cost
         final_cost = self.cost_head(uvis_pred)
-        
         return phi_vis, phi_pro, uvis_pred, upro_pred, final_cost
 
     def training_step(self, batch, batch_idx):
         patches, inertial, terrain_labels, preferences = batch
         preferences = preferences.to(self.device).float()
-        
-        # Normalize preferences to 0-255 range
-        # Use dataset's precomputed scaling
         scaled_preferences = self.train_loader.dataset.dataset.get_scaled_preferences(preferences)
 
         phi_vis, phi_pro, uvis_pred, upro_pred, final_cost = self.forward(patches, inertial)
-
-        # Scale predictions to 0-255 based on their own range
-        if uvis_pred.max() > uvis_pred.min():
-            uvis_pred = ((uvis_pred - uvis_pred.min()) / (uvis_pred.max() - uvis_pred.min())) * 255.0
-        else:
-            uvis_pred = uvis_pred * 0.0
         
         terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         batch_size = len(terrain_labels)
@@ -120,7 +108,7 @@ class PaternPreAdaptation(nn.Module):
         cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
 
         #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
-        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
+        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 2.0 * cost_loss
 
         #print(f"Train Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, "
         #      f"ranking_loss={ranking_loss.item():.4f}, modality_mse_loss={modality_mse_loss.item():.4f}, "
@@ -133,18 +121,9 @@ class PaternPreAdaptation(nn.Module):
     def validation_step(self, batch, batch_idx):
         patches, inertial, terrain_labels, preferences = batch
         preferences = preferences.to(self.device).float()
-        
-        # Normalize preferences to 0-255 range
-        # Use dataset's precomputed scaling
         scaled_preferences = self.val_loader.dataset.dataset.get_scaled_preferences(preferences)
 
         phi_vis, phi_pro, uvis_pred, upro_pred, final_cost = self.forward(patches, inertial)
-
-        # Scale predictions to 0-255 based on their own range
-        if uvis_pred.max() > uvis_pred.min():
-            uvis_pred = ((uvis_pred - uvis_pred.min()) / (uvis_pred.max() - uvis_pred.min())) * 255.0
-        else:
-            uvis_pred = uvis_pred * 0.0
 
         terrain_labels_tensor = torch.tensor([hash(label) for label in terrain_labels], dtype=torch.long, device=self.device)
         batch_size = len(terrain_labels)
@@ -183,7 +162,9 @@ class PaternPreAdaptation(nn.Module):
         torch.save(self.cost_head.state_dict(), os.path.join(save_dir, "cost_head.pt"))
         print(f"Saved PATERN− models to {save_dir}")
 
-def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, device):
+def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, device, save_dir):
+    best_val_loss = float('inf')  # Initialize best validation loss to infinity
+    
     for epoch in range(epochs):
         # Training phase
         model.train()
@@ -205,6 +186,12 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
                 val_loss = model.validation_step(batch, batch_idx)
                 total_val_loss += val_loss.item()
         avg_val_loss = total_val_loss / len(val_loader)
+
+        # Check if current validation loss is better than the best so far
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss  # Update best validation loss
+            model.save_models(save_dir)   # Save models only if validation loss improves
+            print(f"New best validation loss: {best_val_loss:.4f}, models saved.")
 
         scheduler.step()
         print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
@@ -269,8 +256,13 @@ if __name__ == "__main__":
         weights_loaded = all(os.path.exists(os.path.join(models_dir, file_name)) for file_name in weight_files)
 
     # Set learning rate based on whether weights were loaded
-    lr = 1e-4 if weights_loaded else 1e-3  # Higher LR for training from scratch
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5, amsgrad=True)
+    optimizer = torch.optim.AdamW([
+        {"params": model.visual_encoder.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
+        {"params": model.proprioceptive_encoder.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
+        {"params": model.uvis.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
+        {"params": model.upro.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
+        {"params": model.cost_head.parameters(), "lr": 1e-3 if weights_loaded else 1e-2},  # Higher LR
+    ], weight_decay=1e-5, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-6)
 
     # Optionally freeze encoders for initial epochs (only if fine-tuning)
@@ -282,14 +274,12 @@ if __name__ == "__main__":
             param.requires_grad = False
 
     print("Starting training")
-    train_model(model, train_loader, val_loader, optimizer, scheduler, args.epochs, device)
+    train_model(model, train_loader, val_loader, optimizer, scheduler, args.epochs, device, models_dir)
 
-    # Unfreeze encoders if they were frozen
+    # If you have the unfreezing logic, update it similarly
     if freeze_epochs > 0 and args.epochs > freeze_epochs:
         for param in model.visual_encoder.parameters():
             param.requires_grad = True
         for param in model.proprioceptive_encoder.parameters():
             param.requires_grad = True
-        train_model(model, train_loader, val_loader, optimizer, scheduler, args.epochs - freeze_epochs, device)
-
-    model.save_models(save_dir)
+        train_model(model, train_loader, val_loader, optimizer, scheduler, args.epochs - freeze_epochs, device, models_dir)
