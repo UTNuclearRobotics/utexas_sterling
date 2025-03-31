@@ -33,11 +33,11 @@ class BEVCostmap:
 
         # Define the expected .pt files for each submodule
         weight_files = {
-            "visual_encoder": "fvis.pt",
+            "visual_encoder": "fvis_adapted.pt",
             "proprioceptive_encoder": "fpro.pt",
-            "uvis": "uvis.pt",
+            "uvis": "uvis_adapted.pt",
             "upro": "upro.pt",
-            "cost_head": "cost_head.pt"
+            "cost_head": "cost_head_adapted.pt"
         }
 
         # Load weights for each submodule
@@ -209,9 +209,11 @@ class BEVCostmap:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get BEV cost visual using trained preference predictor.")
-    parser.add_argument("-b", type=str, required=True, help="Bag directory with synchronized HDF5 file inside.")
+    parser.add_argument("-m","-model_bag", type=str, required=True, help="Bag directory with model files inside.")
+    parser.add_argument("-b","-synced_bag", type=str, required=True, help="Bag directory with synchronized HDF5 file inside.")
     args = parser.parse_args()
 
+    model_path = args.m
     bag_path = args.b
     if not os.path.exists(bag_path):
         raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
@@ -226,7 +228,7 @@ if __name__ == "__main__":
     robot_data = RobotDataAtTimestep(h5_file_path)  
 
     # Search for pre-trained weights
-    models_dir = os.path.join(args.b, "models")
+    models_dir = os.path.join(args.m, "models")
     bev_costmap = BEVCostmap(models_dir)
     max_timesteps = robot_data.getNTimesteps()
     start_timestep = min(1400, max_timesteps)
@@ -234,7 +236,7 @@ if __name__ == "__main__":
     video_writer = None
     frame_size = None
 
-    for timestep in tqdm(range(0, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
+    for timestep in tqdm(range(1400, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
         cur_img = robot_data.getImageAtTimestep(timestep)
         cur_rt = robot_data.getOdomAtTimestep(timestep)
         bev_img = plot_BEV_full(cur_img, H, patch_size=(128,128))
