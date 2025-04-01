@@ -268,7 +268,7 @@ class TerrainDataset(Dataset):
     
     def get_scaled_preferences(self, preferences):
         """Helper method to scale preferences using precomputed min/max."""
-        return ((preferences - self.pref_min) / (self.pref_max - self.pref_min)) * 255.0
+        return ((preferences - self.pref_min) / (self.pref_max - self.pref_min)) * 100.0
 
     def remove_gravity(self, linear_acceleration, orientation):
         if orientation is None or not self.incl_orientation:

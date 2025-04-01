@@ -33,11 +33,11 @@ class BEVCostmap:
 
         # Define the expected .pt files for each submodule
         weight_files = {
-            "visual_encoder": "fvis_adapted.pt",
+            "visual_encoder": "fvis.pt",
             "proprioceptive_encoder": "fpro.pt",
-            "uvis": "uvis_adapted.pt",
+            "uvis": "uvis.pt",
             "upro": "upro.pt",
-            "cost_head": "cost_head_adapted.pt"
+            "cost_head": "cost_head.pt"
         }
 
         # Load weights for each submodule
@@ -117,11 +117,14 @@ class BEVCostmap:
                     valid_cells = valid_cells.squeeze(2)  # [B, H, W]
                     valid_cells = np.stack([valid_cells] * 3, axis=1)  # [B, 3, H, W]
                 uvis_cost, final_cost = self.predict_preferences(valid_cells)
+                final_cost = (final_cost * (255.0 / 100.0)).astype(np.uint8)
         else:
             uvis_cost, final_cost = np.empty((0,), dtype=np.uint8)
 
         costmap[black_cells] = 255
         costmap[~black_cells] = final_cost
+
+        inv_costmap = 255 - costmap
 
         # Prepare costmap for video: resize to match bev_img dimensions and convert to 3 channels
         costmap_resized = cv2.resize(costmap, (effective_width, effective_height), interpolation=cv2.INTER_NEAREST)
@@ -132,7 +135,7 @@ class BEVCostmap:
             self.processed_imgs["bev"].append(bev_img)
             self.processed_imgs["cost"].append(costmap_3ch)
 
-        return costmap
+        return inv_costmap
 
     @staticmethod
     def visualize_costmap(costmap, cell_size):

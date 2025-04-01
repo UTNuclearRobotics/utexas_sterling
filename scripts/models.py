@@ -185,5 +185,5 @@ class CostNet(nn.Module):
 
     def forward(self, x):
         x = self.model(x)
-        x = self.output_scale(x) * 255.0  # Scale to 0-255
+        x = self.output_scale(x) * 100.0  # Scale to 0-100
         return x

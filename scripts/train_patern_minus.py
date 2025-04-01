@@ -51,9 +51,9 @@ class PaternPreAdaptation(nn.Module):
 
         # Initialize weights and biases for CostNet layers
         nn.init.kaiming_normal_(self.cost_head.model[0].weight, mode='fan_in', nonlinearity='relu')
-        self.cost_head.model[0].bias.data.fill_(1.0)  # First Linear layer
+        nn.init.constant_(self.cost_head.model[0].bias, 0.0) # First Linear layer
         nn.init.kaiming_normal_(self.cost_head.model[2].weight, mode='fan_in', nonlinearity='relu')
-        self.cost_head.model[2].bias.data.fill_(1.0)  # Second Linear layer
+        nn.init.constant_(self.cost_head.model[2].bias, 0.0) # Second Linear layer
         
         self.triplet_loss = nn.TripletMarginLoss(margin=1.0)
 
@@ -102,7 +102,7 @@ class PaternPreAdaptation(nn.Module):
         pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)  # Use scaled preferences
         pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
         ranking_mask = pref_diff > 0
-        ranking_loss = F.relu(1.0 - (pred_diff / 255.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
+        ranking_loss = F.relu(1.0 - (pred_diff / 100.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         modality_mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
         cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
@@ -144,7 +144,7 @@ class PaternPreAdaptation(nn.Module):
         pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)
         pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
         ranking_mask = pref_diff > 0
-        ranking_loss = F.relu(1.0 - (pred_diff / 255.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
+        ranking_loss = F.relu(1.0 - (pred_diff / 100.0)[ranking_mask]).mean() if ranking_mask.any() else torch.tensor(0.0, device=self.device)
 
         modality_mse_loss = F.mse_loss(uvis_pred.detach(), upro_pred)
         cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
