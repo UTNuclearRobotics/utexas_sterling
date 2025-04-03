@@ -33,11 +33,11 @@ class BEVCostmap:
 
         # Define the expected .pt files for each submodule
         weight_files = {
-            "visual_encoder": "fvis.pt",
+            "visual_encoder": "fvis_adapted.pt",
             "proprioceptive_encoder": "fpro.pt",
-            "uvis": "uvis.pt",
+            "uvis": "uvis_adapted.pt",
             "upro": "upro.pt",
-            "cost_head": "cost_head.pt"
+            "cost_head": "cost_head_adapted.pt"
         }
 
         # Load weights for each submodule
