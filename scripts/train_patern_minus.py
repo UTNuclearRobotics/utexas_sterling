@@ -48,12 +48,6 @@ class PaternPreAdaptation(nn.Module):
                 print(f"Warning: Not all required weight files found in {pretrained_weights_path}. Initializing from scratch.")
         else:
             print(f"No pre-trained weights directory found at {pretrained_weights_path}. Initializing from scratch.")
-
-        # Initialize weights and biases for CostNet layers
-        nn.init.kaiming_normal_(self.cost_head.model[0].weight, mode='fan_in', nonlinearity='relu')
-        nn.init.constant_(self.cost_head.model[0].bias, 0.0) # First Linear layer
-        nn.init.kaiming_normal_(self.cost_head.model[2].weight, mode='fan_in', nonlinearity='relu')
-        nn.init.constant_(self.cost_head.model[2].bias, 0.0) # Second Linear layer
         
         self.triplet_loss = nn.TripletMarginLoss(margin=1.0)
 

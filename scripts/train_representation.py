@@ -2,7 +2,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from terrain_dataset import TerrainDataset
+from terrain_dataset import TerrainDataset, worker_init_fn
 from torch.utils.data import DataLoader, Subset
 from utils import load_bag_pkl, load_bag_pt_model, load_bag_h5
 from vicreg import VICRegLoss
@@ -133,11 +133,13 @@ if __name__ == "__main__":
 
     train_dataloader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, 
-        num_workers=4, pin_memory=True, collate_fn=custom_collate
+        num_workers=4, pin_memory=False, collate_fn=custom_collate, 
+        worker_init_fn=worker_init_fn  # Use the standalone function
     )
     val_dataloader = DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False, 
-        num_workers=4, pin_memory=True, collate_fn=custom_collate
+        num_workers=4, pin_memory=False, collate_fn=custom_collate, 
+        worker_init_fn=worker_init_fn  # Use the standalone function
     )
 
     # Initialize model with pre-trained weights
@@ -164,7 +166,7 @@ if __name__ == "__main__":
     )
 
     # Optionally freeze encoders for initial epochs
-    freeze_epochs = 5 if weights_loaded else 0
+    freeze_epochs = 10 if weights_loaded else 0
     if freeze_epochs > 0:
         for param in model.visual_encoder.parameters():
             param.requires_grad = False
@@ -212,3 +214,5 @@ if __name__ == "__main__":
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), save_path)
             print(f"Saved model with validation loss: {best_val_loss:.4f}")
+
+    dataset.__del__()

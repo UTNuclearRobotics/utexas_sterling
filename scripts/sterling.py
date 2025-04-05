@@ -101,6 +101,10 @@ def ComputeVicRegData(
             if cur_patch.shape != (128, 128):
                 cur_patch = cv2.resize(cur_patch, (128, 128))
 
+            image_point = np.array([64, 64, 1])  # Center of the patch in pixels
+            ground_point_homogeneous = np.linalg.inv(H) @ image_point
+            ground_point = ground_point_homogeneous[:2] / ground_point_homogeneous[2]  # Normalize to (X, Y)
+
             # Visualize the patch on the first timestep's image
             if visualize and timestep == start:
                 annotated_image = draw_points(annotated_image, H_shifted, patch_size, color=(0, 255, 0), thickness=2)

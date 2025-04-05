@@ -7,52 +7,62 @@ from scipy.spatial.transform import Rotation
 import cv2
 import os
 import tempfile
+from tqdm import tqdm
+from multiprocessing import Pool
+import gc
 
 IMU_TOPIC_RATE = 20
 
 class TerrainDataset(Dataset):
-    def __init__(self, synced_h5_path=None, vicreg_h5_path=None, labeled_dataset=None, transform=None, dtype=torch.float32, incl_orientation=False, train=False):
+    def __init__(self, synced_h5_path=None, vicreg_h5_path=None, labeled_dataset=None, transform=None, dtype=torch.float32, incl_orientation=False, train=False, debug=False):
         self.dtype = dtype
         self.transform = transform
         self.incl_orientation = incl_orientation
         self.train = train
+        self.debug = debug
+        self.rng = np.random.default_rng()  # Cached RNG for faster random choices
+
+        # Map PyTorch dtype to NumPy dtype
+        dtype_map = {
+            torch.float32: np.float32,
+            torch.float64: np.float64,
+            torch.int32: np.int32,
+            torch.int64: np.int64,
+            # Add more mappings if needed
+        }
+        self.np_dtype = dtype_map.get(self.dtype, np.float32)  # Default to np.float32 if dtype not found
 
         if labeled_dataset is not None:
-            if isinstance(labeled_dataset, str):  # Handle HDF5 file path
+            # Labeled mode unchanged from new implementation
+            if isinstance(labeled_dataset, str):
                 print("Labeled data mode activated (HDF5 file path detected)")
                 self.is_labeled = True
                 self.hdf5_path = labeled_dataset
                 
-                # Load the full dataset into memory
                 with h5py.File(self.hdf5_path, 'r') as h5f:
                     if not all(key in h5f for key in ['patches', 'terrain_labels']):
                         raise ValueError("HDF5 file missing required datasets: 'patches' or 'terrain_labels'")
                     
-                    # Load all data into memory
-                    self.patches = np.array(h5f['patches'])  # Shape: (N, H, W, C) or similar
+                    self.patches = np.array(h5f['patches'])
                     self.terrain_labels = [label.decode('utf-8') for label in h5f['terrain_labels']]
                     self.inertial = np.array(h5f['inertial']) if 'inertial' in h5f else None
                     self.preferences = np.array(h5f['preferences'], dtype=np.float32) if 'preferences' in h5f else np.zeros(len(self.patches), dtype=np.float32)
                     self.length = len(self.patches)
 
-                    # Always compute pref_min and pref_max
                     self.pref_min = self.preferences.min()
                     self.pref_max = self.preferences.max()
                     print(f"Global preferences range: {self.pref_min} to {self.pref_max}")
                     if self.pref_max <= self.pref_min:
                         print("Warning: Preferences max <= min; setting default range 0-1")
-                        self.pref_min, self.pref_max = 0.0, 1.0  # Fallback range
+                        self.pref_min, self.pref_max = 0.0, 1.0
                 
-                # Convert patches to torch tensor and adjust dimensions if needed
                 self.patches = torch.from_numpy(self.patches).to(dtype=self.dtype)
                 if self.patches.shape[-3:] != (3, 128, 128):
-                    self.patches = self.patches.permute(0, 3, 1, 2)  # Adjust to (N, C, H, W)
+                    self.patches = self.patches.permute(0, 3, 1, 2)
                 
-                # Convert inertial to tensor if it exists
                 if self.inertial is not None:
                     self.inertial = torch.from_numpy(self.inertial).to(dtype=self.dtype)
                 
-                # Convert preferences to tensor
                 self.preferences = torch.from_numpy(self.preferences).to(dtype=self.dtype)
                 
                 print(f"Loaded full dataset into memory: {self.length} samples")
@@ -66,9 +76,7 @@ class TerrainDataset(Dataset):
                 if self.patches is None or self.terrain_labels is None:
                     raise ValueError("Loaded dataset object missing required 'patches' or 'terrain_labels'")
                 self.is_labeled = True
-                print("Labeled data mode activated (dataset object detected)")
                 self.length = len(self.patches)
-                # Precompute min/max for preferences if available
                 if self.preferences is not None:
                     self.pref_min = self.preferences.min()
                     self.pref_max = self.preferences.max()
@@ -84,7 +92,6 @@ class TerrainDataset(Dataset):
                 self.preferences = [sample['preference'] for sample in labeled_dataset]
                 self.is_labeled = True
                 self.length = len(self.patches)
-                # Convert preferences to tensor and precompute min/max
                 self.preferences = torch.tensor(self.preferences, dtype=self.dtype)
                 self.pref_min = self.preferences.min()
                 self.pref_max = self.preferences.max()
@@ -104,170 +111,369 @@ class TerrainDataset(Dataset):
             self.vicreg_h5_path = vicreg_h5_path
             self.is_labeled = False
 
+            # [Previous HDF5 loading and metadata setup unchanged...]
             with h5py.File(synced_h5_path, 'r') as synced_f:
-                imu_group = synced_f['imu']
-                self.imu_length = len(imu_group)
-                print("Loading IMU data...")
-                imu_data = np.array([
-                    np.concatenate([
-                        imu_group[str(i)]['angular_velocity'][:],
-                        imu_group[str(i)]['linear_acceleration'][:],
-                        imu_group[str(i)]['orientation'][:] if self.incl_orientation else np.zeros(4)
-                    ])
-                    for i in range(self.imu_length)
-                ])
+                self.imu_length = len(synced_f['imu'])
+                self.odom_length = len(synced_f['odom']) if 'odom' in synced_f else self.imu_length
+                if 'odom' in synced_f:
+                    odom_group = synced_f['odom']
+                    self.odom_positions = np.array([odom_group[str(i)]['pose'][:2] for i in range(self.odom_length)])
+                else:
+                    self.odom_positions = np.zeros((self.odom_length, 2))
 
             with h5py.File(vicreg_h5_path, 'r') as vicreg_f:
-                self.vicreg_length = len(vicreg_f)
+                self.num_timesteps = len([k for k in vicreg_f.keys() if k.startswith('timestep_')])
+                self.global_positions = np.array([vicreg_f[f'timestep_{i}']['global_position'][:] 
+                                                for i in range(self.num_timesteps)])
+                self.patch_counts = []
+                self.timestep_offsets = [0]
+                self.shift_keys = []
+                self.patches_per_shift = []
+                self.shift_idx_map = []
+                total_patches = 0
+                for t in range(self.num_timesteps):
+                    timestep_group = vicreg_f[f'timestep_{t}']
+                    shift_keys_t = [k for k in timestep_group.keys() if k.startswith('shift_')]
+                    self.shift_keys.append(shift_keys_t)
+                    patches_per_shift_t = [len([pk for pk in timestep_group[sk].keys() if pk.startswith('patch_')])
+                                        for sk in shift_keys_t]
+                    self.patches_per_shift.append(patches_per_shift_t)
+                    num_patches = sum(patches_per_shift_t)
+                    self.patch_counts.append(num_patches)
+                    total_patches += num_patches
+                    self.timestep_offsets.append(total_patches)
+                    shift_idx_map_t = []
+                    for i, count in enumerate(patches_per_shift_t):
+                        shift_idx_map_t.extend([i] * count)
+                    self.shift_idx_map.append(shift_idx_map_t)
+
+                self.idx_to_timestep = []
+                for t in range(self.num_timesteps):
+                    self.idx_to_timestep.extend([t] * self.patch_counts[t])
+
+            self.imu_min = None
+            self.imu_max = None
+            self.precompute_features()
+
+            self.zero_patch = torch.zeros((3, 128, 128), dtype=self.dtype)
+            self.patch1_file = None
+            self.patch2_file = None
+            self.patch1_path = None
+            self.patch2_path = None
+            self.vicreg_h5 = None
+
+            # Common parameters for both modes
+            pairs_per_shift = 5  # Number of pairs to precompute per shift for variability
 
             if self.train:
-                print("Precomputing patch pairs to disk cache...")
-                # Create temporary files for memory-mapped arrays
+                print("Precomputing multiple patch pairs per shift for training mode...")
+                self.vicreg_h5 = h5py.File(self.vicreg_h5_path, 'r')
+                
+                shifts_per_timestep = 5  # Fixed number of shifts for training
+                total_shifts = self.num_timesteps * shifts_per_timestep
+                self.length = total_shifts  # One index per shift, pairs selected dynamically
+                
+                # Temporary files
                 self.patch1_file = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
                 self.patch2_file = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
+                self.patch1_path = self.patch1_file.name
+                self.patch2_path = self.patch2_file.name
                 
-                # Initialize memory-mapped arrays
-                self.patch1_data = np.memmap(
-                    self.patch1_file.name, dtype=np.float32, mode='w+', 
-                    shape=(self.vicreg_length, 128, 128, 3)
-                )
-                self.patch2_data = np.memmap(
-                    self.patch2_file.name, dtype=np.float32, mode='w+', 
-                    shape=(self.vicreg_length, 128, 128, 3)
-                )
+                # Memory-mapped arrays for all pairs
+                total_pairs = total_shifts * pairs_per_shift
+                self.patch1_data = np.memmap(self.patch1_path, dtype=self.np_dtype, mode='w+', shape=(total_pairs, 3, 128, 128))
+                self.patch2_data = np.memmap(self.patch2_path, dtype=self.np_dtype, mode='w+', shape=(total_pairs, 3, 128, 128))
                 
-                # Populate memory-mapped arrays
-                with h5py.File(vicreg_h5_path, 'r') as vicreg_f:
-                    for i in range(self.vicreg_length):
-                        timestep_group = vicreg_f[f'timestep_{i}']
-                        num_patches = len(timestep_group)
-                        if num_patches > 1:
-                            patch1_idx = i % (num_patches // 2)
-                            patch2_idx = num_patches // 2 + (i % (num_patches - num_patches // 2))
-                            self.patch1_data[i] = timestep_group[f'patch_{patch1_idx}'][:]
-                            self.patch2_data[i] = timestep_group[f'patch_{patch2_idx}'][:]
-                        else:
-                            self.patch1_data[i] = np.zeros((128, 128, 3), dtype=np.float32)
-                            self.patch2_data[i] = np.zeros((128, 128, 3), dtype=np.float32)
+                self.pair_offsets = []  # Start index of pairs for each shift
+                self.idx_to_timestep = []
+                patch_idx = 0
                 
-                # Flush to disk
+                for t in tqdm(range(self.num_timesteps), desc="Caching patches (training)"):
+                    timestep_group = self.vicreg_h5[f'timestep_{t}']
+                    shift_keys = self.shift_keys[t]
+                    num_shifts = len(shift_keys)
+                    selected_shifts = shift_keys[:min(shifts_per_timestep, num_shifts)]
+                    
+                    if num_shifts < shifts_per_timestep:
+                        print(f"Warning: Timestep {t} has only {num_shifts} shifts, less than {shifts_per_timestep}")
+                    
+                    self.pair_offsets.extend([patch_idx + i * pairs_per_shift for i in range(len(selected_shifts))])
+                    
+                    for shift_key in selected_shifts:
+                        shift_group = timestep_group[shift_key]
+                        all_patches = [shift_group[patch_key][:] for patch_key in shift_group.keys() if patch_key.startswith('patch_')]
+                        num_patches = len(all_patches)
+                        
+                        for _ in range(pairs_per_shift):
+                            if num_patches > 1:
+                                half_point = num_patches // 2
+                                patch1_idx = self.rng.choice(half_point)
+                                patch2_idx = self.rng.choice(num_patches - half_point) + half_point
+                                patch1 = np.transpose(all_patches[patch1_idx], (2, 0, 1))
+                                patch2 = np.transpose(all_patches[patch2_idx], (2, 0, 1))
+                            elif num_patches == 1:
+                                patch1 = np.transpose(all_patches[0], (2, 0, 1))
+                                patch2 = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                            else:
+                                patch1 = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                                patch2 = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                            
+                            self.patch1_data[patch_idx] = patch1
+                            self.patch2_data[patch_idx] = patch2
+                            patch_idx += 1
+                        self.idx_to_timestep.append(t)
+                    
+                    # Pad with zero pairs if fewer shifts
+                    if num_shifts < shifts_per_timestep:
+                        remaining_shifts = shifts_per_timestep - num_shifts
+                        self.pair_offsets.extend([patch_idx + i * pairs_per_shift for i in range(remaining_shifts)])
+                        for _ in range(remaining_shifts * pairs_per_shift):
+                            self.patch1_data[patch_idx] = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                            self.patch2_data[patch_idx] = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                            patch_idx += 1
+                        self.idx_to_timestep.extend([t] * remaining_shifts)
+                
                 self.patch1_data.flush()
                 self.patch2_data.flush()
-                print(f"Patch pairs cached to disk. Shape: {(self.vicreg_length, 128, 128, 3)}")
+                del self.patch1_data
+                del self.patch2_data
+                self.patch1_data = np.memmap(self.patch1_path, dtype=self.np_dtype, mode='r', shape=(total_pairs, 3, 128, 128))
+                self.patch2_data = np.memmap(self.patch2_path, dtype=self.np_dtype, mode='r', shape=(total_pairs, 3, 128, 128))
+                
+                self.patch1_tensor = torch.from_numpy(self.patch1_data).to(dtype=self.dtype)
+                self.patch2_tensor = torch.from_numpy(self.patch2_data).to(dtype=self.dtype)
+                self.pairs_per_shift = pairs_per_shift
+                self.vicreg_h5.close()
+                self.vicreg_h5 = None
+                print(f"Training mode: Cached {total_pairs} patch pairs ({pairs_per_shift} per shift). Dataset length: {self.length} shifts")
             else:
-                self.patch1_data = None
-                self.patch2_data = None
-                self.patch1_file = None
-                self.patch2_file = None
+                print("Precomputing multiple patch pairs per shift for non-training mode...")
+                self.vicreg_h5 = h5py.File(self.vicreg_h5_path, 'r')
+                
+                total_shifts = sum(len(shift_keys) for shift_keys in self.shift_keys)
+                self.length = total_shifts  # One index per shift, pairs selected dynamically
+                
+                # Temporary files
+                self.patch1_file = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
+                self.patch2_file = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
+                self.patch1_path = self.patch1_file.name
+                self.patch2_path = self.patch2_file.name
+                
+                # Memory-mapped arrays
+                total_pairs = total_shifts * pairs_per_shift
+                self.patch1_data = np.memmap(self.patch1_path, dtype=self.np_dtype, mode='w+', shape=(total_pairs, 3, 128, 128))
+                self.patch2_data = np.memmap(self.patch2_path, dtype=self.np_dtype, mode='w+', shape=(total_pairs, 3, 128, 128))
+                
+                self.pair_offsets = []
+                self.idx_to_timestep = []
+                patch_idx = 0
+                
+                for t in tqdm(range(self.num_timesteps), desc="Caching patches (non-training)"):
+                    timestep_group = self.vicreg_h5[f'timestep_{t}']
+                    shift_keys = self.shift_keys[t]
+                    
+                    self.pair_offsets.extend([patch_idx + i * pairs_per_shift for i in range(len(shift_keys))])
+                    
+                    for shift_key in shift_keys:
+                        shift_group = timestep_group[shift_key]
+                        all_patches = [shift_group[patch_key][:] for patch_key in shift_group.keys() if patch_key.startswith('patch_')]
+                        num_patches = len(all_patches)
+                        
+                        for _ in range(pairs_per_shift):
+                            if num_patches > 1:
+                                half_point = num_patches // 2
+                                patch1_idx = self.rng.choice(half_point)
+                                patch2_idx = self.rng.choice(num_patches - half_point) + half_point
+                                patch1 = np.transpose(all_patches[patch1_idx], (2, 0, 1))
+                                patch2 = np.transpose(all_patches[patch2_idx], (2, 0, 1))
+                            elif num_patches == 1:
+                                patch1 = np.transpose(all_patches[0], (2, 0, 1))
+                                patch2 = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                            else:
+                                patch1 = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                                patch2 = np.zeros((3, 128, 128), dtype=self.np_dtype)
+                            
+                            self.patch1_data[patch_idx] = patch1
+                            self.patch2_data[patch_idx] = patch2
+                            patch_idx += 1
+                        self.idx_to_timestep.append(t)
+                
+                self.patch1_data.flush()
+                self.patch2_data.flush()
+                del self.patch1_data
+                del self.patch2_data
+                self.patch1_data = np.memmap(self.patch1_path, dtype=self.np_dtype, mode='r', shape=(total_pairs, 3, 128, 128))
+                self.patch2_data = np.memmap(self.patch2_path, dtype=self.np_dtype, mode='r', shape=(total_pairs, 3, 128, 128))
+                
+                self.patch1_tensor = torch.from_numpy(self.patch1_data).to(dtype=self.dtype)
+                self.patch2_tensor = torch.from_numpy(self.patch2_data).to(dtype=self.dtype)
+                self.pairs_per_shift = pairs_per_shift
+                self.vicreg_h5.close()
+                self.vicreg_h5 = None
+                if self.length == 0:
+                    raise ValueError("No valid shifts found in the dataset.")
+                print(f"Non-training mode: Cached {total_pairs} patch pairs ({pairs_per_shift} per shift). Dataset length: {self.length} shifts")
 
-            samples_per_window = IMU_TOPIC_RATE * 2
-            self.num_timesteps = self.vicreg_length // 5
-            all_psd_features = []
-            for timestep in range(self.num_timesteps):
-                start_idx = timestep
-                end_idx = min(start_idx + samples_per_window, self.imu_length)
-                imu_window = imu_data[start_idx:end_idx]
-                if len(imu_window) < samples_per_window:
-                    imu_window = np.pad(imu_window, ((0, samples_per_window - len(imu_window)), (0, 0)), 'constant')
-                ang_vels = imu_window[:, :3]
-                lin_accs = imu_window[:, 3:6]
-                if self.incl_orientation:
-                    orientations = imu_window[:, 6:]
-                    lin_accs = np.array([self.remove_gravity(lin_accs[j], orientations[j]) for j in range(len(lin_accs))])
+    def process_chunk(self, chunk_args):
+        chunk_idx, start_idx, end_idx = chunk_args
+        chunk_size_local = end_idx - start_idx
+        chunk_indices = np.arange(start_idx, end_idx)
+        
+        # Preallocate results
+        features = np.zeros((chunk_size_local, 138), dtype=np.float32)
+        matching_odom_chunk = [None] * chunk_size_local
+
+        samples_per_window = IMU_TOPIC_RATE * 2  # 40 samples
+
+        # Open HDF5 file within the worker process
+        with h5py.File(self.synced_h5_path, 'r') as synced_f:
+            imu_group = synced_f['imu']
+            odom_group = synced_f['odom']
+
+            # Define IMU/odom range for the chunk
+            min_odom_idx = max(0, start_idx)
+            max_odom_idx = min(end_idx + samples_per_window, self.odom_length)
+            
+            # Load IMU and odom data for the chunk's window
+            imu_data = np.array([
+                np.concatenate([
+                    imu_group[str(i)]['angular_velocity'][:],
+                    imu_group[str(i)]['linear_acceleration'][:],
+                    imu_group[str(i)]['orientation'][:] if self.incl_orientation else np.zeros(4)
+                ]) for i in range(min_odom_idx, max_odom_idx)
+            ])
+            odom_poses = np.array([odom_group[str(i)]['pose'][:3] for i in range(min_odom_idx, max_odom_idx)])
+            odom_positions = np.array([odom_group[str(i)]['pose'][:2] for i in range(self.odom_length)])
+
+            # Vectorized processing for the chunk
+            global_pos_xy = self.global_positions[chunk_indices, :2]  # Shape: (chunk_size, 2)
+            odom_start_indices = np.maximum(0, chunk_indices[:, None])  # Shape: (chunk_size, 1)
+            odom_end_indices = np.minimum(odom_start_indices + samples_per_window, len(odom_positions))  # Shape: (chunk_size, 1)
+            
+            # Extract odom subsets for all timesteps in chunk
+            odom_indices = np.arange(len(odom_positions))
+            odom_mask = (odom_indices >= odom_start_indices) & (odom_indices < odom_end_indices)  # Shape: (chunk_size, odom_length)
+            odom_subset = odom_positions[None, :, :] * odom_mask[:, :, None]  # Shape: (chunk_size, odom_length, 2)
+            distances = np.linalg.norm(odom_subset - global_pos_xy[:, None, :], axis=2)  # Shape: (chunk_size, odom_length)
+            valid_mask = distances <= 1.0  # Shape: (chunk_size, odom_length)
+
+            # Precompute filter coefficients if needed
+            if not self.incl_orientation:
+                nyquist = IMU_TOPIC_RATE / 2
+                cutoff = 0.1
+                normal_cutoff = cutoff / nyquist
+                b, a = butter(1, normal_cutoff, btype='high', analog=False)
+
+            for i, idx in enumerate(chunk_indices):
+                start = max(0, idx)
+                end = min(start + samples_per_window, len(odom_positions))
+                valid_indices = odom_indices[start:end][valid_mask[i, start:end]]
+                valid_count = len(valid_indices)
+
+                if valid_count > 0:
+                    imu_subset = np.zeros((valid_count, 6))
+                    matching_odom = []
+                    
+                    # Vectorized IMU data extraction and processing
+                    imu_valid = imu_data[valid_indices - min_odom_idx]  # Adjust indices relative to loaded data
+                    ang_vels = imu_valid[:, :3]  # Shape: (valid_count, 3)
+                    lin_accs = imu_valid[:, 3:6]  # Shape: (valid_count, 3)
+                    
+                    if self.incl_orientation:
+                        orientations = imu_valid[:, 6:]  # Shape: (valid_count, 4)
+                        rot = Rotation.from_quat(orientations)
+                        gravity_world = np.array([0, 0, -9.81])
+                        gravity_imu = rot.apply(gravity_world)  # Shape: (valid_count, 3)
+                        lin_accs = lin_accs - gravity_imu
+                    else:
+                        # Simplified gravity removal without orientation
+                        lin_accs = lin_accs  # Adjust if a default gravity vector is needed
+
+                    imu_subset = np.hstack([ang_vels, lin_accs])  # Shape: (valid_count, 6)
+                    
+                    if not self.incl_orientation:
+                        # Batch high-pass filtering
+                        for k in range(3, 6):
+                            imu_subset[:, k] = filtfilt(b, a, imu_subset[:, k])
+
+                    # Pad or truncate to fixed window size
+                    imu_data_padded = np.zeros((samples_per_window, 6))
+                    if valid_count < samples_per_window:
+                        summary_sample = np.mean(imu_subset, axis=0)
+                        imu_data_padded[:valid_count] = imu_subset
+                        imu_data_padded[valid_count:] = summary_sample
+                        matching_odom = [(j, odom_poses[j - min_odom_idx][:3], distances[i, j - start]) 
+                                        for j in valid_indices] + \
+                                       [(start, np.zeros(3), 0.0)] * (samples_per_window - valid_count)
+                    else:
+                        imu_data_padded = imu_subset[:samples_per_window]
+                        matching_odom = [(j, odom_poses[j - min_odom_idx][:3], distances[i, j - start]) 
+                                        for j in valid_indices[:samples_per_window]]
                 else:
-                    lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), 1, arr=lin_accs)
-                imu_subset = np.hstack([ang_vels, lin_accs])[:, [0, 1, 2, 3, 4, 5]]
-                if not self.incl_orientation:
-                    for j in range(3, 6):
-                        imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
-                psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
-                std = np.std(imu_subset, axis=0)
-                features = np.concatenate([std, psd])
-                all_psd_features.append(features)
+                    imu_data_padded = np.zeros((samples_per_window, 6))
+                    matching_odom = [(start, np.zeros(3), 0.0)] * samples_per_window
 
-            psd_features = torch.from_numpy(np.array(all_psd_features)).to(dtype=self.dtype)
-            self.imu_min = torch.min(psd_features, dim=0)[0]
-            self.imu_max = torch.max(psd_features, dim=0)[0]
-            self.psd_features = self.normalize_imu(psd_features).contiguous()
-            self.length = self.vicreg_length
-            print(f"Dataset initialized with {self.length} samples")
+                # Compute features
+                mean = np.mean(imu_data_padded, axis=0)  # Shape: (6,)
+                std = np.std(imu_data_padded, axis=0)  # Shape: (6,)
+                freqs, psd = periodogram(imu_data_padded, fs=IMU_TOPIC_RATE, axis=0)  # psd: (freq_bins, 6)
+                psd_flat = psd.flatten()  # Shape: (126,)
+                features[i] = np.concatenate([mean, std, psd_flat])  # Shape: (138,)
+                features[i] = np.nan_to_num(features[i], nan=0.0, posinf=0.0, neginf=0.0)
+                matching_odom_chunk[i] = matching_odom
+
+        return list(zip(chunk_indices, features, matching_odom_chunk))
+
+    def precompute_features(self):
+        print("Precomputing IMU features and odometry data...")
+        self.imu_features = np.zeros((self.num_timesteps, 138), dtype=np.float32)
+        self.matching_odom_data = [None] * self.num_timesteps
+
+        chunk_size = 1000
+        num_chunks = (self.num_timesteps + chunk_size - 1) // chunk_size
+
+        # Parallel processing with minimal data transfer
+        with Pool(processes=os.cpu_count()) as pool:
+            chunk_args = [(i, i * chunk_size, min((i + 1) * chunk_size, self.num_timesteps)) 
+                          for i in range(num_chunks)]
+            results = list(tqdm(pool.imap_unordered(self.process_chunk, chunk_args), 
+                                total=num_chunks, desc="Processing chunks"))
+
+        # Aggregate results
+        for chunk_result in results:
+            for idx, feat, odom in chunk_result:
+                self.imu_features[idx] = feat
+                self.matching_odom_data[idx] = odom
+
+        # Final normalization
+        self.imu_features = torch.from_numpy(self.imu_features).to(dtype=self.dtype)
+        self.imu_min = torch.min(self.imu_features, dim=0)[0]
+        self.imu_max = torch.max(self.imu_features, dim=0)[0]
+        self.imu_features = self.normalize_imu(self.imu_features)
+        print(f"IMU features and odometry data precomputed. Features shape: {self.imu_features.shape}")
 
     def __del__(self):
-        """Clean up memory-mapped files when dataset is destroyed."""
         if self.train and hasattr(self, 'patch1_file') and self.patch1_file is not None:
             try:
-                self.patch1_data.flush()
+                if self.patch1_data is not None:
+                    self.patch1_data.flush()
                 self.patch1_file.close()
-                os.unlink(self.patch1_file.name)
+                os.unlink(self.patch1_path)
             except Exception as e:
                 print(f"Warning: Failed to clean up patch1 cache: {e}")
         if self.train and hasattr(self, 'patch2_file') and self.patch2_file is not None:
             try:
-                self.patch2_data.flush()
+                if self.patch2_data is not None:
+                    self.patch2_data.flush()
                 self.patch2_file.close()
-                os.unlink(self.patch2_file.name)
+                os.unlink(self.patch2_path)
             except Exception as e:
                 print(f"Warning: Failed to clean up patch2 cache: {e}")
+        # Add cleanup for persistent HDF5 handle in non-training mode
+        if hasattr(self, 'vicreg_h5') and self.vicreg_h5 is not None:
+            self.vicreg_h5.close()
 
-    def _compute_imu_normalization_params(self):
-        samples_per_window = IMU_TOPIC_RATE * 2
-        num_windows = max(1, (self.imu_length - samples_per_window + 1) // 1)
-        chunk_size = 1000
-
-        with h5py.File(self.synced_h5_path, 'r') as f:
-            imu_group = f['imu']
-            all_psd_features = []
-
-            for start in range(0, num_windows, chunk_size):
-                end = min(start + chunk_size, num_windows)
-                chunk_features = []
-
-                for i in range(start, end):
-                    window_start = i
-                    window_end = min(window_start + samples_per_window, self.imu_length)
-                    pad_size = samples_per_window - (window_end - window_start) if window_end < window_start + samples_per_window else 0
-
-                    # Load and concatenate IMU data for this window
-                    imu_window = np.array([
-                        np.concatenate([
-                            imu_group[str(j)]['angular_velocity'][:],
-                            imu_group[str(j)]['linear_acceleration'][:],
-                            imu_group[str(j)]['orientation'][:] if self.incl_orientation else np.zeros(4)
-                        ])
-                        for j in range(window_start, window_end)
-                    ])  # Shape: (window_size, 10) or (window_size, 6) if not incl_orientation
-
-                    if pad_size > 0:
-                        imu_window = np.pad(imu_window, ((0, pad_size), (0, 0)), mode='constant')
-
-                    # Process IMU data
-                    ang_vels = imu_window[:, :3]
-                    lin_accs = imu_window[:, 3:6]
-                    if self.incl_orientation:
-                        orientations = imu_window[:, 6:]
-                        lin_accs = np.array([self.remove_gravity(lin_accs[j], orientations[j]) 
-                                           for j in range(len(lin_accs))])
-                    else:
-                        lin_accs = np.apply_along_axis(lambda x: self.remove_gravity(x, None), axis=1, arr=lin_accs)
-
-                    imu_subset = np.hstack([ang_vels, lin_accs])[:, [0, 1, 2, 3, 4, 5]]
-                    if not self.incl_orientation:
-                        for j in range(3, 6):
-                            imu_subset[:, j] = self.high_pass_filter(imu_subset[:, j], fs=IMU_TOPIC_RATE)
-
-                    psd = periodogram(imu_subset, fs=IMU_TOPIC_RATE, axis=0)[1].flatten()
-                    std = np.std(imu_subset, axis=0)
-                    features = np.concatenate([std, psd])
-                    chunk_features.append(features)
-
-                all_psd_features.extend(chunk_features)
-
-            self.psd_features = np.array(all_psd_features)
-            self.imu_min = np.min(self.psd_features, axis=0)
-            self.imu_max = np.max(self.psd_features, axis=0)
-    
     def get_scaled_preferences(self, preferences):
-        """Helper method to scale preferences using precomputed min/max."""
         return ((preferences - self.pref_min) / (self.pref_max - self.pref_min)) * 100.0
 
     def remove_gravity(self, linear_acceleration, orientation):
@@ -279,52 +485,105 @@ class TerrainDataset(Dataset):
         return linear_acceleration - gravity_imu
 
     def high_pass_filter(self, data, fs, cutoff=0.1):
+        if np.isscalar(data) or data.size == 1:
+            return data
         nyquist = fs / 2
         normal_cutoff = cutoff / nyquist
         b, a = butter(1, normal_cutoff, btype='high', analog=False)
         return filtfilt(b, a, data)
 
     def normalize_imu(self, imu_sample):
-        """Normalize IMU features using precomputed min/max."""
-        if torch.allclose(self.imu_max - self.imu_min, torch.tensor(0.0, dtype=self.dtype), atol=1e-8):
-            return imu_sample  # Avoid division by zero
-        return (imu_sample - self.imu_min) / (self.imu_max - self.imu_min + 1e-7)  # Add epsilon for stability
+        if self.imu_min is None or self.imu_max is None or torch.allclose(self.imu_max - self.imu_min, torch.tensor(0.0, dtype=self.dtype), atol=1e-8):
+            return imu_sample
+        return (imu_sample - self.imu_min) / (self.imu_max - self.imu_min + 1e-7)
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, idx):
         if self.is_labeled:
-            patch = self.patches[idx].clone().detach()
-            inertial = self.inertial[idx].clone().detach() if self.inertial is not None else None
-            if inertial is not None and inertial.dim() == 1:  # If inertial is (48,)
-                inertial = inertial.unsqueeze(0)  # Add channel dim: (1, 48)
+            patch = self.patches[idx]
+            inertial = self.inertial[idx] if self.inertial is not None else None
             terrain_label = self.terrain_labels[idx]
-            preference = self.preferences[idx].clone().detach().unsqueeze(0)
-
-            if self.transform:
-                patch = self.transform(patch)
-
+            preference = self.preferences[idx]
             return patch, inertial, terrain_label, preference
         else:
-            if self.train and self.patch1_data is not None:
-                patch1 = torch.from_numpy(self.patch1_data[idx]).permute(2, 0, 1).to(dtype=self.dtype)
-                patch2 = torch.from_numpy(self.patch2_data[idx]).permute(2, 0, 1).to(dtype=self.dtype)
-            else:
-                with h5py.File(self.vicreg_h5_path, 'r') as vicreg_f:
-                    timestep_group = vicreg_f[f'timestep_{idx}']
-                    num_patches = len(timestep_group)
-                    if num_patches > 1:
-                        patch1_idx = idx % (num_patches // 2)
-                        patch2_idx = num_patches // 2 + (idx % (num_patches - num_patches // 2))
-                        patch1 = torch.from_numpy(timestep_group[f'patch_{patch1_idx}'][:]).permute(2, 0, 1).to(self.dtype)
-                        patch2 = torch.from_numpy(timestep_group[f'patch_{patch2_idx}'][:]).permute(2, 0, 1).to(self.dtype)
-                    else:
-                        patch1 = torch.zeros((3, 128, 128), dtype=self.dtype)
-                        patch2 = torch.zeros((3, 128, 128), dtype=self.dtype)
-            imu_sample = self.psd_features[min(idx // 5, len(self.psd_features) - 1)]
+            if idx >= self.length or idx < 0:
+                raise IndexError(f"Index {idx} out of range for dataset length {self.length}")
+            
+            timestep_idx = self.idx_to_timestep[idx]
+            imu_sample = self.imu_features[timestep_idx]
+            
+            # Select a random pair from the precomputed set for this shift
+            pair_start = self.pair_offsets[idx]
+            pair_idx = pair_start + self.rng.integers(0, self.pairs_per_shift)  # Randomly pick one of the pairs
+            patch1 = self.patch1_tensor[pair_idx]
+            patch2 = self.patch2_tensor[pair_idx]
+            
+            if self.debug:
+                assert 0 <= timestep_idx < self.num_timesteps, f"Invalid timestep_idx: {timestep_idx}"
+                global_pos = self.global_positions[timestep_idx]
+                matching_odom = self.matching_odom_data[timestep_idx]
+                return patch1, patch2, imu_sample, global_pos, matching_odom
+            
             return patch1, patch2, imu_sample
-""" 
+
+def worker_init_fn(worker_id):
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is not None:
+        dataset = worker_info.dataset
+        if isinstance(dataset, torch.utils.data.Subset):
+            dataset = dataset.dataset
+        if not hasattr(dataset, 'patch1_tensor'):
+            dataset.patch1_tensor = torch.from_numpy(np.memmap(dataset.patch1_path, dtype=dataset.np_dtype, mode='r', shape=(dataset.length, 3, 128, 128))).to(dtype=dataset.dtype)
+            dataset.patch2_tensor = torch.from_numpy(np.memmap(dataset.patch2_path, dtype=dataset.np_dtype, mode='r', shape=(dataset.length, 3, 128, 128))).to(dtype=dataset.dtype)
+
+def process_timestep_batch_wrapper(args):
+    dataset, sub_chunk, imu_data_dict, odom_data_dict, global_positions, odom_positions = args  # Unpack 6 values
+    return dataset.process_timestep_batch((sub_chunk, imu_data_dict, odom_data_dict, global_positions, odom_positions))
+
+"""
+if __name__ == "__main__":
+    synced_h5_path = "bags/agh_courtyard_2/agh_courtyard_2_synced.h5"
+    vicreg_h5_path = "bags/agh_courtyard_2/agh_courtyard_2_vicreg.h5"
+
+    dataset = TerrainDataset(
+        synced_h5_path=synced_h5_path,
+        vicreg_h5_path=vicreg_h5_path,
+        dtype=torch.float32,
+        incl_orientation=True,
+        train=False,
+        debug=True
+    )
+
+    # Define a range of patch indices to test
+    patch_start = 1500
+    patch_end = 1520  # Inclusive, so this tests 1500 to 1520
+    print(f"Testing patch indices from {patch_start} to {patch_end} (total: {patch_end - patch_start + 1} patches)")
+    
+    for idx in range(patch_start, patch_end + 1):
+        if idx >= len(dataset):
+            print(f"Index {idx} exceeds dataset length ({len(dataset)}), stopping.")
+            break
+        
+        patch1, patch2, imu_sample, global_pos, matching_odom = dataset[idx]
+        
+        print(f"\nPatch Sample {idx}:")
+        print(f"Global Position of Patch: {global_pos} (x, y, z in meters)")
+        print(f"Patch1 Shape: {patch1.shape}, Patch2 Shape: {patch2.shape}")
+        print(f"IMU Sample Shape: {imu_sample.shape}")
+        
+        if matching_odom and matching_odom[0][1].any():
+            print(f"Matching Odometry Segment (within 1 foot in x and y, {len(matching_odom)} samples):")
+            start_idx = matching_odom[0][0]
+            end_idx = matching_odom[-1][0]
+            print(f"  Segment Range: Index {start_idx} to {end_idx}")
+            for odom_idx, odom_pos, xy_distance in matching_odom:
+                print(f"    Index {odom_idx}: Position {odom_pos} (meters), XY Distance: {xy_distance:.4f} meters")
+        else:
+            print("No matching odometry segment found within 1 foot in x and y.")
+
+
 def visualize_psd(dataset, idx):
     print(f"Visualizing PSD and patches for idx={idx}")
     print(f"IMU data length: {len(dataset.imu_data)}")

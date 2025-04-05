@@ -101,7 +101,7 @@ class MultiScaleSpatialAttention(nn.Module):
     
 # create a pytorch model for the proprioception data
 class ProprioceptionModel(nn.Module):
-    def __init__(self, latent_size=64, p=0.05, input_dim=132):  # Default to 606
+    def __init__(self, latent_size=64, p=0.05, input_dim=138):  # Default to 606
         super(ProprioceptionModel, self).__init__()
         
         self.inertial_encoder = nn.Sequential(
@@ -177,13 +177,22 @@ class CostNet(nn.Module):
         super(CostNet, self).__init__()
         self.latent_size = latent_size
         self.model = nn.Sequential(
-            nn.Linear(1, self.latent_size//2),  # Input: scalar uvis_pred
+            nn.Linear(1, self.latent_size // 2),  # Input: scalar uvis_pred
             nn.ReLU(),
-            nn.Linear(self.latent_size//2, 1),
+            nn.Linear(self.latent_size // 2, 1),  # Output: scalar before scaling
         )
-        self.output_scale = nn.Sigmoid()  # Outputs between 0 and 1
+        self.output_scale = nn.Sigmoid()  # Maps to [0, 1]
+
+        # Initialize weights and biases
+        nn.init.kaiming_normal_(self.model[0].weight, mode='fan_in', nonlinearity='relu')
+        nn.init.constant_(self.model[0].bias, 0.5)  # First layer bias
+        nn.init.kaiming_normal_(self.model[2].weight, mode='fan_in', nonlinearity='relu')
+        nn.init.constant_(self.model[2].bias, 0.0)  # Second layer bias
 
     def forward(self, x):
-        x = self.model(x)
-        x = self.output_scale(x) * 100.0  # Scale to 0-100
-        return x
+        # Ensure input is 2D: [batch_size, 1]
+        if x.dim() == 1:
+            x = x.unsqueeze(1)  # Add feature dimension if needed
+        x = self.model(x)  # Process through linear layers
+        x = self.output_scale(x) * 100.0  # Scale to [0, 100]
+        return x.squeeze(1)  # Remove extra dimension for scalar output per batch

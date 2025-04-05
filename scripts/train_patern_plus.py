@@ -514,10 +514,18 @@ def extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, pread
     print(f"RAM usage after clearing adaptation data: {psutil.virtual_memory().used / 1024**2:.2f} MB")
     return adapt_data_file
 
-def split_adaptation_dataset(adapt_data_file, args):
-    print("Loading and splitting adaptation dataset...")
-    adapt_data = []
+def aggregate_and_split_datasets(preadapt_dataset, adapt_data_file, args):
+    print("Aggregating and splitting datasets...")
+    preadapt_data_list = list(preadapt_dataset)
+    adapt_data, label_map = [], {}
 
+    print("Building label map from preadaptation data...")
+    for item in preadapt_data_list:
+        terrain_label = item[2] if isinstance(item, tuple) else item.get("terrain_label")
+        if isinstance(terrain_label, str) and terrain_label not in label_map:
+            label_map[terrain_label] = len(label_map)
+
+    print("Loading and normalizing adaptation data...")
     with h5py.File(adapt_data_file, 'r') as f:
         total_entries = len(f)
         for i in range(total_entries):
@@ -529,18 +537,42 @@ def split_adaptation_dataset(adapt_data_file, args):
                 "terrain_label": terrain_label,
                 "preference": group.attrs["preference"]
             })
+            if (i + 1) % 1000 == 0:
+                print(f"Loaded {i + 1}/{total_entries} adaptation entries, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
 
-    adapt_dataset = TerrainDataset(labeled_dataset=adapt_data, transform=None)
-    print(f"Adaptation dataset size: {len(adapt_dataset)}")
+    print("Normalizing preadaptation data...")
+    normalized_preadapt_data = []
+    for item in preadapt_data_list:
+        if isinstance(item, tuple):
+            patch, inertial, terrain_label, preference = item
+        else:
+            patch, inertial, terrain_label, preference = item.values()
+        terrain_label = label_map.get(terrain_label, -1) if isinstance(terrain_label, str) else terrain_label or -1
+        normalized_preadapt_data.append({"patch": patch, "inertial": inertial, "terrain_label": terrain_label, "preference": preference})
 
-    val_size = int(args.val_split * len(adapt_dataset))
-    train_size = len(adapt_dataset) - val_size
-    train_dataset, val_dataset = random_split(adapt_dataset, [train_size, val_size])
+    # Calculate and print preference ranges before aggregation
+    preadapt_prefs = torch.tensor([d["preference"] for d in normalized_preadapt_data], dtype=torch.float32)
+    adapt_prefs = torch.tensor([d["preference"] for d in adapt_data], dtype=torch.float32)
+    print(f"Pre-adaptation data preference range: min={preadapt_prefs.min():.2f}, max={preadapt_prefs.max():.2f}")
+    print(f"Adaptation data preference range: min={adapt_prefs.min():.2f}, max={adapt_prefs.max():.2f}")
+
+    aggregated_data = normalized_preadapt_data + adapt_data
+
+    del preadapt_data_list, adapt_data, normalized_preadapt_data
+    gc.collect()
+    print(f"RAM usage before TerrainDataset: {psutil.virtual_memory().used / 1024**2:.2f} MB")
+
+    aggregated_dataset = TerrainDataset(labeled_dataset=aggregated_data, transform=None)
+    print(f"Successfully created TerrainDataset with {len(aggregated_dataset)} samples")
+
+    val_size = int(args.val_split * len(aggregated_dataset))
+    train_size = len(aggregated_dataset) - val_size
+    train_dataset, val_dataset = random_split(aggregated_dataset, [train_size, val_size])
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=False, collate_fn=custom_collate)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False, collate_fn=custom_collate)
     
-    del adapt_data
+    del aggregated_data
     print(f"Train dataset size: {len(train_dataset)}, Validation dataset size: {len(val_dataset)}")
     return train_loader, val_loader, [adapt_data_file]
 
@@ -666,7 +698,7 @@ if __name__ == "__main__":
     visualize_clusters(preadapt_data[0], preadapt_data[2], adapt_phi_pro=adapt_phi_pro, save_path=preadapt_plot_path)
 
     adapt_data_file = extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, preadapt_data, max_distance_threshold, args)
-    train_loader, val_loader, adapt_data_files = split_adaptation_dataset(adapt_data_file, args)
+    train_loader, val_loader, adapt_data_files = aggregate_and_split_datasets(preadapt_dataset, adapt_data_file, args)
     
     retrain_model(model, train_loader, val_loader, args.epochs)
     phi_pro_output, patch_output, postadapt_labels_list = extract_postadapt_features(model, train_loader.dataset, args)
