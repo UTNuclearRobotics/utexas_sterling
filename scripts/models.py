@@ -185,9 +185,9 @@ class CostNet(nn.Module):
 
         # Initialize weights and biases
         nn.init.kaiming_normal_(self.model[0].weight, mode='fan_in', nonlinearity='relu')
-        nn.init.constant_(self.model[0].bias, 0.5)  # First layer bias
+        nn.init.constant_(self.model[0].bias, 1.0)  # First layer bias
         nn.init.kaiming_normal_(self.model[2].weight, mode='fan_in', nonlinearity='relu')
-        nn.init.constant_(self.model[2].bias, 0.0)  # Second layer bias
+        nn.init.constant_(self.model[2].bias, 1.0)  # Second layer bias
 
     def forward(self, x):
         # Ensure input is 2D: [batch_size, 1]

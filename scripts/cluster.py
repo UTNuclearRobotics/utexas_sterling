@@ -216,7 +216,6 @@ class Cluster:
                 representation_vectors_np[start_idx:start_idx + batch_size] = embeddings
                 start_idx += batch_size
 
-        representation_vectors_np = normalize(representation_vectors_np, axis=1, norm='l2')
         kmeans = KMeans(n_clusters=k, init="k-means++", max_iter=iterations, n_init=10, random_state=42)
         kmeans.fit(representation_vectors_np)
         cluster_labels = kmeans.labels_
