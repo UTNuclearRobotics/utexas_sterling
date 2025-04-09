@@ -15,6 +15,7 @@ from functools import partial
 import h5py
 import gc
 from tqdm import tqdm
+from sklearn.cluster import KMeans
 
 gi.require_version("Gtk", "4.0")
 

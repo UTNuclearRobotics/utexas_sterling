@@ -15,9 +15,218 @@ import cv2
 from utils import load_bag_h5
 import psutil
 import h5py
-import gc
 import tempfile
 import shutil
+import gc
+import gi
+from gi.repository import GLib, Gtk, GdkPixbuf
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import yaml
+
+gi.require_version("Gtk", "4.0")
+
+script_dir = os.path.dirname(os.path.realpath(__file__))
+
+# GTK-based GUI for labeling outlier groups
+class OutlierLabelUI(Gtk.Application):
+    def __init__(self, patches=None, extrapolated_prefs=None, outlier_indices=None, adapt_phi_pro=None, save_dir=None, default_labels=None, preadapt_name_to_id=None):
+        super().__init__(application_id="com.example.OutlierLabelUI")
+        GLib.set_application_name("Outlier Label UI")
+        self.patches = patches
+        self.extrapolated_prefs = extrapolated_prefs
+        self.outlier_indices = outlier_indices
+        self.adapt_phi_pro = adapt_phi_pro
+        self.save_dir = save_dir or os.path.join(script_dir, "outlier_patches")
+        self.default_labels = default_labels
+        self.preadapt_name_to_id = preadapt_name_to_id or {}
+        self.user_labels_dict = {}
+        self.user_cluster_ids_dict = {}
+        self.user_prefs_dict = {}
+        self.current_group = 0
+        self.rendered_clusters = None
+        self.cluster_indices = None
+        self.base_cluster_id = None
+        self.cluster_id_label = None  # Initialize here to avoid attribute error
+
+    def do_activate(self):
+        if self.patches is None or self.extrapolated_prefs is None or self.outlier_indices is None or self.adapt_phi_pro is None:
+            window = Gtk.ApplicationWindow(application=self, title="Outlier Label UI - Error")
+            window.set_default_size(400, 200)
+            label = Gtk.Label(label="Error: OutlierLabelUI requires patches, preferences, indices, and phi_pro data.")
+            label.set_margin_top(20)
+            label.set_margin_bottom(20)
+            label.set_margin_start(20)
+            label.set_margin_end(20)
+            window.set_child(label)
+            window.present()
+            return
+
+        self.base_cluster_id = torch.max(self.default_labels).item() + 1 if self.default_labels is not None else 0
+
+        outlier_indices_cpu = self.outlier_indices.cpu()
+        outlier_phi_pro = self.adapt_phi_pro[outlier_indices_cpu].cpu().numpy()
+        outlier_patches = self.patches[outlier_indices_cpu].cpu().numpy()
+        outlier_prefs = self.extrapolated_prefs[outlier_indices_cpu].cpu().numpy()
+        outlier_default_labels = self.default_labels[outlier_indices_cpu].cpu().numpy() if self.default_labels is not None else None
+        
+        max_possible_clusters = min(len(outlier_indices_cpu), 10)
+        if max_possible_clusters <= 1:
+            n_clusters = 1
+            group_labels = np.zeros(len(outlier_indices_cpu), dtype=int)
+        else:
+            best_n_clusters = 1
+            best_score = -1
+            for n in range(2, min(max_possible_clusters + 1, len(outlier_indices_cpu) // 2 + 1)):
+                kmeans = KMeans(n_clusters=n, random_state=42)
+                labels = kmeans.fit_predict(outlier_phi_pro)
+                score = silhouette_score(outlier_phi_pro, labels)
+                if score > best_score:
+                    best_score = score
+                    best_n_clusters = n
+            kmeans = KMeans(n_clusters=best_n_clusters, random_state=42)
+            group_labels = kmeans.fit_predict(outlier_phi_pro)
+            print(f"Automatically selected {best_n_clusters} clusters for outliers based on silhouette score: {best_score:.3f}")
+        
+        renderer = PatchRenderer()
+        os.makedirs(self.save_dir, exist_ok=True)
+        unique_groups = np.unique(group_labels)
+        self.cluster_indices = [np.where(group_labels == group_id)[0].tolist() for group_id in unique_groups]
+        self.rendered_clusters = renderer.render_clusters(self.cluster_indices, outlier_patches)
+        self.outlier_prefs = outlier_prefs
+        self.outlier_default_labels = outlier_default_labels
+        
+        self.show_next_group()
+
+    # Helper function to convert NumPy array to GdkPixbuf
+    def numpy_to_pixbuf(self, array):
+        """Convert a NumPy array (H, W, 3) RGB to GdkPixbuf."""
+        height, width, channels = array.shape
+        if channels not in (3, 4):
+            raise ValueError("Array must have 3 (RGB) or 4 (RGBA) channels")
+        data = array.tobytes()
+        rowstride = width * channels
+        return GdkPixbuf.Pixbuf.new_from_data(
+            data, GdkPixbuf.Colorspace.RGB, channels == 4, 8, width, height, rowstride
+        )
+
+    def show_next_group(self):
+        if self.current_group >= len(self.rendered_clusters):
+            self.quit()
+            return
+        
+        cluster_patches = self.rendered_clusters[self.current_group]
+        indices = self.cluster_indices[self.current_group]
+        if not cluster_patches:
+            self.current_group += 1
+            self.show_next_group()
+            return
+        
+        window = Gtk.ApplicationWindow(application=self, title=f"Outlier Group {self.current_group} ({len(cluster_patches)} patches)")
+        window.set_default_size(800, 600)
+        
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        vbox.set_margin_top(10)
+        vbox.set_margin_bottom(10)
+        vbox.set_margin_start(10)
+        vbox.set_margin_end(10)
+        window.set_child(vbox)
+        
+        grid_image = PatchRenderer().image_grid(cluster_patches)
+        pixbuf = self.numpy_to_pixbuf(grid_image)
+        image_widget = Gtk.Image.new_from_pixbuf(pixbuf)
+        
+        scrolled_window = Gtk.ScrolledWindow()
+        scrolled_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled_window.set_child(image_widget)
+        scrolled_window.set_hexpand(True)
+        scrolled_window.set_vexpand(True)
+        vbox.append(scrolled_window)
+        
+        group_prefs = self.outlier_prefs[indices]
+        mean_extrapolated_pref = np.mean(group_prefs)
+        vbox.append(Gtk.Label(label=f"Mean Extrapolated Preference: {mean_extrapolated_pref:.4f}"))
+        
+        label_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        label_hbox.append(Gtk.Label(label="Label (string):"))
+        label_entry = Gtk.Entry()
+        label_entry.set_placeholder_text("Enter a descriptive label...")
+        label_entry.set_text(f"outlier_group_{self.current_group}")
+        label_hbox.append(label_entry)
+        vbox.append(label_hbox)
+        
+        default_cluster_id = self.base_cluster_id + self.current_group
+        self.cluster_id_label = Gtk.Label(label=f"Assigned Cluster ID: {default_cluster_id}")
+        vbox.append(self.cluster_id_label)
+        
+        pref_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        pref_hbox.append(Gtk.Label(label="Preference:"))
+        pref_entry = Gtk.Entry()
+        pref_entry.set_text(f"{mean_extrapolated_pref:.4f}")
+        pref_hbox.append(pref_entry)
+        vbox.append(pref_hbox)
+        
+        submit_button = Gtk.Button(label="Submit")
+        submit_button.connect("clicked", self.on_submit_clicked, window, label_entry, pref_entry, indices, default_cluster_id)
+        vbox.append(submit_button)
+        
+        window.present()
+
+    def on_submit_clicked(self, button, window, label_entry, pref_entry, indices, default_cluster_id):
+        try:
+            label = label_entry.get_text().strip()
+            pref = float(pref_entry.get_text())
+            
+            if label in self.preadapt_name_to_id:
+                assigned_cluster_id = self.preadapt_name_to_id[label]
+                print(f"Matched '{label}' to pre-adaptation cluster ID {assigned_cluster_id}")
+            else:
+                assigned_cluster_id = default_cluster_id
+                print(f"Assigned new cluster ID {assigned_cluster_id} to '{label}'")
+            
+            self.cluster_id_label.set_text(f"Assigned Cluster ID: {assigned_cluster_id}")
+            
+            for idx in indices:
+                original_idx = self.outlier_indices[idx].item()
+                self.user_labels_dict[original_idx] = label
+                self.user_cluster_ids_dict[original_idx] = assigned_cluster_id
+                self.user_prefs_dict[original_idx] = pref
+            window.destroy()
+            self.current_group += 1
+            self.show_next_group()
+        except ValueError:
+            error_dialog = Gtk.MessageDialog(
+                transient_for=window,
+                modal=True,
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.OK,
+                text="Invalid input: Preference must be a number."
+            )
+            error_dialog.connect("response", lambda dialog, response: dialog.destroy())
+            error_dialog.show()
+
+    def get_results(self):
+        user_labels = []
+        user_cluster_ids = []
+        user_prefs = []
+        default_labels = self.default_labels.cpu().numpy() if self.default_labels is not None else np.zeros(len(self.outlier_indices), dtype=int)
+        default_prefs = self.extrapolated_prefs.cpu().numpy()
+
+        for i, idx in enumerate(self.outlier_indices):
+            idx_item = idx.item()
+            if idx_item in self.user_labels_dict:
+                user_labels.append(self.user_labels_dict[idx_item])
+                user_cluster_ids.append(self.user_cluster_ids_dict[idx_item])
+                user_prefs.append(self.user_prefs_dict[idx_item])
+            else:
+                user_labels.append(f"unlabeled_outlier_{i}")
+                user_cluster_ids.append(default_labels[i])
+                user_prefs.append(default_prefs[i])
+                print(f"Warning: Outlier index {idx_item} not labeled; using default cluster ID {default_labels[i]} and preference {default_prefs[i]}")
+        
+        device = self.extrapolated_prefs.device
+        return (list(zip(user_labels, user_cluster_ids)),
+                torch.tensor(user_prefs, dtype=torch.float, device=device))
 
 class PaternAdaptation(nn.Module):
     def __init__(self, device, pretrained_weights_path, latent_size=128):
@@ -91,7 +300,7 @@ class PaternAdaptation(nn.Module):
         preadapt_cluster_centers = torch.zeros((n_clusters, preadapt_phi_pro.shape[1]), device=self.device)
         cluster_prefs = torch.zeros(n_clusters, device=self.device)
         cluster_labels = torch.zeros(n_clusters, dtype=torch.long, device=self.device)
-        cluster_std = torch.zeros(n_clusters, device=self.device)  # New: per-cluster spread
+        cluster_std = torch.zeros(n_clusters, device=self.device)
 
         for i, cluster_id in enumerate(unique_clusters):
             cluster_mask = (preadapt_labels == cluster_id)
@@ -99,14 +308,13 @@ class PaternAdaptation(nn.Module):
             preadapt_cluster_centers[i] = cluster_points.mean(dim=0)
             cluster_prefs[i] = preadapt_prefs[cluster_mask].mean()
             cluster_labels[i] = cluster_id
-            cluster_std[i] = torch.std(cluster_points, dim=0).mean()  # Mean std across dimensions
+            cluster_std[i] = torch.std(cluster_points, dim=0).mean()
 
         distances = torch.cdist(adapt_phi_pro, preadapt_cluster_centers)
         sorted_distances, sorted_indices = distances.sort(dim=1)
         min_distances = sorted_distances[:, 0]
         nearest_cluster_indices = sorted_indices[:, 0]
 
-        # Dynamic threshold per cluster (e.g., 2 * std of nearest cluster)
         dynamic_thresholds = cluster_std[nearest_cluster_indices] * 2.0
 
         extrapolated_prefs = torch.zeros(n_samples, device=self.device)
@@ -116,6 +324,8 @@ class PaternAdaptation(nn.Module):
         extrapolated_prefs[within_threshold] = cluster_prefs[nearest_cluster_indices[within_threshold]]
 
         outside_threshold = ~within_threshold
+        outlier_indices = torch.where(outside_threshold)[0]
+        
         if outside_threshold.sum() > 0:
             nearest_two_indices = sorted_indices[outside_threshold, :2]
             nearest_two_distances = sorted_distances[outside_threshold, :2]
@@ -124,7 +334,7 @@ class PaternAdaptation(nn.Module):
             prefs_nearest_two = cluster_prefs[nearest_two_indices]
             extrapolated_prefs[outside_threshold] = (prefs_nearest_two * weights).sum(dim=1)
 
-        return extrapolated_prefs, extrapolated_labels
+        return extrapolated_prefs, extrapolated_labels, outlier_indices, adapt_phi_pro
 
     def retrain_visual_components(self, train_loader, val_loader, optimizer, scheduler, epochs, initial_weights=None):
         l2_lambda = 0.01  # Hyperparameter for L2 penalty strength (tune as needed)
@@ -507,11 +717,45 @@ def extract_adapt_features(model, adapt_loader, cache_dir):
     adapt_phi_pro = model.extract_proprioceptive_features(adapt_inertial)
     return adapt_patches, adapt_inertial, adapt_phi_pro
 
+# Updated extrapolate_and_cache_adapt_data function
 def extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, preadapt_data, max_distance_threshold, args):
     print("Extrapolating preferences and labels...")
-    extrapolated_prefs, extrapolated_labels = model.extrapolate_preferences(
+    extrapolated_prefs, extrapolated_labels, outlier_indices, adapt_phi_pro = model.extrapolate_preferences(
         adapt_inertial, preadapt_data[0], preadapt_data[1], torch.tensor(preadapt_data[2], device=adapt_inertial.device), max_distance_threshold
     )
+
+    if len(outlier_indices) > 0:
+        print(f"Found {len(outlier_indices)} data points outside cluster thresholds.")
+        outlier_dir = os.path.join(args.preadapt_bag, "outlier_patches")
+        # Load pre-adaptation config to get name-to-ID mapping
+        config_path = os.path.join(script_dir, "homography", "config.yaml")
+        preadapt_name_to_id = {}
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as file:
+                config = yaml.safe_load(file) or {}
+                if 'terrains' in config:
+                    preadapt_name_to_id = {terrain['name']: terrain['label'] for terrain in config['terrains']}
+                    print(f"Loaded pre-adaptation name-to-ID mapping: {preadapt_name_to_id}")
+        else:
+            print(f"Warning: Config file {config_path} not found. New labels will get incremental IDs.")
+        
+        app = OutlierLabelUI(
+            patches=adapt_patches,
+            extrapolated_prefs=extrapolated_prefs,
+            outlier_indices=outlier_indices,
+            adapt_phi_pro=adapt_phi_pro,
+            save_dir=outlier_dir,
+            default_labels=extrapolated_labels,
+            preadapt_name_to_id=preadapt_name_to_id
+        )
+        app.run()
+        user_labels_and_ids, user_prefs = app.get_results()
+
+        for idx, (string_label, cluster_id), pref in zip(outlier_indices, user_labels_and_ids, user_prefs):
+            extrapolated_labels[idx] = cluster_id
+            extrapolated_prefs[idx] = pref
+        
+        shutil.rmtree(outlier_dir, ignore_errors=True)
 
     adapt_patches_cpu, adapt_inertial_cpu = adapt_patches.cpu(), adapt_inertial.cpu()
     prefs_list, labels_list = extrapolated_prefs.cpu().tolist(), extrapolated_labels.cpu().tolist()
@@ -529,7 +773,7 @@ def extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, pread
                 group = f.create_group(f"entry_{i}")
                 group.create_dataset("patch", data=adapt_patches_cpu[i].numpy(), compression="gzip")
                 group.create_dataset("inertial", data=adapt_inertial_cpu[i].numpy(), compression="gzip")
-                group.attrs["terrain_label"] = labels_list[i]
+                group.attrs["terrain_label"] = labels_list[i]  # Numeric cluster ID
                 group.attrs["preference"] = prefs_list[i]
             print(f"Processed {end_idx} adaptation data entries, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
 

@@ -21,7 +21,7 @@ CELL_SIZE = 40
 
 class BEVCostmap:
     """
-    An overview of the cost inference process for local planning at deployment using trained preference predictor.
+    Cost inference process for local planning at deployment using trained preference predictor.
     """
 
     def __init__(self, model_path, save_path=None):
@@ -33,11 +33,11 @@ class BEVCostmap:
 
         # Define the expected .pt files for each submodule
         weight_files = {
-            "visual_encoder": "fvis_adapted.pt",
+            "visual_encoder": "fvis.pt",
             "proprioceptive_encoder": "fpro.pt",
-            "uvis": "uvis_adapted.pt",
+            "uvis": "uvis.pt",
             "upro": "upro.pt",
-            "cost_head": "cost_head_adapted.pt"
+            "cost_head": "cost_head.pt"
         }
 
         # Load weights for each submodule
@@ -127,7 +127,7 @@ class BEVCostmap:
         inv_costmap = 255 - costmap
 
         # Prepare costmap for video: resize to match bev_img dimensions and convert to 3 channels
-        costmap_resized = cv2.resize(costmap, (effective_width, effective_height), interpolation=cv2.INTER_NEAREST)
+        costmap_resized = cv2.resize(inv_costmap, (effective_width, effective_height), interpolation=cv2.INTER_NEAREST)
         costmap_3ch = np.stack([costmap_resized] * 3, axis=-1).astype(np.uint8)  # (H, W, 3)
 
         # Append to self.processed_imgs
@@ -232,27 +232,15 @@ if __name__ == "__main__":
 
     # Search for pre-trained weights
     models_dir = os.path.join(args.m, "models")
-    bev_costmap = BEVCostmap(models_dir)
+    bev_costmap = BEVCostmap(models_dir, save_path=bag_path)
     max_timesteps = robot_data.getNTimesteps()
-    start_timestep = min(1400, max_timesteps)
+    start_timestep = min(2300, max_timesteps)
     frame_count = 0
     video_writer = None
     frame_size = None
 
-    for timestep in tqdm(range(1400, robot_data.getNTimesteps()), desc="Processing patches at timesteps"):
-        cur_img = robot_data.getImageAtTimestep(timestep)
-        cur_rt = robot_data.getOdomAtTimestep(timestep)
-        bev_img = plot_BEV_full(cur_img, H, patch_size=(128,128))
-        costmap = bev_costmap.BEV_to_costmap(bev_img, 128)
-        visualize = bev_costmap.visualize_costmap(costmap, 128)
-
-        combined_frame = cv2.vconcat([visualize, bev_img])
-        cv2.namedWindow("Cost Map", cv2.WINDOW_NORMAL)
-        cv2.imshow("Cost Map", combined_frame)
-        cv2.waitKey(10)
-"""
     try:
-        for timestep in tqdm(range(start_timestep, 4500), desc="Processing patches at timesteps"):
+        for timestep in tqdm(range(start_timestep, 2700), desc="Processing patches at timesteps"):
             try:
                 cur_img = robot_data.getImageAtTimestep(timestep)
                 if cur_img is None or cur_img.size == 0:
@@ -314,7 +302,6 @@ if __name__ == "__main__":
             print("No frames processed. Video not saved.")
         gc.collect()
 
-"""
 
 # Building costmap from global map only
 """
