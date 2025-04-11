@@ -173,12 +173,24 @@ class SynchronizeRosbag:
         raise FileNotFoundError(f"No valid ROS bag found in {bag_path}. Expected a .bag file or ROS2 bag files.")
 
     def image_callback(self, msg):
-        if self.SIM:
-            image = msg
-            msg = self.br.imgmsg_to_cv2(image, desired_encoding="bgr8")
-            msg = self.br.cv2_to_compressed_imgmsg(msg)
-            msg.header = image.header
-        self.image_msgs.append(msg)
+        if isinstance(msg, Image):
+            if self.SIM:
+                # Convert raw image to compressed
+                cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+                compressed_msg = self.br.cv2_to_compressed_imgmsg(cv_image)
+                compressed_msg.header = msg.header
+                self.image_msgs.append(compressed_msg)
+            else:
+                # Store raw image (or convert to compressed if needed)
+                cv_image = self.br.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+                compressed_msg = self.br.cv2_to_compressed_imgmsg(cv_image)
+                compressed_msg.header = msg.header
+                self.image_msgs.append(compressed_msg)
+        elif isinstance(msg, CompressedImage):
+            self.image_msgs.append(msg)
+        else:
+            cprint(f"Unsupported image message type: {type(msg)}", "red")
+            return
         self.sync_messages()
 
     def imu_callback(self, msg):
@@ -331,8 +343,8 @@ class SynchronizeRosbag:
     def save_data(self):
         if self.VISUAL:
             # Video writing code remains unchanged
-            #frame_size = (self.camera_info.width, self.camera_info.height)
-            frame_size = (1280, 720)
+            frame_size = (self.camera_info.width, self.camera_info.height)
+            #frame_size = (1080, 1920)
             fps = 10
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             video_save_path = os.path.join(self.BAG_PATH, "original.mp4")
