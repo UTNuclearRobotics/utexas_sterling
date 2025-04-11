@@ -22,7 +22,7 @@ class PaternPreAdaptation(nn.Module):
         self.visual_encoder = VisualEncoderModel(latent_size=self.latent_size)
         self.proprioceptive_encoder = ProprioceptionModel(latent_size=self.latent_size)
         
-        # Utility functions (2-layer MLP on 128D vectors with scaling to 0-255)
+        # Utility functions (2-layer MLP on 128D vectors)
         self.uvis = UtilityFuncVisual(latent_size=self.latent_size)
         self.upro = UtilityFuncProprioceptive(latent_size=self.latent_size)
         self.cost_head = CostNet()
