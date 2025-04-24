@@ -4,8 +4,7 @@ import os
 
 import cv2
 import numpy as np
-from camera_intrinsics import CameraIntrinsics
-from homography_matrix import HomographyMatrix
+from homography_params import get_homography_params
 from homography_from_chessboard import HomographyFromChessboardImage
 from homography_utils import *
 from robot_data_at_timestep import RobotDataAtTimestep
@@ -314,14 +313,14 @@ if __name__ == "__main__":
     image = cv2.imread(os.path.join(image_dir, image_file))
 
     chessboard_homography = HomographyFromChessboardImage(image, 9, 7)
-    H = HomographyMatrix().get_homography_matrix()
-    RT = HomographyMatrix().get_rigid_transform()
-    plane_normal = HomographyMatrix().get_plane_normal()
-    plane_distance = HomographyMatrix().get_plane_distance()
-    K, _ = CameraIntrinsics().get_camera_calibration_matrix()
+    H = get_homography_params().homography_matrix()
+    RT = get_homography_params().rigid_transform()
+    plane_normal = get_homography_params().plane_norm()
+    plane_distance = get_homography_params().plane_dist()
+    K, _ = get_homography_params().camera_intrinsics()
 
     robot_data = RobotDataAtTimestep(
-        os.path.join(script_dir, "../bags/ahg_courtyard_1/ahg_courtyard_1_synced.pkl")
+        os.path.join(script_dir, "../bags/agh_courtyard_2/agh_courtyard_2_synced.h5")
     )
 
     output_dimensions = (

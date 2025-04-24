@@ -44,11 +44,11 @@ class SynchronizeRosbag:
         self.TIME_THRESHOLD = time_threshold
 
         if self.SIM:
-            self.odometry_topic = "/odometry/filtered"
-            self.imu_topic = "/imu/data"
+            self.odometry_topic = "/odom"
+            self.imu_topic = "/imu"
         else:
-            self.odometry_topic = "odom"
-            self.imu_topic = "imu"
+            self.odometry_topic = "/odom"
+            self.imu_topic = "/imu"
 
         # Check if a .bag file exists within bag_path
         self.is_ros1, self.ros1_bag_file = self._check_for_ros1_bag(bag_path)
@@ -60,7 +60,6 @@ class SynchronizeRosbag:
         self.imu_msgs = deque()
         self.odom_msgs = deque()
         self.synced_msgs = {"image": [], "imu": [], "odom": []}
-        self.camera_info = [1280,720]
 
     def _check_for_ros1_bag(self, bag_path):
         """Check if there is a .bag file within bag_path."""
