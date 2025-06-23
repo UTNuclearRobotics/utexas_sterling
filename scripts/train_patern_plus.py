@@ -337,7 +337,7 @@ class PaternAdaptation(nn.Module):
         return extrapolated_prefs, extrapolated_labels, outlier_indices, adapt_phi_pro
 
     def retrain_visual_components(self, train_loader, val_loader, optimizer, scheduler, epochs, initial_weights=None):
-        l2_lambda = 0.01  # Hyperparameter for L2 penalty strength (tune as needed)
+        l2_lambda = 0.001  # Hyperparameter for L2 penalty strength (tune as needed)
         
         for epoch in range(epochs):
             self.train()
@@ -371,7 +371,7 @@ class PaternAdaptation(nn.Module):
                 pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)
                 ranking_loss = F.relu(1.0 - (pred_diff / 100.0)[pref_diff > 0]).mean()
                 cost_loss = F.mse_loss(final_cost, scaled_preferences)
-                task_loss = vis_loss + 0.5 * ranking_loss + cost_loss
+                task_loss = vis_loss + 0.5 * ranking_loss + 2.0 * cost_loss
 
                 # L2 penalty on weight changes from initial weights
                 if initial_weights:
@@ -398,7 +398,7 @@ class PaternAdaptation(nn.Module):
 
             avg_train_loss = total_train_loss / len(train_loader)
 
-            # Validation loop (unchanged except for logging)
+            # Validation loop
             self.eval()
             total_val_loss = 0
             with torch.no_grad():
@@ -611,34 +611,55 @@ def extract_preadapt_features(model, preadapt_loader, cache_dir, device):
     preadapt_phi_pro_path = os.path.join(cache_dir, "preadapt_phi_pro.pt")
     preadapt_prefs_path = os.path.join(cache_dir, "preadapt_prefs.pt")
     preadapt_labels_path = os.path.join(cache_dir, "preadapt_labels.npy")
+    preadapt_stats_path = os.path.join(cache_dir, "preadapt_inertial_stats.pt")
     os.makedirs(cache_dir, exist_ok=True)
 
-    if not os.path.exists(preadapt_phi_pro_path):
-        print("Extracting pre-adaptation features...")
+    if not os.path.exists(preadapt_phi_pro_path) or not os.path.exists(preadapt_stats_path):
+        print("Extracting pre-adaptation features and computing inertial statistics...")
         preadapt_phi_pro, preadapt_prefs, preadapt_labels_list = None, None, []
+        inertial_data = []
         for i, batch in enumerate(preadapt_loader):
             _, inertial, terrain_labels, preferences = batch
-            phi_pro = model.extract_proprioceptive_features(inertial)
+            inertial_data.append(inertial)
             preferences = preferences.to(device)
-            preadapt_phi_pro = phi_pro if preadapt_phi_pro is None else torch.cat([preadapt_phi_pro, phi_pro])
             preadapt_prefs = preferences if preadapt_prefs is None else torch.cat([preadapt_prefs, preferences])
             preadapt_labels_list.extend(terrain_labels)
-            del phi_pro, preferences
-            torch.cuda.empty_cache() if device.type == "cuda" else None
             if i % 10 == 0:
                 print(f"Processed {i * args.batch_size} pre-adaptation samples, RAM usage: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MB" if device.type == "cuda" else "CPU mode")
+
+        # Compute inertial statistics
+        inertial_data = torch.cat(inertial_data)
+        inertial_mean = inertial_data.mean(dim=0)
+        inertial_std = inertial_data.std(dim=0, unbiased=True) + 1e-6  # Avoid division by zero
+        torch.save({'mean': inertial_mean, 'std': inertial_std}, preadapt_stats_path)
+        print(f"Saved inertial statistics to {preadapt_stats_path}")
+
+        # Normalize inertial data and extract features
+        for i, batch in enumerate(preadapt_loader):
+            _, inertial, _, _ = batch
+            normalized_inertial = (inertial.to(device) - inertial_mean.to(device)) / inertial_std.to(device)
+            phi_pro = model.extract_proprioceptive_features(normalized_inertial)
+            preadapt_phi_pro = phi_pro if preadapt_phi_pro is None else torch.cat([preadapt_phi_pro, phi_pro])
+            del phi_pro
+            torch.cuda.empty_cache() if device.type == "cuda" else None
+
         preadapt_labels = np.array([hash(label) % n_clusters for label in preadapt_labels_list])
         print("Saving pre-adaptation features to cache...")
         torch.save(preadapt_phi_pro, preadapt_phi_pro_path)
         torch.save(preadapt_prefs, preadapt_prefs_path)
         np.save(preadapt_labels_path, preadapt_labels)
     else:
-        print("Loading pre-adaptation features from cache...")
+        print("Loading pre-adaptation features and inertial statistics from cache...")
         preadapt_phi_pro = torch.load(preadapt_phi_pro_path, map_location=device)
         preadapt_prefs = torch.load(preadapt_prefs_path, map_location=device)
         preadapt_labels = np.load(preadapt_labels_path)
-    print(f"Preadaptation features shape: {preadapt_phi_pro.shape}")
-    return preadapt_phi_pro, preadapt_prefs, preadapt_labels
+        inertial_stats = torch.load(preadapt_stats_path, map_location=device)
+        inertial_mean, inertial_std = inertial_stats['mean'], inertial_stats['std']
+
+    # Log feature ranges
+    print(f"Preadaptation phi_pro range: min={preadapt_phi_pro.min().item():.4f}, max={preadapt_phi_pro.max().item():.4f}, mean={preadapt_phi_pro.mean().item():.4f}, std={preadapt_phi_pro.std().item():.4f}")
+    print(f"Preadaptation phi_pro shape: {preadapt_phi_pro.shape}")
+    return preadapt_phi_pro, preadapt_prefs, preadapt_labels, {'mean': inertial_mean, 'std': inertial_std}
 
 def compute_distance_threshold(preadapt_phi_pro, preadapt_labels, cache_dir):
     print("Computing distance threshold...")
@@ -697,7 +718,7 @@ def compute_distance_threshold(preadapt_phi_pro, preadapt_labels, cache_dir):
     os.rmdir(distances_cache_dir)
     return max_distance_threshold
 
-def extract_adapt_features(model, adapt_loader, cache_dir):
+def extract_adapt_features(model, adapt_loader, cache_dir, inertial_stats):
     device = torch.device("cpu")
     adapt_patches_path = os.path.join(cache_dir, "adapt_patches.pt")
     adapt_inertial_path = os.path.join(cache_dir, "adapt_inertial.pt")
@@ -713,8 +734,16 @@ def extract_adapt_features(model, adapt_loader, cache_dir):
         adapt_patches = torch.load(adapt_patches_path, map_location=device)
         adapt_inertial = torch.load(adapt_inertial_path, map_location=device)
 
-    print("Extracting proprioceptive features for adaptation data...")
-    adapt_phi_pro = model.extract_proprioceptive_features(adapt_inertial)
+    print("Extracting proprioceptive features for adaptation data with normalization...")
+    # Normalize inertial data using pre-adaptation statistics
+    model_device = next(model.parameters()).device
+    normalized_inertial = (adapt_inertial.to(model_device) - inertial_stats['mean'].to(model_device)) / inertial_stats['std'].to(model_device)
+    adapt_phi_pro = model.extract_proprioceptive_features(normalized_inertial)
+    
+    # Log feature ranges
+    print(f"Adaptation phi_pro range: min={adapt_phi_pro.min().item():.4f}, max={adapt_phi_pro.max().item():.4f}, mean={adapt_phi_pro.mean().item():.4f}, std={adapt_phi_pro.std().item():.4f}")
+    print(f"Adaptation phi_pro shape: {adapt_phi_pro.shape}")
+    
     return adapt_patches, adapt_inertial, adapt_phi_pro
 
 # Updated extrapolate_and_cache_adapt_data function
@@ -957,12 +986,13 @@ if __name__ == "__main__":
     preadapt_loader, adapt_loader = create_dataloaders(preadapt_dataset, adapt_dataset, args.batch_size)
 
     preadapt_cache_dir = os.path.join(args.preadapt_bag, "cache")
-    preadapt_data = extract_preadapt_features(model, preadapt_loader, preadapt_cache_dir, device)
+    preadapt_data = extract_preadapt_features(model, preadapt_loader, preadapt_cache_dir, device)[:3]
+    inertial_stats = extract_preadapt_features(model, preadapt_loader, preadapt_cache_dir, device)[3]
     max_distance_threshold = compute_distance_threshold(preadapt_data[0], preadapt_data[2], preadapt_cache_dir)
 
     print("Visualizing pre-adaptation clusters...")
     preadapt_plot_path = os.path.join(args.preadapt_bag, "pre_adaptation_clusters.png")
-    adapt_patches, adapt_inertial, adapt_phi_pro = extract_adapt_features(model, adapt_loader, preadapt_cache_dir)
+    adapt_patches, adapt_inertial, adapt_phi_pro = extract_adapt_features(model, adapt_loader, preadapt_cache_dir, inertial_stats)
     visualize_clusters(preadapt_data[0], preadapt_data[2], adapt_phi_pro=adapt_phi_pro, save_path=preadapt_plot_path)
 
     adapt_data_file = extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, preadapt_data, max_distance_threshold, args)

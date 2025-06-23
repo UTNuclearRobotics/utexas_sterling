@@ -47,8 +47,8 @@ class SynchronizeRosbag:
             self.odometry_topic = "/odom"
             self.imu_topic = "/imu"
         else:
-            self.odometry_topic = "/odom"
-            self.imu_topic = "/imu"
+            self.odometry_topic = "/panther/odometry/wheels"
+            self.imu_topic = "/panther/imu/data"
 
         # Check if a .bag file exists within bag_path
         self.is_ros1, self.ros1_bag_file = self._check_for_ros1_bag(bag_path)
@@ -339,19 +339,18 @@ class SynchronizeRosbag:
 
                 pbar.update(1)
 
-    def save_data(self):
+    def save_data(self, skip_last_n=0):
         if self.VISUAL:
             # Video writing code remains unchanged
             frame_size = (self.camera_info.width, self.camera_info.height)
-            #frame_size = (1080, 1920)
             fps = 10
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             video_save_path = os.path.join(self.BAG_PATH, "original.mp4")
             video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, frame_size)
 
-            for i in tqdm(range(len(self.synced_msgs["image"])), desc="Writing video"):
+            # Limit video writing to exclude the last n frames
+            for i in tqdm(range(len(self.synced_msgs["image"]) - skip_last_n), desc="Writing video"):
                 img_data = self.synced_msgs["image"][i]["data"]
-                cprint(f"Decoding image {i} with {len(img_data)} bytes", "blue")
                 img = np.frombuffer(img_data, np.uint8)
                 img = cv2.imdecode(img, cv2.IMREAD_COLOR)
 
@@ -359,7 +358,6 @@ class SynchronizeRosbag:
                     cprint(f"Error: Failed to decode image {i}", "red")
                     continue
 
-                cprint(f"Decoded image {i} with shape {img.shape}", "green")
                 video_writer.write(img)
 
             video_writer.release()
@@ -375,29 +373,29 @@ class SynchronizeRosbag:
             imu_group = h5f.create_group('imu')
             odom_group = h5f.create_group('odom')
 
-            # Save image data
-            for i, msg in enumerate(self.synced_msgs['image']):
+            # Save image data, excluding the last n messages
+            for i, msg in enumerate(self.synced_msgs['image'][:-skip_last_n] if skip_last_n > 0 else self.synced_msgs['image']):
                 subgroup = image_group.create_group(str(i))
                 subgroup.create_dataset('timestamp', data=msg['timestamp'])
                 subgroup.create_dataset('data', data=msg['data'])
 
-            # Save IMU data
-            for i, msg in enumerate(self.synced_msgs['imu']):
+            # Save IMU data, excluding the last n messages
+            for i, msg in enumerate(self.synced_msgs['imu'][:-skip_last_n] if skip_last_n > 0 else self.synced_msgs['imu']):
                 subgroup = imu_group.create_group(str(i))
                 subgroup.create_dataset('timestamp', data=msg['timestamp'])
                 subgroup.create_dataset('orientation', data=msg['orientation'])
                 subgroup.create_dataset('angular_velocity', data=msg['angular_velocity'])
                 subgroup.create_dataset('linear_acceleration', data=msg['linear_acceleration'])
 
-            # Save odometry data
-            for i, msg in enumerate(self.synced_msgs['odom']):
+            # Save odometry data, excluding the last n messages
+            for i, msg in enumerate(self.synced_msgs['odom'][:-skip_last_n] if skip_last_n > 0 else self.synced_msgs['odom']):
                 subgroup = odom_group.create_group(str(i))
                 subgroup.create_dataset('timestamp', data=msg['timestamp'])
                 subgroup.create_dataset('pose', data=msg['pose'])
                 subgroup.create_dataset('twist', data=msg['twist'])
 
         cprint(f"Data saved successfully as HDF5: {file_path}", "green")
-        cprint(f"Total synced messages: {len(self.synced_msgs['imu'])}", "green")
+        cprint(f"Total synced messages saved: {len(self.synced_msgs['imu']) - skip_last_n}", "green")
 
     def calculate_avg_inter_group_time_difference(self):
         """
@@ -470,6 +468,7 @@ if __name__ == "__main__":
     parser.add_argument("--visual", "-v", action="store_true", default=False, help="Save video of processed rosbag.")
     parser.add_argument("--simulation", "-sim", action="store_true", default=False, help="Rosbag is from a Gazebo simulation.")
     parser.add_argument("--threshold", "-th", type=float, default=0.05, help="Threshold for syncing messages within a certain time window")
+    parser.add_argument("--skip_last_n", "-n", type=int, default=0, help="Number of timesteps to skip from the end of the data")
     args = parser.parse_args()
 
     cprint(
@@ -477,7 +476,8 @@ if __name__ == "__main__":
         f"Save Path: {args.save_path}\n"
         f"Visualization: {args.visual}\n"
         f"Simulation: {args.simulation}\n"
-        f"Time Threshold: {args.threshold}",
+        f"Time Threshold: {args.threshold}\n"
+        f"Skip Last N Timesteps: {args.skip_last_n}",
         "blue",
     )
 
@@ -488,5 +488,5 @@ if __name__ == "__main__":
         time_threshold=args.threshold
     )
     processor.read_rosbag()
-    processor.save_data()
+    processor.save_data(skip_last_n=args.skip_last_n)
     processor.calculate_avg_inter_group_time_difference()
