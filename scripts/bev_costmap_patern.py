@@ -24,7 +24,7 @@ class BEVCostmap:
     Cost inference process for local planning at deployment using trained preference predictor.
     """
 
-    def __init__(self, model_path, save_path=None):
+    def __init__(self, model_path, save_path=None, adapted=True):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.save_path = save_path
 
@@ -32,13 +32,22 @@ class BEVCostmap:
         self.model = PaternPreAdaptation(self.device).to(self.device)
 
         # Define the expected .pt files for each submodule
-        weight_files = {
-            "visual_encoder": "fvis.pt",
-            "proprioceptive_encoder": "fpro.pt",
-            "uvis": "uvis.pt",
-            "upro": "upro.pt",
-            "cost_head": "cost_head.pt"
-        }
+        if adapted:
+            weight_files = {
+                "visual_encoder": "fvis_adapted.pt",
+                "proprioceptive_encoder": "fpro.pt",
+                "uvis": "uvis_adapted.pt",
+                "upro": "upro.pt",
+                "cost_head": "cost_head_adapted.pt"
+            }
+        else:
+            weight_files = {
+                "visual_encoder": "fvis.pt",
+                "proprioceptive_encoder": "fpro.pt",
+                "uvis": "uvis.pt",
+                "upro": "upro.pt",
+                "cost_head": "cost_head.pt"
+            }
 
         # Load weights for each submodule
         for submodule_name, file_name in weight_files.items():
@@ -214,10 +223,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get BEV cost visual using trained preference predictor.")
     parser.add_argument("-m","-model_bag", type=str, required=True, help="Bag directory with model files inside.")
     parser.add_argument("-b","-synced_bag", type=str, required=True, help="Bag directory with synchronized HDF5 file inside.")
+    parser.add_argument("-a","-use_adapted", type=bool, default=True, help="Use adapted models if True, else use preadapted model.")
+    parser.add_argument("-v", "-save_vid", type=bool, default=False, help="Save video if True or play live if False.")
     args = parser.parse_args()
 
     model_path = args.m
     bag_path = args.b
+    adapted = args.a
+    save_vid = args.v
     if not os.path.exists(bag_path):
         raise FileNotFoundError(f"Bag path does not exist: {bag_path}")
     h5_files = [file for file in os.listdir(bag_path) if file.endswith("_synced.h5")]
@@ -232,7 +245,7 @@ if __name__ == "__main__":
 
     # Search for pre-trained weights
     models_dir = os.path.join(args.m, "models")
-    bev_costmap = BEVCostmap(models_dir, save_path=bag_path)
+    bev_costmap = BEVCostmap(models_dir, save_path=bag_path, adapted=adapted)
     max_timesteps = robot_data.getNTimesteps()
     start_timestep = min(2300, max_timesteps)
     frame_count = 0
@@ -240,7 +253,7 @@ if __name__ == "__main__":
     frame_size = None
 
     try:
-        for timestep in tqdm(range(start_timestep, 2700), desc="Processing patches at timesteps"):
+        for timestep in tqdm(range(start_timestep, max_timesteps), desc="Processing patches at timesteps"):
             try:
                 cur_img = robot_data.getImageAtTimestep(timestep)
                 if cur_img is None or cur_img.size == 0:
@@ -260,20 +273,45 @@ if __name__ == "__main__":
                     print(f"Warning: Visualization failed at timestep {timestep}, skipping.")
                     continue
 
-                # Set frame size and initialize VideoWriter after first successful frame
+                # Set frame size after first successful frame
                 if frame_size is None:
                     frame_size = (bev_img.shape[1], bev_img.shape[0])  # (width, height)
-                    combined_frame_size = (frame_size[0], frame_size[1] * 2)
-                    video_save_path = os.path.join(args.b, "costmap.mp4")
-                    print(f"Initializing VideoWriter with frame size {combined_frame_size}")
-                    video_writer = cv2.VideoWriter(video_save_path, cv2.VideoWriter_fourcc(*"mp4v"), 10, combined_frame_size)
-                    if not video_writer.isOpened():
-                        raise RuntimeError(f"Failed to open VideoWriter for {video_save_path}")
+                    combined_frame_size = (frame_size[0], frame_size[1] * 2)  # For vertical stacking
+
+                    if save_vid:
+                        video_save_path = os.path.join(args.synced_bag, "costmap.mp4")
+                        print(f"Initializing VideoWriter with frame size {combined_frame_size}")
+                        video_writer = cv2.VideoWriter(
+                            video_save_path, 
+                            cv2.VideoWriter_fourcc(*"mp4v"), 
+                            10, 
+                            combined_frame_size
+                        )
+                        if not video_writer.isOpened():
+                            raise RuntimeError(f"Failed to open VideoWriter for {video_save_path}")
+                    else:
+                        # Initialize OpenCV window for live display
+                        cv2.namedWindow("BEV Costmap", cv2.WINDOW_NORMAL)
+                        #cv2.resizeWindow("BEV Costmap", frame_size[0], frame_size[1] * 2)
+
+                # Stack BEV and costmap vertically
+                combined_img = np.vstack((bev_img, visualize))
+
+                if save_vid:
+                    # Write to video
+                    video_writer.write(combined_img)
+                else:
+                    # Display live
+                    cv2.imshow("BEV Costmap", combined_img)
+                    # Wait for 1ms and check for 'q' key to exit
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        print("User interrupted display.")
+                        break
 
                 frame_count += 1
 
-                # Write and clear processed_imgs every 1000 frames
-                if frame_count % 1000 == 0 and frame_count > 0:
+                # Write and clear processed_imgs every 1000 frames (for save_vid=True)
+                if save_vid and frame_count % 1000 == 0 and frame_count > 0:
                     print(f"Writing video segment at frame {frame_count}")
                     bev_costmap.save_data(video_writer, frame_count, frame_size)
 
@@ -283,22 +321,26 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Critical error during loop: {e}. Saving video with processed frames.")
     finally:
-        # Save any remaining frames
-        if bev_costmap.processed_imgs["bev"] or bev_costmap.processed_imgs["cost"]:
+        # Save any remaining frames (for save_vid=True)
+        if save_vid and bev_costmap.processed_imgs["bev"] or bev_costmap.processed_imgs["cost"]:
             print(f"Saving remaining frames: {len(bev_costmap.processed_imgs['bev'])} BEV, {len(bev_costmap.processed_imgs['cost'])} Cost")
             bev_costmap.save_data(video_writer, frame_count, frame_size)
-        if video_writer:
+        
+        # Release resources
+        if save_vid and video_writer:
             video_writer.release()
+        if not save_vid:
+            cv2.destroyAllWindows()
+
         print(f"Total processed frames: {frame_count}")
-        if frame_count > 0:
+        if save_vid and frame_count > 0:
             print(f"Video saved successfully: {video_save_path}")
-            # Check file size
             if os.path.exists(video_save_path):
                 file_size = os.path.getsize(video_save_path)
                 print(f"Video file size: {file_size / (1024 * 1024):.2f} MB")
             else:
                 print(f"Video file does not exist at {video_save_path}")
-        else:
+        elif save_vid:
             print("No frames processed. Video not saved.")
         gc.collect()
 

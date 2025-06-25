@@ -46,7 +46,7 @@ class OutlierLabelUI(Gtk.Application):
         self.current_group = 0
         self.rendered_clusters = None
         self.cluster_indices = None
-        self.base_cluster_id = None
+        self.base_cluster_id = max(int(v) for v in self.preadapt_name_to_id.values()) + 1 if self.preadapt_name_to_id else 0
         self.cluster_id_label = None  # Initialize here to avoid attribute error
 
     def do_activate(self):
@@ -72,7 +72,6 @@ class OutlierLabelUI(Gtk.Application):
         
         max_possible_clusters = min(len(outlier_indices_cpu), 10)
         if max_possible_clusters <= 1:
-            n_clusters = 1
             group_labels = np.zeros(len(outlier_indices_cpu), dtype=int)
         else:
             best_n_clusters = 1
@@ -123,7 +122,7 @@ class OutlierLabelUI(Gtk.Application):
             return
         
         window = Gtk.ApplicationWindow(application=self, title=f"Outlier Group {self.current_group} ({len(cluster_patches)} patches)")
-        window.set_default_size(800, 600)
+        window.set_default_size(1200, 800)
         
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         vbox.set_margin_top(10)
@@ -182,6 +181,7 @@ class OutlierLabelUI(Gtk.Application):
                 print(f"Matched '{label}' to pre-adaptation cluster ID {assigned_cluster_id}")
             else:
                 assigned_cluster_id = default_cluster_id
+                self.preadapt_name_to_id[label] = assigned_cluster_id  # Add new label to preadapt_name_to_id
                 print(f"Assigned new cluster ID {assigned_cluster_id} to '{label}'")
             
             self.cluster_id_label.set_text(f"Assigned Cluster ID: {assigned_cluster_id}")
@@ -230,14 +230,16 @@ class OutlierLabelUI(Gtk.Application):
 
 class PaternAdaptation(nn.Module):
     def __init__(self, device, pretrained_weights_path, latent_size=128):
-        super(PaternAdaptation, self).__init__()
+        super().__init__()
         self.device = device
         self.latent_size = latent_size
-        self.visual_encoder = VisualEncoderModel(latent_size=self.latent_size).to(device)
-        self.proprioceptive_encoder = ProprioceptionModel(latent_size=self.latent_size).to(device)
-        self.uvis = UtilityFuncVisual(latent_size=self.latent_size).to(device)
-        self.upro = UtilityFuncProprioceptive(latent_size=self.latent_size).to(device)
-        self.cost_head = CostNet(latent_size=self.latent_size).to(device)
+        self.models = nn.ModuleDict({
+            "visual_encoder": VisualEncoderModel(latent_size=latent_size).to(device),
+            "proprioceptive_encoder": ProprioceptionModel(latent_size=latent_size).to(device),
+            "uvis": UtilityFuncVisual(latent_size=latent_size).to(device),
+            "upro": UtilityFuncProprioceptive(latent_size=latent_size).to(device),
+            "cost_head": CostNet(latent_size=latent_size).to(device)
+        })
 
         weight_files = {
             "visual_encoder": "fvis.pt",
@@ -248,208 +250,282 @@ class PaternAdaptation(nn.Module):
         }
         for name, file in weight_files.items():
             path = os.path.join(pretrained_weights_path, file)
-            if os.path.exists(path):
-                state_dict = torch.load(path, weights_only=True, map_location=device)
-                getattr(self, name).load_state_dict(state_dict)
-                print(f"Loaded {name} from {path}")
-            else:
-                raise FileNotFoundError(f"Missing {file} in {pretrained_weights_path}")
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Missing {file}")
+            state_dict = torch.load(path, weights_only=True, map_location=device)
+            self.models[name].load_state_dict(state_dict)
 
-        for param in self.proprioceptive_encoder.parameters():
+        for param in self.models["proprioceptive_encoder"].parameters():
             param.requires_grad = False
-        for param in self.upro.parameters():
+        for param in self.models["upro"].parameters():
             param.requires_grad = False
 
         self.triplet_loss = nn.TripletMarginLoss(margin=1.0)
 
     def forward(self, patches, inertial=None):
         patches = patches.to(self.device)
-        phi_vis = self.visual_encoder(patches)
-        uvis_pred = self.uvis(phi_vis)
-        if inertial is not None:
-            inertial = inertial.to(self.device)
-            phi_pro = self.proprioceptive_encoder(inertial.float())
-            upro_pred = self.upro(phi_pro)
-        else:
-            phi_pro = torch.zeros_like(phi_vis)
-            upro_pred = torch.zeros_like(uvis_pred)
-        final_cost = self.cost_head(uvis_pred)
+        phi_vis = self.models["visual_encoder"](patches)
+        uvis_pred = self.models["uvis"](phi_vis)
+        phi_pro = self.models["proprioceptive_encoder"](inertial.float().to(self.device)) if inertial is not None else torch.zeros_like(phi_vis)
+        upro_pred = self.models["upro"](phi_pro) if inertial is not None else torch.zeros_like(uvis_pred)
+        final_cost = self.models["cost_head"](uvis_pred)
         return phi_vis, phi_pro, uvis_pred, upro_pred, final_cost
 
     def extract_proprioceptive_features(self, inertial_data):
         self.eval()
         with torch.no_grad():
-            phi_pro = self.proprioceptive_encoder(inertial_data.to(self.device).float())
-        return phi_pro
+            return self.models["proprioceptive_encoder"](inertial_data.to(self.device).float())
+
+    def compute_preadapt_encodings(self, preadapt_loader, name_to_id):
+        """
+        Compute ground truth visual encodings and proprioceptive cluster centers.
+        """
+        self.eval()
+        all_phi_vis, all_phi_pro, all_labels = [], [], []
+        with torch.no_grad():
+            for batch in preadapt_loader:
+                patches, inertial, terrain_labels, _ = batch
+                patches = patches.to(self.device)
+                inertial = inertial.to(self.device)
+                
+                # Convert terrain_labels to numerical tensor using name_to_id
+                if isinstance(terrain_labels, torch.Tensor):
+                    terrain_labels = terrain_labels.to(self.device)
+                else:
+                    # Handle list of strings or single string
+                    if isinstance(terrain_labels, (list, tuple)):
+                        terrain_labels = [name_to_id[label] for label in terrain_labels]
+                    else:
+                        terrain_labels = [name_to_id[terrain_labels]]
+                    terrain_labels = torch.tensor(terrain_labels, device=self.device, dtype=torch.long)
+                
+                all_phi_vis.append(self.models["visual_encoder"](patches))
+                all_phi_pro.append(self.extract_proprioceptive_features(inertial))
+                all_labels.append(terrain_labels)
+            
+        all_phi_vis = torch.cat(all_phi_vis)
+        all_phi_pro = torch.cat(all_phi_pro)
+        all_labels = torch.cat(all_labels)
+        
+        unique_labels, inverse = torch.unique(all_labels, return_inverse=True)
+        n_clusters = len(unique_labels)
+        if n_clusters < 1:
+            raise ValueError("No clusters found")
+        
+        cluster_phi_vis = {}
+        cluster_centers = torch.zeros(n_clusters, self.latent_size, device=self.device)
+        
+        for i, label in enumerate(unique_labels):
+            mask = inverse == i
+            cluster_phi_vis[label.item()] = all_phi_vis[mask].mean(dim=0)
+            cluster_centers[i] = all_phi_pro[mask].mean(dim=0)
+        
+        return cluster_phi_vis, cluster_centers
+
+    def compute_triplet_loss(self, phi_vis, phi_pro, terrain_labels, cluster_phi_vis, cluster_centers, max_distance_threshold):
+        """
+        Compute triplet loss with ground truth alignment for proprioceptively similar patches.
+        """
+        batch_size = phi_vis.shape[0]
+        max_existing_label = max(cluster_phi_vis.keys()) if cluster_phi_vis else -1
+        
+        distances = torch.cdist(phi_pro, cluster_centers)
+        min_distances, nearest_indices = distances.min(dim=1)
+        within_threshold = min_distances <= max_distance_threshold
+        
+        cluster_labels = torch.tensor(list(cluster_phi_vis.keys()), device=self.device)
+        valid_mask = (within_threshold & (terrain_labels <= max_existing_label)).to(torch.bool)
+        
+        if valid_mask.any():
+            anchors = torch.stack([cluster_phi_vis[cluster_labels[nearest_indices[i]].item()] for i in range(batch_size) if valid_mask[i]])
+            positives = phi_vis[valid_mask]
+            neg_indices = (nearest_indices[valid_mask] + 1) % len(cluster_labels)
+            negatives = torch.stack([cluster_phi_vis[cluster_labels[neg_indices[i]].item()] for i in range(len(anchors))])
+            triplet_loss = self.triplet_loss(anchors, positives, negatives)
+            triplet_loss = triplet_loss * valid_mask.sum() / batch_size
+        else:
+            pos_mask = (terrain_labels.unsqueeze(1) == terrain_labels.unsqueeze(0)) & ~torch.eye(batch_size, dtype=torch.bool, device=self.device)
+            neg_mask = ~pos_mask
+            if pos_mask.any() and neg_mask.any():
+                pos_indices = pos_mask.nonzero(as_tuple=True)[1].reshape(batch_size, -1)[:, 0]
+                neg_indices = neg_mask.nonzero(as_tuple=True)[1].reshape(batch_size, -1)[:, 0]
+                triplet_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
+            else:
+                print("Warning: No valid triplets found in batch. Returning zero loss.")
+                triplet_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+        
+        return triplet_loss
+
+    def compute_contrastive_loss(self, phi_vis, terrain_labels, margin=1.0):
+        """
+        Compute contrastive loss for novel terrain clusters.
+        """
+        batch_size = phi_vis.shape[0]
+        distances = torch.cdist(phi_vis, phi_vis)
+        pos_mask = (terrain_labels.unsqueeze(1) == terrain_labels.unsqueeze(0)) & ~torch.eye(batch_size, dtype=torch.bool, device=self.device)
+        neg_mask = ~pos_mask
+        
+        loss = 0.0
+        if pos_mask.any():
+            loss += distances[pos_mask].mean()
+        if neg_mask.any():
+            loss += F.relu(margin - distances[neg_mask]).mean()
+        
+        return loss if loss > 0 else torch.tensor(0.0, device=self.device, requires_grad=True)
 
     def extrapolate_preferences(self, adaptation_inertial, preadapt_phi_pro, preadapt_preferences, preadapt_labels, max_distance_threshold):
-        adapt_phi_pro = self.extract_proprioceptive_features(adaptation_inertial)
+        # Extract features and ensure device consistency
+        adapt_phi_pro = self.extract_proprioceptive_features(adaptation_inertial).to(self.device)
         n_samples = adapt_phi_pro.shape[0]
         if n_samples < 1:
-            raise ValueError("Adaptation-set has no samples.")
+            raise ValueError("Empty adaptation set")
+        preadapt_phi_pro, preadapt_prefs, preadapt_labels = [
+            x.to(self.device) for x in [preadapt_phi_pro, preadapt_preferences, preadapt_labels]
+        ]
 
-        preadapt_phi_pro = preadapt_phi_pro.to(self.device)
-        preadapt_prefs = preadapt_preferences.to(self.device)
-        preadapt_labels = preadapt_labels.to(self.device)
-
-        unique_clusters = torch.unique(preadapt_labels)
+        # Initialize cluster statistics
+        unique_clusters, inverse = torch.unique(preadapt_labels, return_inverse=True)
         n_clusters = len(unique_clusters)
         if n_clusters < 1:
-            raise ValueError("No clusters found in pre-adaptation labels.")
-
-        preadapt_cluster_centers = torch.zeros((n_clusters, preadapt_phi_pro.shape[1]), device=self.device)
+            raise ValueError("No clusters found")
+        cluster_centers = torch.zeros((n_clusters, preadapt_phi_pro.shape[1]), device=self.device)
         cluster_prefs = torch.zeros(n_clusters, device=self.device)
-        cluster_labels = torch.zeros(n_clusters, dtype=torch.long, device=self.device)
         cluster_std = torch.zeros(n_clusters, device=self.device)
 
-        for i, cluster_id in enumerate(unique_clusters):
-            cluster_mask = (preadapt_labels == cluster_id)
-            cluster_points = preadapt_phi_pro[cluster_mask]
-            preadapt_cluster_centers[i] = cluster_points.mean(dim=0)
-            cluster_prefs[i] = preadapt_prefs[cluster_mask].mean()
-            cluster_labels[i] = cluster_id
-            cluster_std[i] = torch.std(cluster_points, dim=0).mean()
+        # Compute cluster statistics
+        for i in range(n_clusters):
+            mask = inverse == i
+            points = preadapt_phi_pro[mask]
+            cluster_centers[i] = points.mean(dim=0)
+            cluster_prefs[i] = preadapt_prefs[mask].mean()
+            std = torch.std(points, dim=0, unbiased=False) if points.shape[0] > 1 else torch.tensor(0.0, device=self.device)
+            cluster_std[i] = std.mean() if std.numel() > 0 else 0.0
 
-        distances = torch.cdist(adapt_phi_pro, preadapt_cluster_centers)
-        sorted_distances, sorted_indices = distances.sort(dim=1)
-        min_distances = sorted_distances[:, 0]
-        nearest_cluster_indices = sorted_indices[:, 0]
-
-        dynamic_thresholds = cluster_std[nearest_cluster_indices] * 2.0
+        # Compute distances and find nearest clusters
+        distances = torch.cdist(adapt_phi_pro, cluster_centers)
+        min_distances, nearest_indices = distances.min(dim=1)
+        dynamic_thresholds = cluster_std[nearest_indices] * 2.0
+        max_threshold = torch.tensor(max_distance_threshold, device=self.device)
+        within_threshold = min_distances <= torch.minimum(dynamic_thresholds, max_threshold)
 
         extrapolated_prefs = torch.zeros(n_samples, device=self.device)
-        extrapolated_labels = cluster_labels[nearest_cluster_indices]
-        within_threshold = min_distances <= dynamic_thresholds
+        extrapolated_labels = unique_clusters[nearest_indices]
+        extrapolated_prefs[within_threshold] = cluster_prefs[nearest_indices[within_threshold]]
 
-        extrapolated_prefs[within_threshold] = cluster_prefs[nearest_cluster_indices[within_threshold]]
-
-        outside_threshold = ~within_threshold
-        outlier_indices = torch.where(outside_threshold)[0]
-        
-        if outside_threshold.sum() > 0:
-            nearest_two_indices = sorted_indices[outside_threshold, :2]
-            nearest_two_distances = sorted_distances[outside_threshold, :2]
-            weights = 1.0 / (nearest_two_distances + 1e-6)
+        # Handle points outside threshold with inverse distance weighting
+        outside_indices = torch.where(~within_threshold)[0]
+        if outside_indices.numel() > 0:
+            nearest_two = distances[outside_indices].topk(2, largest=False, dim=1)
+            weights = 1.0 / (nearest_two.values + 1e-6)
             weights = weights / weights.sum(dim=1, keepdim=True)
-            prefs_nearest_two = cluster_prefs[nearest_two_indices]
-            extrapolated_prefs[outside_threshold] = (prefs_nearest_two * weights).sum(dim=1)
+            extrapolated_prefs[outside_indices] = (cluster_prefs[nearest_two.indices] * weights).sum(dim=1)
 
-        return extrapolated_prefs, extrapolated_labels, outlier_indices, adapt_phi_pro
+        return extrapolated_prefs, extrapolated_labels, outside_indices, adapt_phi_pro
 
-    def retrain_visual_components(self, train_loader, val_loader, optimizer, scheduler, epochs, initial_weights=None):
-        l2_lambda = 0.001  # Hyperparameter for L2 penalty strength (tune as needed)
-        
+    def retrain_visual_components(self, train_loader, val_loader, optimizer, scheduler, epochs, preadapt_loader, max_distance_threshold, name_to_id):
+        """
+        Retrain visual encoder, utility function, and cost network.
+        """
+        cluster_phi_vis, cluster_centers = self.compute_preadapt_encodings(preadapt_loader, name_to_id)
+        max_existing_label = max(cluster_phi_vis.keys()) if cluster_phi_vis else -1
+
         for epoch in range(epochs):
-            self.train()
-            total_train_loss = 0
-
-            for batch in train_loader:
-                patches, inertial, terrain_labels, preferences = [x.to(self.device) for x in batch]
-                preferences = preferences.float()
-                batch_size = patches.shape[0]
-
-                scaled_preferences = train_loader.dataset.dataset.get_scaled_preferences(preferences)
-                phi_vis, _, uvis_pred, _, final_cost = self.forward(patches, inertial)
-
-                # Triplet loss indices
-                labels_expanded = terrain_labels.unsqueeze(1)
-                pos_mask = (labels_expanded == labels_expanded.t()) & ~torch.eye(batch_size, dtype=torch.bool, device=self.device)
-                neg_mask = (labels_expanded != labels_expanded.t())
-
-                pos_indices = torch.where(pos_mask)[1]
-                neg_indices = torch.where(neg_mask)[1]
-
-                if len(pos_indices) < batch_size or len(neg_indices) < batch_size:
-                    pos_indices = torch.randint(0, batch_size, (batch_size,), device=self.device)
-                    neg_indices = torch.randint(0, batch_size, (batch_size,), device=self.device)
+            for training, loader in [(True, train_loader), (False, val_loader)]:
+                if training:
+                    self.train()
                 else:
-                    pos_indices = pos_indices[torch.randperm(len(pos_indices), device=self.device)[:batch_size]]
-                    neg_indices = neg_indices[torch.randperm(len(neg_indices), device=self.device)[:batch_size]]
-
-                vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
-                pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
-                pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)
-                ranking_loss = F.relu(1.0 - (pred_diff / 100.0)[pref_diff > 0]).mean()
-                cost_loss = F.mse_loss(final_cost, scaled_preferences)
-                task_loss = vis_loss + 0.5 * ranking_loss + 2.0 * cost_loss
-
-                # L2 penalty on weight changes from initial weights
-                if initial_weights:
-                    l2_penalty = 0
-                    for name, param in self.visual_encoder.named_parameters():
-                        if name in initial_weights['visual_encoder']:
-                            l2_penalty += torch.norm(param - initial_weights['visual_encoder'][name].to(param.device), p=2) ** 2
-                    for name, param in self.uvis.named_parameters():
-                        if name in initial_weights['uvis']:
-                            l2_penalty += torch.norm(param - initial_weights['uvis'][name].to(param.device), p=2) ** 2
-                    for name, param in self.cost_head.named_parameters():
-                        if name in initial_weights['cost_head']:
-                            l2_penalty += torch.norm(param - initial_weights['cost_head'][name].to(param.device), p=2) ** 2
-                    total_loss = task_loss + l2_lambda * l2_penalty
-                    #print(f"Batch - Task Loss: {task_loss.item():.4f}, L2 Penalty: {l2_lambda * l2_penalty.item():.4f}")
-                else:
-                    total_loss = task_loss
-
-                optimizer.zero_grad()
-                total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-                optimizer.step()
-                total_train_loss += total_loss.item()
-
-            avg_train_loss = total_train_loss / len(train_loader)
-
-            # Validation loop
-            self.eval()
-            total_val_loss = 0
-            with torch.no_grad():
-                for batch in val_loader:
+                    self.eval()
+                    total_cosine_sim, total_valid_samples, total_contrastive_loss, total_novel_samples = 0, 0, 0, 0
+                
+                total_loss = 0
+                for batch in loader:
                     patches, inertial, terrain_labels, preferences = [x.to(self.device) for x in batch]
                     preferences = preferences.float()
                     batch_size = patches.shape[0]
 
-                    scaled_preferences = val_loader.dataset.dataset.get_scaled_preferences(preferences)
-                    phi_vis, _, uvis_pred, _, final_cost = self.forward(patches, inertial)
+                    scaled_preferences = loader.dataset.dataset.get_scaled_preferences(preferences)
+                    phi_vis, phi_pro, uvis_pred, _, final_cost = self.forward(patches, inertial)
 
-                    labels_expanded = terrain_labels.unsqueeze(1)
-                    pos_mask = (labels_expanded == labels_expanded.t()) & ~torch.eye(batch_size, dtype=torch.bool, device=self.device)
-                    neg_mask = (labels_expanded != labels_expanded.t())
-                    
-                    pos_indices = torch.where(pos_mask)[1]
-                    neg_indices = torch.where(neg_mask)[1]
-                    
-                    if len(pos_indices) < batch_size or len(neg_indices) < batch_size:
-                        pos_indices = torch.randint(0, batch_size, (batch_size,), device=self.device)
-                        neg_indices = torch.randint(0, batch_size, (batch_size,), device=self.device)
-                    else:
-                        pos_indices = pos_indices[torch.randperm(len(pos_indices), device=self.device)[:batch_size]]
-                        neg_indices = neg_indices[torch.randperm(len(neg_indices), device=self.device)[:batch_size]]
-
-                    vis_loss = self.triplet_loss(phi_vis, phi_vis[pos_indices], phi_vis[neg_indices])
+                    vis_loss = self.compute_triplet_loss(phi_vis, phi_pro, terrain_labels, cluster_phi_vis, cluster_centers, max_distance_threshold)
+                    contrastive_loss = self.compute_contrastive_loss(phi_vis, terrain_labels) if (terrain_labels > max_existing_label).any() else 0
                     pred_diff = uvis_pred.unsqueeze(1) - uvis_pred.unsqueeze(0)
                     pref_diff = scaled_preferences.unsqueeze(1) - scaled_preferences.unsqueeze(0)
-                    ranking_loss = F.relu(1.0 - (pred_diff / 100.0)[pref_diff > 0]).mean()
-                    cost_loss = F.mse_loss(final_cost, scaled_preferences)
-                    total_val_loss += (vis_loss + 0.5 * ranking_loss + cost_loss).item()  # No L2 penalty in validation
-            avg_val_loss = total_val_loss / len(val_loader)
+                    ranking_loss = F.relu(1.0 - pred_diff[pref_diff > 0]).mean() if pref_diff.gt(0).any() else 0
+                    cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences, beta=1.0)
+                    task_loss = vis_loss + ranking_loss + 2.0 * cost_loss + 0.5 * contrastive_loss
+
+                    if training:
+                        optimizer.zero_grad()
+                        task_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                        optimizer.step()
+                    
+                    total_loss += task_loss.item()
+
+                    if not training:
+                        distances = torch.cdist(phi_pro, cluster_centers)
+                        min_distances, nearest_indices = distances.min(dim=1)
+                        valid_mask = (min_distances <= max_distance_threshold) & (terrain_labels <= max_existing_label)
+                        if valid_mask.any():
+                            cluster_labels = torch.tensor(list(cluster_phi_vis.keys()), device=self.device)
+                            valid_indices = valid_mask.nonzero(as_tuple=True)[0]
+                            total_cosine_sim += F.cosine_similarity(
+                                phi_vis[valid_indices], 
+                                torch.stack([cluster_phi_vis[cluster_labels[nearest_indices[i]].item()] for i in valid_indices])
+                            ).sum().item()
+                            total_valid_samples += valid_mask.sum().item()
+                        if (terrain_labels > max_existing_label).any():
+                            total_contrastive_loss += contrastive_loss.item()
+                            total_novel_samples += (terrain_labels > max_existing_label).sum().item()
+
+                avg_loss = total_loss / len(loader)
+                print(f"Epoch [{epoch+1}/{epochs}], {'Train' if training else 'Val'} Loss: {avg_loss:.4f}")
+                if not training and total_valid_samples > 0:
+                    print(f"Known Terrain Metrics: Cosine Similarity: {total_cosine_sim / total_valid_samples:.4f}")
+                if not training and total_novel_samples > 0:
+                    print(f"Novel Terrain Metrics: Contrastive Loss: {total_contrastive_loss / (len(val_loader) * batch_size / total_novel_samples):.4f}")
             
             scheduler.step()
-            print(f"Epoch [{epoch+1}/{epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
 
     def save_adapted_models(self, save_dir):
         os.makedirs(save_dir, exist_ok=True)
-        for name, model in [("fvis_adapted.pt", self.visual_encoder), ("uvis_adapted.pt", self.uvis), ("cost_head_adapted.pt", self.cost_head)]:
-            torch.save(model.state_dict(), os.path.join(save_dir, name))
         print(f"Saved models to {save_dir}")
+        for name, file in [
+            ("visual_encoder", "fvis_adapted.pt"),
+            ("uvis", "uvis_adapted.pt"),
+            ("cost_head", "cost_head_adapted.pt")
+        ]:
+            torch.save(self.models[name].state_dict(), os.path.join(save_dir, file))
 
-def visualize_clusters(phi_pro, labels, adapt_phi_pro=None, save_path=None, title="Clusters"):
+def visualize_clusters(phi_pro, labels, adapt_phi_pro=None, save_path=None, title="Clusters", label_to_name=None):
     pca = PCA(n_components=2, random_state=42)
     phi_pro_2d = pca.fit_transform(phi_pro.cpu().numpy())
     plt.figure(figsize=(10, 8))
-    plt.scatter(phi_pro_2d[:, 0], phi_pro_2d[:, 1], c=labels, cmap='tab10', alpha=0.6)
+
+    # Ensure labels are integers
+    if not np.issubdtype(labels.dtype, np.integer):
+        if label_to_name:
+            # Map string labels to integers using label_to_name's inverse
+            label_map = {v: k for k, v in label_to_name.items()}
+            labels = np.array([label_map.get(label, -1) if isinstance(label, str) else int(label) for label in labels])
+        else:
+            labels = np.array([int(label) if label != -1 else -1 for label in labels])
+
+    for label in np.unique(labels):
+        mask = labels == label
+        if not mask.any():
+            continue
+        label_name = label_to_name.get(label, f"Cluster_{label}" if label != -1 else "Outliers")
+        plt.scatter(phi_pro_2d[mask, 0], phi_pro_2d[mask, 1], color=plt.cm.tab10(int(label) % 10), alpha=0.6, label=label_name)
+
     if adapt_phi_pro is not None:
         adapt_phi_pro_2d = pca.transform(adapt_phi_pro.cpu().numpy())
-        plt.scatter(adapt_phi_pro_2d[:, 0], adapt_phi_pro_2d[:, 1], c='red', marker='x', s=100)
-    plt.title(title)
+        plt.scatter(adapt_phi_pro_2d[:, 0], adapt_phi_pro_2d[:, 1], color='black', marker='x', s=50, label='Adaptation Samples')
+
+    plt.title(f"{title} (Explained Variance: {pca.explained_variance_ratio_.sum():.2%})")
+    plt.xlabel("PCA Component 1")
+    plt.ylabel("PCA Component 2")
+    plt.legend()
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
@@ -465,82 +541,40 @@ def render_and_save_cluster_patches(patches, labels, save_dir, prefix="cluster")
             grid_image = renderer.image_grid(cluster_patches)
             cv2.imwrite(os.path.join(save_dir, f"{prefix}_{cluster_id}.png"), cv2.cvtColor(grid_image, cv2.COLOR_RGB2BGR))
 
-def process_batch_to_disk(loader, cache_dir, device="cpu"):
-    print("Extracting adaptation features...")
-    adapt_patches_list = []
-    adapt_inertial_list = []
-    
-    # Ensure device is CPU to avoid GPU memory issues
+def process_batch_to_disk(loader, cache_dir):
     device = torch.device("cpu")
-    
-    for i, batch in enumerate(loader):
-        patch1, patch2, imu_sample = batch
-        # Move to CPU explicitly
-        patch1 = patch1.to(device)
-        imu_sample = imu_sample.to(device)
-        
-        # Save each batch to disk immediately
-        batch_patch_file = os.path.join(cache_dir, f"patch_{i}.pt")
-        batch_inertial_file = os.path.join(cache_dir, f"inertial_{i}.pt")
-        
-        torch.save(patch1.cpu(), batch_patch_file)
-        torch.save(imu_sample.cpu(), batch_inertial_file)
-        
-        adapt_patches_list.append(batch_patch_file)
-        adapt_inertial_list.append(batch_inertial_file)
-        
-        # Clean up memory
-        del patch1, patch2, imu_sample
-        
-        if i % 10 == 0:
-            # Use psutil to monitor system RAM usage instead of GPU
-            import psutil
-            print(f"Processed {i * args.batch_size} adaptation samples, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
+    os.makedirs(cache_dir, exist_ok=True)
+    patch_file = os.path.join(cache_dir, "patches.h5")
+    inertial_file = os.path.join(cache_dir, "inertial.h5")
+    print("Extracting adaptation features...")
 
-    return adapt_patches_list, adapt_inertial_list
+    with h5py.File(patch_file, 'w') as pf, h5py.File(inertial_file, 'w') as inf:
+        for i, batch in enumerate(loader):
+            patch1, _, imu_sample = batch
+            patch1, imu_sample = patch1.to(device), imu_sample.to(device)
+            pf.create_dataset(f"batch_{i}", data=patch1.cpu().numpy(), compression="gzip")
+            inf.create_dataset(f"batch_{i}", data=imu_sample.cpu().numpy(), compression="gzip")
+            if i % 10 == 0:
+                print(f"Processed {i * loader.batch_size} samples, RAM: {psutil.virtual_memory().used / 1024**2:.2f} MB")
+            del patch1, imu_sample
+            gc.collect()
 
-def concatenate_cached_files(file_list, output_path, device="cpu"):
-    print(f"Saving concatenated features to {output_path}...")
-    # Process files one at a time to keep memory usage low
-    with torch.no_grad():
-        first_file = torch.load(file_list[0], map_location=device)
-        total_size = len(file_list) * first_file.shape[0]
-        output_shape = (total_size, *first_file.shape[1:])
-        
-        # Pre-allocate tensor on disk using memory mapping
-        result = torch.zeros(output_shape, dtype=first_file.dtype)
-        current_idx = 0
-        
-        for f in file_list:
-            batch_data = torch.load(f, map_location=device)
-            batch_size = batch_data.shape[0]
-            result[current_idx:current_idx + batch_size] = batch_data
-            current_idx += batch_size
-            del batch_data
-        
-        torch.save(result, output_path)
-    
-    # Clean up temporary files
-    for f in file_list:
-        os.remove(f)
+    return patch_file, inertial_file
+
+def load_cached_h5(file_path, device="cpu"):
+    with h5py.File(file_path, 'r') as f:
+        data = np.concatenate([f[key][()] for key in f.keys()], axis=0)
+    return torch.from_numpy(data).to(device)
 
 def custom_collate(batch):
     patches, inertial, terrain_labels, preferences = zip(*batch)
-    # Replace None with -1 in terrain_labels
-    terrain_labels = [label if label is not None else -1 for label in terrain_labels]
-    return (torch.stack(patches),
-            torch.stack(inertial),
-            torch.tensor(terrain_labels, dtype=torch.long),
-            torch.stack(preferences))
-
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Preference Extrapolation Training for PATERN")
-    parser.add_argument("-preadapt_bag", "-pb", type=str, required=True)
-    parser.add_argument("-adapt_bag", "-ab", type=str, required=True)
-    parser.add_argument("-batch_size", type=int, default=1024)
-    parser.add_argument("-epochs", type=int, default=25)
-    parser.add_argument("-val_split", type=float, default=0.2)
-    return parser.parse_args()
+    terrain_labels = [-1 if label is None else label for label in terrain_labels]
+    return (
+        torch.stack(patches),
+        torch.stack(inertial),
+        torch.tensor(terrain_labels, dtype=torch.long),
+        torch.stack(preferences)
+    )
 
 def setup_device():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -551,223 +585,183 @@ def load_datasets(args):
     print("Loading pre-adaptation data...")
     preadapt_h5_path = os.path.join(args.preadapt_bag, "clusters", "labeled_data.h5")
     preadapt_dataset = TerrainDataset(labeled_dataset=preadapt_h5_path, transform=None)
-    n_clusters = len(set(preadapt_dataset.terrain_labels))
-    print(f"Found {n_clusters} unique clusters in pre-adaptation data")
-    if n_clusters == 0:
-        raise ValueError("No unique terrain labels found in pre-adaptation data.")
+
+    config_path = os.path.join(script_dir, "homography", "config.yaml")
+    name_to_id = {}
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file) or {}
+            if 'terrains' in config:
+                name_to_id = {terrain['name']: terrain['label'] for terrain in config['terrains']}
+                print(f"Loaded name-to-ID mapping: {name_to_id}")
+    else:
+        name_to_id = {label: i for i, label in enumerate(set(preadapt_dataset.terrain_labels))}
+
+    if not name_to_id:
+        raise ValueError("No terrain labels found")
 
     print("Loading adaptation data...")
     adapt_vicreg_path = load_bag_h5(args.adapt_bag, "vicreg")
     adapt_synced_path = load_bag_h5(args.adapt_bag, "synced")
     adapt_dataset = TerrainDataset(synced_h5_path=adapt_synced_path, vicreg_h5_path=adapt_vicreg_path, transform=None, train=True)
     print(f"Adaptation dataset size: {len(adapt_dataset)}")
-    
-    return preadapt_dataset, adapt_dataset, n_clusters
+
+    return preadapt_dataset, adapt_dataset, len(name_to_id), name_to_id
 
 def initialize_model(args, device):
     print("Initializing model...")
     pretrained_weights_path = os.path.join(args.preadapt_bag, "models")
-    save_dir = pretrained_weights_path  # Assuming adapted models are in the same directory
+    model = PaternAdaptation(device=device, pretrained_weights_path=pretrained_weights_path).to(device)
 
-    # Initialize the model with pretrained weights
-    model = PaternAdaptation(device=device, pretrained_weights_path=pretrained_weights_path, latent_size=128).to(device)
-
-    # Check for existing adapted models
-    adapted_weight_files = {
+    adapted_files = {
         "visual_encoder": "fvis_adapted.pt",
         "uvis": "uvis_adapted.pt",
         "cost_head": "cost_head_adapted.pt"
     }
-    
-    adapted_models_found = False
-    all_adapted_exist = True
-    for name, file in adapted_weight_files.items():
-        adapted_path = os.path.join(save_dir, file)
-        if os.path.exists(adapted_path):
-            state_dict = torch.load(adapted_path, weights_only=True, map_location=device)
-            getattr(model, name).load_state_dict(state_dict)
-            print(f"Loaded adapted {name} from {adapted_path}")
-            adapted_models_found = True
-        else:
-            all_adapted_exist = False
-            print(f"Adapted model {file} not found in {save_dir}. Using pretrained weights for {name}.")
+    adapted_found = False
+    for name, file in adapted_files.items():
+        path = os.path.join(pretrained_weights_path, file)
+        if os.path.exists(path):
+            state_dict = torch.load(path, weights_only=True, map_location=device)
+            model.models[name].load_state_dict(state_dict)
+            print(f"Loaded adapted {name} from {path}")
+            adapted_found = True
 
-    if adapted_models_found and all_adapted_exist:
-        print("All adapted models found and loaded successfully.")
-    elif adapted_models_found:
-        print("Some adapted models found and loaded; missing ones use pretrained weights.")
-    else:
-        print("No adapted models found. Proceeding with pretrained weights only.")
-
-    return model, adapted_models_found
+    return model, adapted_found
 
 def create_dataloaders(preadapt_dataset, adapt_dataset, batch_size):
     print("Creating DataLoaders...")
-    preadapt_loader = DataLoader(preadapt_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=False)
-    adapt_loader = DataLoader(adapt_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=False)
-    return preadapt_loader, adapt_loader
+    return (
+        DataLoader(preadapt_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=False),
+        DataLoader(adapt_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=False))
 
 def extract_preadapt_features(model, preadapt_loader, cache_dir, device):
-    preadapt_phi_pro_path = os.path.join(cache_dir, "preadapt_phi_pro.pt")
-    preadapt_prefs_path = os.path.join(cache_dir, "preadapt_prefs.pt")
-    preadapt_labels_path = os.path.join(cache_dir, "preadapt_labels.npy")
-    preadapt_stats_path = os.path.join(cache_dir, "preadapt_inertial_stats.pt")
     os.makedirs(cache_dir, exist_ok=True)
+    paths = {
+        "phi_pro": os.path.join(cache_dir, "preadapt_phi_pro.h5"),
+        "prefs": os.path.join(cache_dir, "preadapt_prefs.pt"),
+        "labels": os.path.join(cache_dir, "preadapt_labels.npy"),
+        "stats": os.path.join(cache_dir, "preadapt_inertial_stats.pt")
+    }
 
-    if not os.path.exists(preadapt_phi_pro_path) or not os.path.exists(preadapt_stats_path):
-        print("Extracting pre-adaptation features and computing inertial statistics...")
-        preadapt_phi_pro, preadapt_prefs, preadapt_labels_list = None, None, []
-        inertial_data = []
-        for i, batch in enumerate(preadapt_loader):
+    if not all(os.path.exists(p) for p in paths.values()):
+        inertial_data, preadapt_prefs, preadapt_labels = [], None, []
+        for batch in preadapt_loader:
             _, inertial, terrain_labels, preferences = batch
             inertial_data.append(inertial)
             preferences = preferences.to(device)
             preadapt_prefs = preferences if preadapt_prefs is None else torch.cat([preadapt_prefs, preferences])
-            preadapt_labels_list.extend(terrain_labels)
-            if i % 10 == 0:
-                print(f"Processed {i * args.batch_size} pre-adaptation samples, RAM usage: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MB" if device.type == "cuda" else "CPU mode")
+            if isinstance(terrain_labels, (torch.Tensor, np.ndarray)):
+                preadapt_labels.extend(terrain_labels.tolist())
+            else:
+                preadapt_labels.extend(terrain_labels)
 
-        # Compute inertial statistics
         inertial_data = torch.cat(inertial_data)
         inertial_mean = inertial_data.mean(dim=0)
-        inertial_std = inertial_data.std(dim=0, unbiased=True) + 1e-6  # Avoid division by zero
-        torch.save({'mean': inertial_mean, 'std': inertial_std}, preadapt_stats_path)
-        print(f"Saved inertial statistics to {preadapt_stats_path}")
+        inertial_std = inertial_data.std(dim=0, unbiased=True) + 1e-6
+        torch.save({'mean': inertial_mean, 'std': inertial_std}, paths["stats"])
 
-        # Normalize inertial data and extract features
-        for i, batch in enumerate(preadapt_loader):
-            _, inertial, _, _ = batch
-            normalized_inertial = (inertial.to(device) - inertial_mean.to(device)) / inertial_std.to(device)
-            phi_pro = model.extract_proprioceptive_features(normalized_inertial)
-            preadapt_phi_pro = phi_pro if preadapt_phi_pro is None else torch.cat([preadapt_phi_pro, phi_pro])
-            del phi_pro
-            torch.cuda.empty_cache() if device.type == "cuda" else None
+        with h5py.File(paths["phi_pro"], 'w') as f:
+            dset = None
+            current_idx = 0
+            for i, batch in enumerate(preadapt_loader):
+                _, inertial, _, _ = batch
+                normalized_inertial = (inertial.to(device) - inertial_mean.to(device)) / inertial_std.to(device)
+                phi_pro = model.extract_proprioceptive_features(normalized_inertial)
+                if dset is None:
+                    dset = f.create_dataset("data", shape=(len(preadapt_loader.dataset), *phi_pro.shape[1:]), dtype=np.float32, compression="gzip")
+                batch_size = inertial.shape[0]
+                dset[current_idx:current_idx + batch_size] = phi_pro.cpu().numpy()
+                current_idx += batch_size
+                del phi_pro
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
 
-        preadapt_labels = np.array([hash(label) % n_clusters for label in preadapt_labels_list])
-        print("Saving pre-adaptation features to cache...")
-        torch.save(preadapt_phi_pro, preadapt_phi_pro_path)
-        torch.save(preadapt_prefs, preadapt_prefs_path)
-        np.save(preadapt_labels_path, preadapt_labels)
-    else:
-        print("Loading pre-adaptation features and inertial statistics from cache...")
-        preadapt_phi_pro = torch.load(preadapt_phi_pro_path, map_location=device)
-        preadapt_prefs = torch.load(preadapt_prefs_path, map_location=device)
-        preadapt_labels = np.load(preadapt_labels_path)
-        inertial_stats = torch.load(preadapt_stats_path, map_location=device)
-        inertial_mean, inertial_std = inertial_stats['mean'], inertial_stats['std']
+        torch.save(preadapt_prefs, paths["prefs"])
+        np.save(paths["labels"], np.array(preadapt_labels))
 
-    # Log feature ranges
+    preadapt_phi_pro = load_cached_h5(paths["phi_pro"], device)
+    preadapt_prefs = torch.load(paths["prefs"], map_location=device)
+    preadapt_labels = np.load(paths["labels"])
+    inertial_stats = torch.load(paths["stats"], map_location=device)
     print(f"Preadaptation phi_pro range: min={preadapt_phi_pro.min().item():.4f}, max={preadapt_phi_pro.max().item():.4f}, mean={preadapt_phi_pro.mean().item():.4f}, std={preadapt_phi_pro.std().item():.4f}")
-    print(f"Preadaptation phi_pro shape: {preadapt_phi_pro.shape}")
-    return preadapt_phi_pro, preadapt_prefs, preadapt_labels, {'mean': inertial_mean, 'std': inertial_std}
+
+    return preadapt_phi_pro, preadapt_prefs, preadapt_labels, inertial_stats
 
 def compute_distance_threshold(preadapt_phi_pro, preadapt_labels, cache_dir):
     print("Computing distance threshold...")
-    batch_size = 512
-    distances_cache_dir = os.path.join(cache_dir, "distances")
-    os.makedirs(distances_cache_dir, exist_ok=True)
-    distance_files = []
+    batch_size = 2048
+    n_samples = len(preadapt_phi_pro)
+    distances_cache = os.path.join(cache_dir, "distances.h5")
+    os.makedirs(cache_dir, exist_ok=True)
 
-    for i in range(0, len(preadapt_phi_pro), batch_size):
-        batch_phi = preadapt_phi_pro[i:i + batch_size].cpu().numpy()
-        batch_dist_file = os.path.join(distances_cache_dir, f"batch_dist_{i}.npy")
-        if not os.path.exists(batch_dist_file):
-            batch_dist = euclidean_distances(batch_phi, preadapt_phi_pro.cpu().numpy())
-            np.save(batch_dist_file, batch_dist)
-        distance_files.append(batch_dist_file)
-        del batch_phi
-        if i % 1000 == 0:
-            print(f"Processed {i} samples for distance calculation")
+    if not os.path.exists(distances_cache):
+        with h5py.File(distances_cache, 'w') as f:
+            dset = f.create_dataset("distances", (n_samples, n_samples), dtype=np.float32, compression="gzip")
+            for i in range(0, n_samples, batch_size):
+                batch_phi = preadapt_phi_pro[i:i + batch_size].cpu().numpy()
+                batch_dist = torch.cdist(preadapt_phi_pro[i:i + batch_size], preadapt_phi_pro).cpu().numpy()
+                dset[i:i + batch_size] = batch_dist
 
-    print("Processing distances to compute intra/inter means...")
-    n_samples = len(preadapt_labels)
     intra_sum, intra_count, inter_sum, inter_count = 0.0, 0, 0.0, 0
-    label_mask = preadapt_labels[:, None] == preadapt_labels[None, :] if n_samples * n_samples < 1e9 else None
-    intra_mask = label_mask & ~np.eye(n_samples, dtype=bool) if label_mask is not None else None
-    inter_mask = ~label_mask if label_mask is not None else None
-
-    for i, dist_file in enumerate(distance_files):
-        batch_dist = np.load(dist_file, mmap_mode='r')
-        start_idx, end_idx = i * batch_size, min((i + 1) * batch_size, n_samples)
-        batch_labels = preadapt_labels[start_idx:end_idx]
-        if label_mask is not None:
-            intra_sum += np.sum(batch_dist * intra_mask[start_idx:end_idx, :])
-            intra_count += np.sum(intra_mask[start_idx:end_idx, :])
-            inter_sum += np.sum(batch_dist * inter_mask[start_idx:end_idx, :])
-            inter_count += np.sum(inter_mask[start_idx:end_idx, :])
-        else:
-            batch_label_mask = batch_labels[:, None] == preadapt_labels[None, :]
-            batch_intra_mask = batch_label_mask & ~np.eye(batch_dist.shape[0], n_samples, dtype=bool)
-            batch_inter_mask = ~batch_label_mask
-            intra_sum += np.sum(batch_dist * batch_intra_mask)
-            intra_count += np.sum(batch_intra_mask)
-            inter_sum += np.sum(batch_dist * batch_inter_mask)
-            inter_count += np.sum(batch_inter_mask)
-        del batch_dist
-        if i % 10 == 0:
-            print(f"Processed batch {i}, Intra count: {intra_count}, Inter count: {inter_count}")
+    with h5py.File(distances_cache, 'r') as f:
+        dist = f["distances"]
+        for i in range(0, n_samples, batch_size):
+            end = min(i + batch_size, n_samples)
+            batch_labels = preadapt_labels[i:end]
+            batch_dist = dist[i:end]
+            mask = batch_labels[:, None] == preadapt_labels[None, :]
+            intra_mask = mask & ~np.eye(end - i, n_samples, dtype=bool)
+            inter_mask = ~mask
+            intra_sum += np.sum(batch_dist * intra_mask)
+            intra_count += np.sum(intra_mask)
+            inter_sum += np.sum(batch_dist * inter_mask)
+            inter_count += np.sum(inter_mask)
+            if i % 1000 == 0:
+                print(f"Processed {i} samples for distance calculation")
 
     avg_intra = intra_sum / intra_count if intra_count > 0 else 0.0
     avg_inter = inter_sum / inter_count if inter_count > 0 else 0.0
     max_distance_threshold = (avg_intra + avg_inter) / 2 if avg_intra > 0 and avg_inter > 0 else 5.0
     print(f"Avg Intra-cluster Distance: {avg_intra:.4f}, Avg Inter-cluster Distance: {avg_inter:.4f}")
     print(f"Computed Max Distance Threshold: {max_distance_threshold:.4f}")
-
-    for dist_file in distance_files:
-        os.remove(dist_file)
-    os.rmdir(distances_cache_dir)
+    os.remove(distances_cache)
     return max_distance_threshold
 
 def extract_adapt_features(model, adapt_loader, cache_dir, inertial_stats):
     device = torch.device("cpu")
-    adapt_patches_path = os.path.join(cache_dir, "adapt_patches.pt")
-    adapt_inertial_path = os.path.join(cache_dir, "adapt_inertial.pt")
-
-    if not os.path.exists(adapt_patches_path) or not os.path.exists(adapt_inertial_path):
-        adapt_patches_list, adapt_inertial_list = process_batch_to_disk(adapt_loader, cache_dir)
-        concatenate_cached_files(adapt_patches_list, adapt_patches_path)
-        concatenate_cached_files(adapt_inertial_list, adapt_inertial_path)
-        adapt_patches = torch.load(adapt_patches_path, map_location=device)
-        adapt_inertial = torch.load(adapt_inertial_path, map_location=device)
-    else:
-        print("Loading adaptation features from cache...")
-        adapt_patches = torch.load(adapt_patches_path, map_location=device)
-        adapt_inertial = torch.load(adapt_inertial_path, map_location=device)
-
-    print("Extracting proprioceptive features for adaptation data with normalization...")
-    # Normalize inertial data using pre-adaptation statistics
-    model_device = next(model.parameters()).device
-    normalized_inertial = (adapt_inertial.to(model_device) - inertial_stats['mean'].to(model_device)) / inertial_stats['std'].to(model_device)
+    patch_file, inertial_file = process_batch_to_disk(adapt_loader, cache_dir)
+    adapt_patches = load_cached_h5(patch_file, device)
+    adapt_inertial = load_cached_h5(inertial_file, device)
+    normalized_inertial = (adapt_inertial.to(model.device) - inertial_stats['mean'].to(model.device)) / inertial_stats['std'].to(model.device)
     adapt_phi_pro = model.extract_proprioceptive_features(normalized_inertial)
-    
-    # Log feature ranges
+
     print(f"Adaptation phi_pro range: min={adapt_phi_pro.min().item():.4f}, max={adapt_phi_pro.max().item():.4f}, mean={adapt_phi_pro.mean().item():.4f}, std={adapt_phi_pro.std().item():.4f}")
-    print(f"Adaptation phi_pro shape: {adapt_phi_pro.shape}")
-    
+    os.remove(patch_file)
+    os.remove(inertial_file)
     return adapt_patches, adapt_inertial, adapt_phi_pro
 
-# Updated extrapolate_and_cache_adapt_data function
-def extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, preadapt_data, max_distance_threshold, args):
+def extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, preadapt_data, max_distance_threshold, args, name_to_id):
+    """
+    Extrapolate preferences and labels, cache results, and handle outliers with user input.
+    """
     print("Extrapolating preferences and labels...")
+    numerical_labels = np.array([name_to_id[label] for label in preadapt_data[2]])
+    numerical_labels_tensor = torch.tensor(numerical_labels, device=adapt_inertial.device)
     extrapolated_prefs, extrapolated_labels, outlier_indices, adapt_phi_pro = model.extrapolate_preferences(
-        adapt_inertial, preadapt_data[0], preadapt_data[1], torch.tensor(preadapt_data[2], device=adapt_inertial.device), max_distance_threshold
+        adapt_inertial, preadapt_data[0], preadapt_data[1], numerical_labels_tensor, max_distance_threshold
     )
+    label_to_name = {int(v): k for k, v in name_to_id.items()}
+
+    max_existing_label = numerical_labels_tensor.max().item() if numerical_labels_tensor.numel() > 0 else -1
+    new_clusters = torch.unique(extrapolated_labels[extrapolated_labels > max_existing_label])
+    for cluster_id in new_clusters:
+        if cluster_id.item() not in label_to_name:
+            label_to_name[cluster_id.item()] = f"Novel_{cluster_id.item()}"
 
     if len(outlier_indices) > 0:
         print(f"Found {len(outlier_indices)} data points outside cluster thresholds.")
         outlier_dir = os.path.join(args.preadapt_bag, "outlier_patches")
-        # Load pre-adaptation config to get name-to-ID mapping
-        config_path = os.path.join(script_dir, "homography", "config.yaml")
-        preadapt_name_to_id = {}
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file) or {}
-                if 'terrains' in config:
-                    preadapt_name_to_id = {terrain['name']: terrain['label'] for terrain in config['terrains']}
-                    print(f"Loaded pre-adaptation name-to-ID mapping: {preadapt_name_to_id}")
-        else:
-            print(f"Warning: Config file {config_path} not found. New labels will get incremental IDs.")
-        
         app = OutlierLabelUI(
             patches=adapt_patches,
             extrapolated_prefs=extrapolated_prefs,
@@ -775,57 +769,42 @@ def extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, pread
             adapt_phi_pro=adapt_phi_pro,
             save_dir=outlier_dir,
             default_labels=extrapolated_labels,
-            preadapt_name_to_id=preadapt_name_to_id
+            preadapt_name_to_id=name_to_id
         )
         app.run()
         user_labels_and_ids, user_prefs = app.get_results()
 
-        for idx, (string_label, cluster_id), pref in zip(outlier_indices, user_labels_and_ids, user_prefs):
+        for idx, (string_label, cluster_id), pref in zip(outlier_indices.tolist(), user_labels_and_ids, user_prefs):
             extrapolated_labels[idx] = cluster_id
             extrapolated_prefs[idx] = pref
-        
+            if string_label not in label_to_name.values() and cluster_id not in label_to_name:
+                label_to_name[cluster_id] = string_label
         shutil.rmtree(outlier_dir, ignore_errors=True)
 
-    adapt_patches_cpu, adapt_inertial_cpu = adapt_patches.cpu(), adapt_inertial.cpu()
-    prefs_list, labels_list = extrapolated_prefs.cpu().tolist(), extrapolated_labels.cpu().tolist()
+    adapt_data_file = os.path.join(args.preadapt_bag, "adapt_data_cache", "adapt_data.h5")
+    os.makedirs(os.path.dirname(adapt_data_file), exist_ok=True)
 
-    print("Creating labeled adaptation data...")
-    adapt_data_dir = os.path.join(args.preadapt_bag, "adapt_data_cache")
-    os.makedirs(adapt_data_dir, exist_ok=True)
-    adapt_data_file = os.path.join(adapt_data_dir, "adapt_data.h5")
-
-    batch_size = 1000
     with h5py.File(adapt_data_file, 'w') as f:
-        for start_idx in range(0, len(adapt_patches), batch_size):
-            end_idx = min(start_idx + batch_size, len(adapt_patches))
-            for i in range(start_idx, end_idx):
-                group = f.create_group(f"entry_{i}")
-                group.create_dataset("patch", data=adapt_patches_cpu[i].numpy(), compression="gzip")
-                group.create_dataset("inertial", data=adapt_inertial_cpu[i].numpy(), compression="gzip")
-                group.attrs["terrain_label"] = labels_list[i]  # Numeric cluster ID
-                group.attrs["preference"] = prefs_list[i]
-            print(f"Processed {end_idx} adaptation data entries, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
+        for i in range(len(adapt_patches)):
+            group = f.create_group(f"entry_{i}")
+            group.create_dataset("patch", data=adapt_patches[i].numpy(), compression="gzip")
+            group.create_dataset("inertial", data=adapt_inertial[i].numpy(), compression="gzip")
+            group.attrs["terrain_label"] = extrapolated_labels[i].item()
+            group.attrs["preference"] = extrapolated_prefs[i].item()
 
-    del adapt_patches_cpu, adapt_inertial_cpu, prefs_list, labels_list
-    gc.collect()
-    print(f"RAM usage after clearing adaptation data: {psutil.virtual_memory().used / 1024**2:.2f} MB")
-    return adapt_data_file
+    return adapt_data_file, label_to_name
 
 def aggregate_and_split_datasets(preadapt_dataset, adapt_data_file, args):
-    print("Aggregating and splitting datasets...")
-    preadapt_data_list = list(preadapt_dataset)
+    preadapt_data = list(preadapt_dataset)
     adapt_data, label_map = [], {}
 
-    print("Building label map from preadaptation data...")
-    for item in preadapt_data_list:
+    for item in preadapt_data:
         terrain_label = item[2] if isinstance(item, tuple) else item.get("terrain_label")
         if isinstance(terrain_label, str) and terrain_label not in label_map:
             label_map[terrain_label] = len(label_map)
 
-    print("Loading and normalizing adaptation data...")
     with h5py.File(adapt_data_file, 'r') as f:
-        total_entries = len(f)
-        for i in range(total_entries):
+        for i in range(len(f)):
             group = f[f"entry_{i}"]
             terrain_label = -1 if group.attrs["terrain_label"] == -1 else group.attrs["terrain_label"]
             adapt_data.append({
@@ -834,194 +813,140 @@ def aggregate_and_split_datasets(preadapt_dataset, adapt_data_file, args):
                 "terrain_label": terrain_label,
                 "preference": group.attrs["preference"]
             })
-            if (i + 1) % 1000 == 0:
-                print(f"Loaded {i + 1}/{total_entries} adaptation entries, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
 
-    print("Normalizing preadaptation data...")
-    normalized_preadapt_data = []
-    for item in preadapt_data_list:
-        if isinstance(item, tuple):
-            patch, inertial, terrain_label, preference = item
-        else:
-            patch, inertial, terrain_label, preference = item.values()
-        terrain_label = label_map.get(terrain_label, -1) if isinstance(terrain_label, str) else terrain_label or -1
-        normalized_preadapt_data.append({"patch": patch, "inertial": inertial, "terrain_label": terrain_label, "preference": preference})
+    normalized_preadapt_data = [
+        {
+            "patch": item[0] if isinstance(item, tuple) else item["patch"],
+            "inertial": item[1] if isinstance(item, tuple) else item["inertial"],
+            "terrain_label": label_map.get(item[2], -1) if isinstance(item, tuple) else label_map.get(item.get("terrain_label"), -1),
+            "preference": item[3] if isinstance(item, tuple) else item["preference"]
+        }
+        for item in preadapt_data
+    ]
 
-    # Calculate and print preference ranges before aggregation
-    preadapt_prefs = torch.tensor([d["preference"] for d in normalized_preadapt_data], dtype=torch.float32)
-    adapt_prefs = torch.tensor([d["preference"] for d in adapt_data], dtype=torch.float32)
-    print(f"Pre-adaptation data preference range: min={preadapt_prefs.min():.2f}, max={preadapt_prefs.max():.2f}")
-    print(f"Adaptation data preference range: min={adapt_prefs.min():.2f}, max={adapt_prefs.max():.2f}")
+    aggregated_dataset = TerrainDataset(labeled_dataset=normalized_preadapt_data + adapt_data, transform=None)
+    train_dataset, val_dataset = random_split(aggregated_dataset, [len(aggregated_dataset) - int(args.val_split * len(aggregated_dataset)), int(args.val_split * len(aggregated_dataset))])
 
-    aggregated_data = normalized_preadapt_data + adapt_data
+    return (
+        DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=False, collate_fn=custom_collate),
+        DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False, collate_fn=custom_collate),
+        [adapt_data_file]
+    )
 
-    del preadapt_data_list, adapt_data, normalized_preadapt_data
-    gc.collect()
-    print(f"RAM usage before TerrainDataset: {psutil.virtual_memory().used / 1024**2:.2f} MB")
-
-    aggregated_dataset = TerrainDataset(labeled_dataset=aggregated_data, transform=None)
-    print(f"Successfully created TerrainDataset with {len(aggregated_dataset)} samples")
-
-    val_size = int(args.val_split * len(aggregated_dataset))
-    train_size = len(aggregated_dataset) - val_size
-    train_dataset, val_dataset = random_split(aggregated_dataset, [train_size, val_size])
-    
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=False, collate_fn=custom_collate)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False, collate_fn=custom_collate)
-    
-    del aggregated_data
-    print(f"Train dataset size: {len(train_dataset)}, Validation dataset size: {len(val_dataset)}")
-    return train_loader, val_loader, [adapt_data_file]
-
-def retrain_model(model, train_loader, val_loader, epochs):
-    print("Retraining model...")
+def retrain_model(model, train_loader, val_loader, preadapt_loader, epochs, max_distance_threshold, name_to_id):
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-6)
-    model.retrain_visual_components(train_loader, val_loader, optimizer, scheduler, epochs)
+    model.retrain_visual_components(train_loader, val_loader, optimizer, scheduler, epochs, preadapt_loader, max_distance_threshold, name_to_id)
 
-def concatenate_to_file(file_list, output_path, total_samples, sample_shape, device="cpu"):
-    print(f"Concatenating to {output_path}...")
-    # Calculate total size
-    batch_size = torch.load(file_list[0], map_location="cpu").shape[0]
-    output_shape = [total_samples] + list(sample_shape[1:])  # e.g., [99301, 128] or [99301, 3, 64, 64]
-    
-    # Use HDF5 for large data
+def concatenate_to_file(file_list, output_path, total_samples, sample_shape):
     with h5py.File(output_path, 'w') as f:
-        dset = f.create_dataset("data", shape=output_shape, dtype=np.float32, compression="gzip")
+        dset = f.create_dataset("data", shape=[total_samples] + list(sample_shape[1:]), dtype=np.float32, compression="gzip")
         current_idx = 0
         for file_path in file_list:
-            batch_data = torch.load(file_path, map_location=device).cpu().numpy()
-            batch_size = batch_data.shape[0]
-            dset[current_idx:current_idx + batch_size] = batch_data
-            current_idx += batch_size
-            del batch_data
-            print(f"Concatenated up to {current_idx} samples, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
-            gc.collect()
+            batch_data = torch.load(file_path, map_location="cpu").numpy()
+            dset[current_idx:current_idx + batch_data.shape[0]] = batch_data
+            current_idx += batch_data.shape[0]
+            os.remove(file_path)
 
 def extract_postadapt_features(model, train_dataset, args):
-    print("Extracting post-adaptation features...")
+    print("Extracting features utilized during training...")
     postadapt_cache_dir = os.path.join(args.preadapt_bag, "postadapt_cache")
     os.makedirs(postadapt_cache_dir, exist_ok=True)
-    aggregated_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False)
+    loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False)
 
-    phi_pro_files, patch_files, postadapt_labels_list = [], [], []
-    for i, batch in enumerate(aggregated_loader):
-        patches, inertial, terrain_labels, _ = batch
-        phi_pro = model.extract_proprioceptive_features(inertial.to(model.device))
-        patches = patches.to(model.device)
-        phi_pro_file = os.path.join(postadapt_cache_dir, f"phi_pro_{i}.pt")
-        patch_file = os.path.join(postadapt_cache_dir, f"patch_{i}.pt")
-        torch.save(phi_pro.cpu(), phi_pro_file)
-        torch.save(patches.cpu(), patch_file)
-        phi_pro_files.append(phi_pro_file)
-        patch_files.append(patch_file)
-        postadapt_labels_list.extend(terrain_labels)
-        del phi_pro, patches, inertial
-        if i % 10 == 0:
-            print(f"Processed {i * args.batch_size} post-adaptation samples, RAM usage: {psutil.virtual_memory().used / 1024**2:.2f} MB")
-            gc.collect()
+    phi_pro_file = os.path.join(postadapt_cache_dir, "phi_pro.h5")
+    patch_file = os.path.join(postadapt_cache_dir, "patches.h5")
+    labels = []
 
-    phi_pro_output = os.path.join(postadapt_cache_dir, "postadapt_phi_pro.h5")
-    patch_output = os.path.join(postadapt_cache_dir, "postadapt_patches.h5")
-    phi_pro_sample = torch.load(phi_pro_files[0], map_location="cpu")
-    patch_sample = torch.load(patch_files[0], map_location="cpu")
-    concatenate_to_file(phi_pro_files, phi_pro_output, len(train_dataset), phi_pro_sample.shape)
-    concatenate_to_file(patch_files, patch_output, len(train_dataset), patch_sample.shape)
+    with torch.no_grad():
+        with h5py.File(phi_pro_file, 'w') as pf, h5py.File(patch_file, 'w') as patch_f:
+            # Initialize datasets
+            phi_dset = None
+            patch_dset = None
+            dataset_size = len(train_dataset)
 
-    return phi_pro_output, patch_output, postadapt_labels_list
+            # Process all batches
+            for i, batch in enumerate(loader):
+                patches, inertial, terrain_labels, _ = batch
+                phi_pro = model.extract_proprioceptive_features(inertial.to(model.device))
+                if i == 0:
+                    phi_dset = pf.create_dataset("data", shape=(dataset_size, *phi_pro.shape[1:]), dtype=np.float32, compression="gzip", chunks=(args.batch_size, *phi_pro.shape[1:]))
 
-def visualize_and_render(phi_pro_output, patch_output, postadapt_labels_list, train_dataset, args, n_clusters):
-    print("Caching post-adaptation features for visualization and rendering...")
-    batch_size = 1000
-    phi_pro_cache = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
-    patch_cache = tempfile.NamedTemporaryFile(delete=False, suffix='.npy')
-    phi_pro_sample = torch.load(os.path.join(args.preadapt_bag, "postadapt_cache", "phi_pro_0.pt"), map_location="cpu")
-    patch_sample = torch.load(os.path.join(args.preadapt_bag, "postadapt_cache", "patch_0.pt"), map_location="cpu")
+                    patch_dset = patch_f.create_dataset("data", shape=(dataset_size, *patches.shape[1:]), dtype=np.float32, compression="gzip", chunks=(args.batch_size, *patches.shape[1:]))
+                
+                # Compute indices and actual batch size
+                start_idx = i * args.batch_size
+                end_idx = min(start_idx + args.batch_size, dataset_size)
+                batch_size = end_idx - start_idx  # Actual number of samples in this batch
+                phi_dset[start_idx:end_idx] = phi_pro.cpu().numpy()[:batch_size]
+                patch_dset[start_idx:end_idx] = patches.cpu().numpy()[:batch_size]
+                labels.extend(terrain_labels.tolist())
+                del phi_pro, patches, inertial, terrain_labels
+                gc.collect()
 
-    phi_pro_mmap = np.memmap(phi_pro_cache.name, dtype='float32', mode='w+', shape=(len(train_dataset), phi_pro_sample.shape[1]))
-    patch_mmap = np.memmap(patch_cache.name, dtype='float32', mode='w+', shape=(len(train_dataset), *patch_sample.shape[1:]))
+    return phi_pro_file, patch_file, labels
 
-    with h5py.File(phi_pro_output, 'r') as f_phi, h5py.File(patch_output, 'r') as f_patch:
-        phi_pro_data, patch_data = f_phi["data"], f_patch["data"]
-        for start in range(0, len(train_dataset), batch_size):
-            end = min(start + batch_size, len(train_dataset))
-            phi_pro_mmap[start:end] = phi_pro_data[start:end]
-            patch_mmap[start:end] = patch_data[start:end]
-            print(f"Cached {end}/{len(train_dataset)} samples, RAM: {psutil.virtual_memory().used / 1024**2:.2f} MB")
-        phi_pro_mmap.flush()
-        patch_mmap.flush()
+def visualize_and_render(phi_pro_output, patch_output, labels, train_dataset, args, label_to_name=None):
+    print("Creating PCA plot for post-adaptation clusters...")
+    labels = np.array([-1 if label is None else label for label in labels])
+    with h5py.File(phi_pro_output, 'r') as pf, h5py.File(patch_output, 'r') as patch_f:
+        postadapt_phi_pro = torch.from_numpy(pf["data"][()]).cpu()
+        postadapt_patches = torch.from_numpy(patch_f["data"][()]).cpu()
 
-    postadapt_labels = np.array([label if label is not None else -1 for label in postadapt_labels_list])
-    phi_pro_mmap_read = np.memmap(phi_pro_cache.name, dtype='float32', mode='r', shape=(len(train_dataset), phi_pro_sample.shape[1]))
-    patch_mmap_read = np.memmap(patch_cache.name, dtype='float32', mode='r', shape=(len(train_dataset), *patch_sample.shape[1:]))
-    postadapt_phi_pro = torch.from_numpy(phi_pro_mmap_read).cpu()
-    postadapt_patches = torch.from_numpy(patch_mmap_read).cpu()
+    plot_path = os.path.join(args.preadapt_bag, "post_adaptation_clusters.png")
+    visualize_clusters(postadapt_phi_pro, labels, save_path=plot_path, title="Post-adaptation Clusters", label_to_name=label_to_name)
 
-    print("Visualizing post-adaptation clusters...")
-    postadapt_plot_path = os.path.join(args.preadapt_bag, "post_adaptation_clusters.png")
-    visualize_clusters(postadapt_phi_pro, postadapt_labels, save_path=postadapt_plot_path)
-    print(f"Saved cluster visualization to {postadapt_plot_path}")
-
-    print("Rendering and saving post-adaptation patches...")
-    postadapt_patch_dir = os.path.join(args.preadapt_bag, "post_adaptation_patches")
-    render_and_save_cluster_patches(postadapt_patches, postadapt_labels, postadapt_patch_dir)
-
-    del phi_pro_mmap, patch_mmap, phi_pro_mmap_read, patch_mmap_read, postadapt_phi_pro, postadapt_patches
-    os.unlink(phi_pro_cache.name)
-    os.unlink(patch_cache.name)
-    gc.collect()
-    print(f"RAM after cleanup: {psutil.virtual_memory().used / 1024**2:.2f} MB")
+    print("Rendering patches in post-adaptation clusters...")
+    patch_dir = os.path.join(args.preadapt_bag, "post_adaptation_patches")
+    render_and_save_cluster_patches(postadapt_patches, labels, patch_dir)
 
 def save_models(model, args):
-    print("Saving adapted models...")
-    save_dir = os.path.join(args.preadapt_bag, "models")
-    model.save_adapted_models(save_dir)
-    print("Training completed successfully!")
+    print("Patern adaptation training completed. Saving models...")
+    model.save_adapted_models(os.path.join(args.preadapt_bag, "models"))
+    print("Models saved successfully.")
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="PATERN Preference Extrapolation")
+    parser.add_argument("-preadapt_bag", "-pb", type=str, required=True)
+    parser.add_argument("-adapt_bag", "-ab", type=str, required=True)
+    parser.add_argument("-batch_size", type=int, default=2048)
+    parser.add_argument("-epochs", type=int, default=50)
+    parser.add_argument("-val_split", type=float, default=0.2)
+    return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_arguments()
     device = setup_device()
-    preadapt_dataset, adapt_dataset, n_clusters = load_datasets(args)
-    model, adapted_models_found = initialize_model(args, device)
+    preadapt_dataset, adapt_dataset, n_clusters, name_to_id = load_datasets(args)
+    model, adapted_found = initialize_model(args, device)
     preadapt_loader, adapt_loader = create_dataloaders(preadapt_dataset, adapt_dataset, args.batch_size)
 
-    preadapt_cache_dir = os.path.join(args.preadapt_bag, "cache")
-    preadapt_data = extract_preadapt_features(model, preadapt_loader, preadapt_cache_dir, device)[:3]
-    inertial_stats = extract_preadapt_features(model, preadapt_loader, preadapt_cache_dir, device)[3]
-    max_distance_threshold = compute_distance_threshold(preadapt_data[0], preadapt_data[2], preadapt_cache_dir)
+    cache_dir = os.path.join(args.preadapt_bag, "cache")
+    preadapt_phi_pro, preadapt_prefs, preadapt_labels, inertial_stats = extract_preadapt_features(model, preadapt_loader, cache_dir, device)
+    max_distance_threshold = compute_distance_threshold(preadapt_phi_pro, preadapt_labels, cache_dir)
+    #max_distance_threshold = 1.0
 
-    print("Visualizing pre-adaptation clusters...")
-    preadapt_plot_path = os.path.join(args.preadapt_bag, "pre_adaptation_clusters.png")
-    adapt_patches, adapt_inertial, adapt_phi_pro = extract_adapt_features(model, adapt_loader, preadapt_cache_dir, inertial_stats)
-    visualize_clusters(preadapt_data[0], preadapt_data[2], adapt_phi_pro=adapt_phi_pro, save_path=preadapt_plot_path)
+    plot_path = os.path.join(args.preadapt_bag, "pre_adaptation_clusters.png")
+    adapt_patches, adapt_inertial, adapt_phi_pro = extract_adapt_features(model, adapt_loader, cache_dir, inertial_stats)
+    visualize_clusters(preadapt_phi_pro, preadapt_labels, adapt_phi_pro, plot_path, "Pre-adaptation Clusters", label_to_name={v: k for k, v in name_to_id.items()} if name_to_id else None)
 
-    adapt_data_file = extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, preadapt_data, max_distance_threshold, args)
+    adapt_data_file, label_to_name = extrapolate_and_cache_adapt_data(model, adapt_patches, adapt_inertial, [preadapt_phi_pro, preadapt_prefs, preadapt_labels], max_distance_threshold, args, name_to_id)
     train_loader, val_loader, adapt_data_files = aggregate_and_split_datasets(preadapt_dataset, adapt_data_file, args)
-    
-    # Retrain regardless of whether adapted models were found, but log the context
-    if adapted_models_found:
-        print("Adapted models detected. Retraining on top of adapted weights...")
-    else:
-        print("No adapted models detected. Training from pretrained weights...")
-    
-    retrain_model(model, train_loader, val_loader, args.epochs)
 
-    phi_pro_output, patch_output, postadapt_labels_list = extract_postadapt_features(model, train_loader.dataset, args)
-    
+    retrain_model(model, train_loader, val_loader, preadapt_loader, args.epochs, max_distance_threshold, name_to_id)
+    phi_pro_output, patch_output, labels = extract_postadapt_features(model, train_loader.dataset, args)
+
     for f in adapt_data_files:
         os.remove(f)
-    
-    visualize_and_render(phi_pro_output, patch_output, postadapt_labels_list, train_loader.dataset, args, n_clusters)
+
+    visualize_and_render(phi_pro_output, patch_output, labels, train_loader.dataset, args, label_to_name)
     save_models(model, args)
 
-    # Cleanup temprorary directories
-    postadapt_cache_dir = os.path.join(args.preadapt_bag, "postadapt_cache")
-    cache_dir = os.path.join(args.preadapt_bag, "cache")
-    adapt_data_cache_dir = os.path.join(args.preadapt_bag, "adapt_data_cache")
-    try:
-        shutil.rmtree(postadapt_cache_dir)
-        shutil.rmtree(cache_dir)
-        shutil.rmtree(adapt_data_cache_dir)
-        print(f"Successfully deleted {postadapt_cache_dir}, {cache_dir}, {adapt_data_cache_dir} and all its contents.")
-    except OSError as e:
-        print(f"Error deleting {postadapt_cache_dir}: {e.strerror}")
+
+    print("Removing temporary directories...")
+    for dir_path in [
+        os.path.join(args.preadapt_bag, "postadapt_cache"),
+        cache_dir,
+        os.path.join(args.preadapt_bag, "adapt_data_cache")
+    ]:
+        shutil.rmtree(dir_path, ignore_errors=True)
