@@ -101,7 +101,7 @@ class MultiScaleSpatialAttention(nn.Module):
     
 # create a pytorch model for the proprioception data
 class ProprioceptionModel(nn.Module):
-    def __init__(self, latent_size=64, p=0.05, input_dim=138):  # Default to 606
+    def __init__(self, latent_size=64, p=0.05, input_dim=115):  # Default to 606
         super(ProprioceptionModel, self).__init__()
         
         self.inertial_encoder = nn.Sequential(
@@ -185,7 +185,7 @@ class CostNet(nn.Module):
 
         # Initialize weights and biases
         nn.init.kaiming_normal_(self.model[0].weight, mode='fan_in', nonlinearity='relu')
-        nn.init.constant_(self.model[0].bias, 1.0)  # First layer bias
+        nn.init.constant_(self.model[0].bias, 2.0)  # First layer bias
         nn.init.kaiming_normal_(self.model[2].weight, mode='fan_in', nonlinearity='relu')
         nn.init.constant_(self.model[2].bias, 1.0)  # Second layer bias
 

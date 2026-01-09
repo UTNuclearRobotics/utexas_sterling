@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from terrain_dataset import TerrainDataset
 from torch.utils.data import DataLoader, random_split
-from utils import load_bag_pkl, load_bag_pt_model
 from models import VisualEncoderModel, ProprioceptionModel, UtilityFuncVisual, UtilityFuncProprioceptive, CostNet
 import sys
 import h5py
@@ -102,7 +101,7 @@ class PaternPreAdaptation(nn.Module):
         cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
 
         #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
-        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 2.0 * cost_loss
+        total_loss = 2.0 * (vis_loss + pro_loss) + 1.0 * ranking_loss + 1.0 * modality_mse_loss + 2.0 * cost_loss
 
         #print(f"Train Batch {batch_idx}: vis_loss={vis_loss.item():.4f}, pro_loss={pro_loss.item():.4f}, "
         #      f"ranking_loss={ranking_loss.item():.4f}, modality_mse_loss={modality_mse_loss.item():.4f}, "
@@ -144,19 +143,26 @@ class PaternPreAdaptation(nn.Module):
         cost_loss = F.smooth_l1_loss(final_cost, scaled_preferences)
 
         #total_loss = 1.0 * (vis_loss + 0.1*pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 1.0 * cost_loss
-        total_loss = 1.0 * (vis_loss + pro_loss) + 0.5 * ranking_loss + 0.5 * modality_mse_loss + 2.0 * cost_loss
+        total_loss = 2.0 * (vis_loss + pro_loss) + 1.0 * ranking_loss + 1.0 * modality_mse_loss + 1.0 * cost_loss
         return total_loss
     
-    def save_models(self, save_dir):
+    def save_models(self, save_dir, adapted=False):
         os.makedirs(save_dir, exist_ok=True)
-        torch.save(self.visual_encoder.state_dict(), os.path.join(save_dir, "fvis.pt"))
-        torch.save(self.proprioceptive_encoder.state_dict(), os.path.join(save_dir, "fpro.pt"))
-        torch.save(self.uvis.state_dict(), os.path.join(save_dir, "uvis.pt"))
-        torch.save(self.upro.state_dict(), os.path.join(save_dir, "upro.pt"))
-        torch.save(self.cost_head.state_dict(), os.path.join(save_dir, "cost_head.pt"))
+        if not adapted:
+            torch.save(self.visual_encoder.state_dict(), os.path.join(save_dir, "fvis.pt"))
+            torch.save(self.proprioceptive_encoder.state_dict(), os.path.join(save_dir, "fpro.pt"))
+            torch.save(self.uvis.state_dict(), os.path.join(save_dir, "uvis.pt"))
+            torch.save(self.upro.state_dict(), os.path.join(save_dir, "upro.pt"))
+            torch.save(self.cost_head.state_dict(), os.path.join(save_dir, "cost_head.pt"))
+        else:
+            torch.save(self.visual_encoder.state_dict(), os.path.join(save_dir, "fvis_adapted.pt"))
+            torch.save(self.proprioceptive_encoder.state_dict(), os.path.join(save_dir, "fpro.pt"))
+            torch.save(self.uvis.state_dict(), os.path.join(save_dir, "uvis_adapted.pt"))
+            torch.save(self.upro.state_dict(), os.path.join(save_dir, "upro.pt"))
+            torch.save(self.cost_head.state_dict(), os.path.join(save_dir, "cost_head_adapted.pt"))
         print(f"Saved PATERN− models to {save_dir}")
 
-def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, device, save_dir):
+def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, device, save_dir, adapted=False):
     best_val_loss = float('inf')  # Initialize best validation loss to infinity
     
     for epoch in range(epochs):
@@ -184,7 +190,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
         # Check if current validation loss is better than the best so far
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss  # Update best validation loss
-            model.save_models(save_dir)   # Save models only if validation loss improves
+            model.save_models(save_dir, adapted)   # Save models only if validation loss improves
             print(f"New best validation loss: {best_val_loss:.4f}, models saved.")
 
         scheduler.step()
@@ -193,7 +199,7 @@ def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs, d
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pre-Adaptation Training for PATERN with 128D")
     parser.add_argument("-bag","-b", type=str, required=True, help="Base bag directory (e.g., bags/agh_courtyard_2)")
-    parser.add_argument("-batch_size", type=int, default=256, help="Batch size for training")
+    parser.add_argument("-batch_size", type=int, default=512, help="Batch size for training")
     parser.add_argument("-epochs", type=int, default=50, help="Number of epochs for training")
     parser.add_argument("-val_split", type=float, default=0.2, help="Fraction of dataset to use for validation (0.0 to 1.0)")
     args = parser.parse_args()
@@ -210,13 +216,13 @@ if __name__ == "__main__":
     # Search for pre-trained weights
     models_dir = os.path.join(args.bag, "models")
     save_dir = models_dir
-    pretrained_weights_path = None
-    if os.path.exists(models_dir):
-        for file_name in os.listdir(models_dir):
-            if file_name.endswith("terrain_rep.pt"):
-                pretrained_weights_path = os.path.join(models_dir, file_name)
+    terrain_rep_path = None
+    if os.path.isdir(models_dir):
+        for fn in os.listdir(models_dir):
+            if fn.endswith("terrain_rep.pt"):
+                terrain_rep_path = os.path.join(models_dir, fn)
                 break
-    print(f"Pre-trained weights: {pretrained_weights_path or 'None'}")
+    print(f"terrain_rep.pt candidate: {terrain_rep_path or 'None'}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -235,45 +241,141 @@ if __name__ == "__main__":
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=True)
 
     # Initialize model
     model = PaternPreAdaptation(device=device, pretrained_weights_path=models_dir, latent_size=128).to(device)
-    model.train_loader = train_loader  # Pass loader to model
-    model.val_loader = val_loader     # Pass loader to model
+    model.train_loader = train_loader
+    model.val_loader = val_loader
 
-    # Check if weights were loaded (you can add a flag in PaternPreAdaptation)
+    # Select trained models
+    adapted = False
     weights_loaded = False
-    if os.path.exists(models_dir):
-        weight_files = ["fvis.pt", "fpro.pt", "uvis.pt", "upro.pt", "cost_head.pt"]
-        weights_loaded = all(os.path.exists(os.path.join(models_dir, file_name)) for file_name in weight_files)
+    chosen_files = []
 
-    # Set learning rate based on whether weights were loaded
+    if os.path.isdir(models_dir):
+        # 1. Check if adapted model files exist
+        adapted_set = ["fvis_adapted.pt", "uvis_adapted.pt", "cost_head_adapted.pt"]
+        adapted_missing = [f for f in adapted_set
+                          if not os.path.exists(os.path.join(models_dir, f))]
+
+        if not adapted_missing: # all three adapted files exist
+            print("Adapted models detected → loading adapted set")
+            load_map = {
+                "fvis_adapted.pt":   model.visual_encoder,
+                "fpro.pt":           model.proprioceptive_encoder,
+                "uvis_adapted.pt":   model.uvis,
+                "upro.pt":           model.upro,
+                "cost_head_adapted.pt": model.cost_head,
+            }
+            try:
+                for fname, module in load_map.items():
+                    path = os.path.join(models_dir, fname)
+                    if not os.path.exists(path):
+                        raise FileNotFoundError(fname)
+                    state = torch.load(path, map_location=device)
+                    module.load_state_dict(state)
+                    chosen_files.append(fname)
+                weights_loaded = True
+                adapted=True
+            except Exception as e:
+                print(f"  Failed loading adapted set: {e}")
+                weights_loaded = False
+                adapted=False
+
+        # 2. Unadapted set (only if adapted set was incomplete)
+        if not weights_loaded:
+            unadapted_set = ["fvis.pt", "fpro.pt", "uvis.pt", "upro.pt", "cost_head.pt"]
+            missing = [f for f in unadapted_set
+                       if not os.path.exists(os.path.join(models_dir, f))]
+            if not missing:
+                print("Unadapted models complete → loading classic set")
+                load_map = {
+                    "fvis.pt":      model.visual_encoder,
+                    "fpro.pt":      model.proprioceptive_encoder,
+                    "uvis.pt":      model.uvis,
+                    "upro.pt":      model.upro,
+                    "cost_head.pt": model.cost_head,
+                }
+                try:
+                    for fname, module in load_map.items():
+                        path = os.path.join(models_dir, fname)
+                        state = torch.load(path, map_location=device)
+                        module.load_state_dict(state)
+                        chosen_files.append(fname)
+                    weights_loaded = True
+                    adapted = False
+                except Exception as e:
+                    print(f"  Failed loading unadapted set: {e}")
+
+        # 3. terrain_rep.pt fallback
+        if not weights_loaded and terrain_rep_path:
+            print("Individual files incomplete → falling back to terrain_rep.pt")
+            try:
+                full_state = torch.load(terrain_rep_path, map_location=device)
+                expected = {"visual_encoder","proprioceptive_encoder","uvis","upro","cost_head"}
+                if not expected.issubset(full_state.keys()):
+                    raise ValueError("terrain_rep.pt missing required keys")
+                model.visual_encoder.load_state_dict(full_state["visual_encoder"])
+                model.proprioceptive_encoder.load_state_dict(full_state["proprioceptive_encoder"])
+                model.uvis.load_state_dict(full_state["uvis"])
+                model.upro.load_state_dict(full_state["upro"])
+                model.cost_head.load_state_dict(full_state["cost_head"])
+                chosen_files.append(os.path.basename(terrain_rep_path))
+                weights_loaded = True
+                adapted = False
+            except Exception as e:
+                print(f"  Failed loading terrain_rep.pt: {e}")
+
+    # Report which model files were chosen
+    if weights_loaded:
+        print("Pre-trained weights loaded successfully.")
+        print("Weights used for this run:")
+        for f in chosen_files:
+            print(f"  • {f}")
+    else:
+        print("No valid pre-trained weights found → training from scratch.")
+        chosen_files = ["<scratch>"]
+
+    # Train models
     optimizer = torch.optim.AdamW([
         {"params": model.visual_encoder.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
         {"params": model.proprioceptive_encoder.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
         {"params": model.uvis.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
         {"params": model.upro.parameters(), "lr": 1e-4 if weights_loaded else 1e-3},
-        {"params": model.cost_head.parameters(), "lr": 1e-3 if weights_loaded else 1e-2},  # Higher LR
+        {"params": model.cost_head.parameters(), "lr": 1e-3 if weights_loaded else 1e-2},
     ], weight_decay=1e-5, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-6)
 
-    # Optionally freeze encoders for initial epochs (only if fine-tuning)
-    freeze_epochs = 5 if weights_loaded else 0  # No freezing if training from scratch
+    freeze_epochs = 10 if weights_loaded else 0
     if freeze_epochs > 0:
-        for param in model.visual_encoder.parameters():
-            param.requires_grad = False
-        for param in model.proprioceptive_encoder.parameters():
-            param.requires_grad = False
+        for p in model.visual_encoder.parameters():      p.requires_grad = False
+        for p in model.proprioceptive_encoder.parameters(): p.requires_grad = False
 
     print("Starting training")
-    train_model(model, train_loader, val_loader, optimizer, scheduler, args.epochs, device, models_dir)
 
-    # If you have the unfreezing logic, update it similarly
+    if freeze_epochs > 0:
+        train_model(model, train_loader, val_loader, optimizer, scheduler,
+                    freeze_epochs, device, models_dir, adapted)
+
     if freeze_epochs > 0 and args.epochs > freeze_epochs:
-        for param in model.visual_encoder.parameters():
-            param.requires_grad = True
-        for param in model.proprioceptive_encoder.parameters():
-            param.requires_grad = True
-        train_model(model, train_loader, val_loader, optimizer, scheduler, args.epochs - freeze_epochs, device, models_dir)
+        print(f"Unfreezing encoders at epoch {freeze_epochs}...")
+        for p in model.visual_encoder.parameters():      p.requires_grad = True
+        for p in model.proprioceptive_encoder.parameters(): p.requires_grad = True
+        optimizer = torch.optim.AdamW([
+            {"params": model.visual_encoder.parameters(), "lr": 1e-4},
+            {"params": model.proprioceptive_encoder.parameters(), "lr": 1e-4},
+            {"params": model.uvis.parameters(), "lr": 1e-4},
+            {"params": model.upro.parameters(), "lr": 1e-4},
+            {"params": model.cost_head.parameters(), "lr": 1e-3},
+        ], weight_decay=1e-5, amsgrad=True)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=5, T_mult=2, eta_min=1e-6)
+        train_model(model, train_loader, val_loader, optimizer, scheduler,
+                    args.epochs - freeze_epochs, device, models_dir, adapted)
+    else:
+        train_model(model, train_loader, val_loader, optimizer, scheduler,
+                    args.epochs, device, models_dir, adapted)
+
+    dataset.__del__()

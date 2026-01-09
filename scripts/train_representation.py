@@ -4,21 +4,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from terrain_dataset import TerrainDataset, worker_init_fn
 from torch.utils.data import DataLoader, Subset
-from utils import load_bag_pkl, load_bag_pt_model, load_bag_h5
+from utils import load_bag_pt_model, load_bag_h5
 from vicreg import VICRegLoss
 from models import VisualEncoderModel, ProprioceptionModel
 import torchvision.transforms.v2 as v2
 import os
 from torch.utils.data import random_split
 from tqdm import tqdm
-from torch.cuda.amp import GradScaler, autocast
+from homography_params import get_homography_params
 
 
 class SterlingRepresentation(nn.Module):
-    def __init__(self, device, pretrained_weights_dir=None):
+    def __init__(self, device, pretrained_weights_dir=None, latent_size=128):
         super(SterlingRepresentation, self).__init__()
         self.device = device
-        self.latent_size = 128
+        self.latent_size = latent_size
         self.rep_size = self.latent_size
 
         # Initialize encoders
@@ -111,10 +111,12 @@ def custom_collate(batch):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Sterling Representation Model")
     parser.add_argument("-bag", "-b", type=str, required=True)
-    parser.add_argument("-batch_size", "-batch", type=int, default=1024)  # Updated default
+    parser.add_argument("-batch_size", "-batch", type=int, default=4096)
     parser.add_argument("-epochs", type=int, default=50)
     parser.add_argument("-val_split", type=float, default=0.2)
     args = parser.parse_args()
+
+    px_meter = get_homography_params().px_meter()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -126,19 +128,19 @@ if __name__ == "__main__":
         v2.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.01),
     ]).to(device)  # Move to GPU
 
-    dataset = TerrainDataset(synced_h5_path=synced_h5_path, vicreg_h5_path=vicreg_h5_path, train=True)
+    dataset = TerrainDataset(synced_h5_path=synced_h5_path, vicreg_h5_path=vicreg_h5_path, incl_orientation=True, train=True, patch_size=128)
     val_size = int(args.val_split * len(dataset))
     train_size = len(dataset) - val_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_dataloader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, 
-        num_workers=4, pin_memory=False, collate_fn=custom_collate, 
+        num_workers=0, pin_memory=False, collate_fn=custom_collate, 
         worker_init_fn=worker_init_fn  # Use the standalone function
     )
     val_dataloader = DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False, 
-        num_workers=4, pin_memory=False, collate_fn=custom_collate, 
+        num_workers=0, pin_memory=False, collate_fn=custom_collate, 
         worker_init_fn=worker_init_fn  # Use the standalone function
     )
 

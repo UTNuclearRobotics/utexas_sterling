@@ -58,6 +58,21 @@ class get_homography_params:
         else:
             self.plane_distance = None
 
+        # Load distortion coefficients (optional)
+        if "distortion" in config:
+            distortion_list = config["distortion"]
+            if len(distortion_list) != 5:
+                raise ValueError("Distortion coefficients in YAML is not a 5-element vector")
+            self.distortion = np.array(distortion_list, dtype=np.float32)
+        else:
+            self.distortion = None
+
+                # Load distortion coefficients (optional)
+        if "px_meter" in config:
+            self.px_meter_val = config["px_meter"]
+        else:
+            self.px_meter_val = None
+
     def reload_config(self):
         """
         Reload the configuration from the YAML file to reflect any updates.
@@ -123,3 +138,21 @@ class get_homography_params:
             plane_distance (float or None): The plane distance loaded from the YAML file, or None if not present.
         """
         return self.plane_distance
+    
+    def distortion_coefs(self):
+        """
+        Get the distortion as a 5x1 NumPy array.
+
+        Returns:
+            plane_distance (float or None): The plane distance loaded from the YAML file, or None if not present.
+        """
+        return self.distortion
+    
+    def px_meter(self):
+        """
+        Get the distortion as a 5x1 NumPy array.
+
+        Returns:
+            plane_distance (float or None): The plane distance loaded from the YAML file, or None if not present.
+        """
+        return self.px_meter_val

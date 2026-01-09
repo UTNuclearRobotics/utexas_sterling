@@ -2,22 +2,17 @@ import sys
 import os
 import yaml
 import numpy as np
-import pickle
 from PIL import Image
 import torch
 from torch.utils.data import DataLoader
 import gi
+gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk, GdkPixbuf
 from cluster import Cluster, PatchRenderer
-from terrain_dataset import TerrainDataset
 from multiprocessing import Pool
-from functools import partial
 import h5py
 import gc
 from tqdm import tqdm
-from sklearn.cluster import KMeans
-
-gi.require_version("Gtk", "4.0")
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -42,7 +37,7 @@ class ClusterUI(Gtk.Application):
         # Create a scrolled window
         scrolled_window = Gtk.ScrolledWindow()
         scrolled_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        window.set_child(scrolled_window)
+        window.add(scrolled_window)
 
         # Create a vertical box layout
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -50,28 +45,28 @@ class ClusterUI(Gtk.Application):
         vbox.set_margin_bottom(10)
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
-        scrolled_window.set_child(vbox)
+        scrolled_window.add(vbox)
 
         spf = SelectVicregFile(window)
-        vbox.append(spf.get_component())
+        vbox.pack_start(spf.get_component(), expand=True, fill=True, padding=0)
 
-        vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        vbox.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), expand=False, fill=True, padding=0)
 
         ssf = SelectSyncedFile(window)
-        vbox.append(ssf.get_component())
+        vbox.pack_start(ssf.get_component(), expand=True, fill=True, padding=0)
 
-        vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        vbox.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), expand=False, fill=True, padding=0)
 
         smf = SelectModelFile(window)
-        vbox.append(smf.get_component())
+        vbox.pack_start(smf.get_component(), expand=True, fill=True, padding=0)
 
-        vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        vbox.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), expand=False, fill=True, padding=0)
 
         gc = GenerateClusters(window, spf, ssf, smf)
-        vbox.append(gc.get_component())
+        vbox.pack_start(gc.get_component(), expand=True, fill=True, padding=0)
 
         # Show the window
-        window.present()
+        window.show_all()
 
 
 class SelectVicregFile:
@@ -86,16 +81,16 @@ class SelectVicregFile:
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
 
-        vbox.append(Gtk.Label(label="Vicreg .h5 file selected:"))
+        vbox.pack_start(Gtk.Label(label="Vicreg .h5 file selected:"), expand=False, fill=True, padding=0)
 
         # Pickle file status
         self.label = Gtk.Label(label="None")
-        vbox.append(self.label)
+        vbox.pack_start(self.label, expand=False, fill=True, padding=0)
 
         # Pickle file chooser button
         file_chooser_button = Gtk.Button(label="Open")
         file_chooser_button.connect("clicked", self.on_file_chooser_button_clicked)
-        vbox.append(file_chooser_button)
+        vbox.pack_start(file_chooser_button, expand=False, fill=True, padding=0)
 
         return vbox
 
@@ -133,16 +128,16 @@ class SelectSyncedFile:
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
 
-        vbox.append(Gtk.Label(label="Synced .h5 file selected:"))
+        vbox.pack_start(Gtk.Label(label="Synced .h5 file selected:"), expand=False, fill=True, padding=0)
 
         # Pickle file status
         self.label = Gtk.Label(label="None")
-        vbox.append(self.label)
+        vbox.pack_start(self.label, expand=False, fill=True, padding=0)
 
         # Pickle file chooser button
         file_chooser_button = Gtk.Button(label="Open")
         file_chooser_button.connect("clicked", self.on_file_chooser_button_clicked)
-        vbox.append(file_chooser_button)
+        vbox.pack_start(file_chooser_button, expand=False, fill=True, padding=0)
 
         return vbox
 
@@ -181,16 +176,16 @@ class SelectModelFile:
         vbox.set_margin_start(10)
         vbox.set_margin_end(10)
 
-        vbox.append(Gtk.Label(label="Model file selected:"))
+        vbox.pack_start(Gtk.Label(label="Model file selected:"), expand=False, fill=True, padding=0)
 
         # Pickle file status
         self.label = Gtk.Label(label="None")
-        vbox.append(self.label)
+        vbox.pack_start(self.label, expand=False, fill=True, padding=0)
 
         # Pickle file chooser button
         file_chooser_button = Gtk.Button(label="Open")
         file_chooser_button.connect("clicked", self.on_file_chooser_button_clicked)
-        vbox.append(file_chooser_button)
+        vbox.pack_start(file_chooser_button, expand=False, fill=True, padding=0)
 
         return vbox
 
@@ -228,6 +223,7 @@ class GenerateClusters:
         self.all_cluster_image_indices = None
         self.cluster_labels = None
         self.dataset = None
+        self.representation_vectors_np = None
 
     def get_component(self):
         self.vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -238,27 +234,27 @@ class GenerateClusters:
 
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         label = Gtk.Label(label="Number of Clusters:")
-        hbox.append(label)
+        hbox.pack_start(label, expand=False, fill=True, padding=0)
 
         self.entry_clusters = Gtk.Entry()
         self.entry_clusters.set_placeholder_text("Enter number of clusters...")
         self.entry_clusters.set_text("5")
-        hbox.append(self.entry_clusters)
-        self.vbox.append(hbox)
+        hbox.pack_start(self.entry_clusters, expand=False, fill=True, padding=0)
+        self.vbox.pack_start(hbox, expand=True, fill=True, padding=0)
 
         hbox_iterations = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         label_iterations = Gtk.Label(label="Number of Iterations:")
-        hbox_iterations.append(label_iterations)
+        hbox_iterations.pack_start(label_iterations, expand=False, fill=True, padding=0)
 
         self.entry_iterations = Gtk.Entry()
         self.entry_iterations.set_placeholder_text("Enter number of iterations...")
         self.entry_iterations.set_text("100")
-        hbox_iterations.append(self.entry_iterations)
-        self.vbox.append(hbox_iterations)
+        hbox_iterations.pack_start(self.entry_iterations, expand=False, fill=True, padding=0)
+        self.vbox.pack_start(hbox_iterations, expand=True, fill=True, padding=0)
 
         button = Gtk.Button(label="Generate Clusters")
         button.connect("clicked", self.on_button_clicked)
-        self.vbox.append(button)
+        self.vbox.pack_start(button, expand=False, fill=True, padding=0)
 
         return self.vbox
 
@@ -310,6 +306,12 @@ class GenerateClusters:
             save_model_path=os.path.join(save_path, "kmeans_model.pkl"),
         )
 
+        sizes = [len(indices) for indices in self.all_cluster_image_indices]
+        order = np.argsort(sizes)[::-1]   # descending order
+
+        # Reorder the list of cluster indices
+        self.all_cluster_image_indices = [self.all_cluster_image_indices[i] for i in order]
+
         # Store the dataset (still lazy-loading)
         self.dataset = self.cluster.dataset
         self.cluster_labels = np.zeros(len(self.dataset), dtype=int)
@@ -317,6 +319,8 @@ class GenerateClusters:
             for idx in indices:
                 self.cluster_labels[idx] = cluster_idx
 
+        self.representation_vectors_np = self.cluster.get_embeddings()
+        
         # Target at least 1500 samples per cluster
         min_samples = 1500  # Fixed minimum number of samples to show
 
@@ -339,12 +343,11 @@ class GenerateClusters:
                 selected_indices = cluster_indices  # Use all if fewer than 1500
             
             cluster_patches = []
-
             # Process randomly selected samples incrementally
             for idx in selected_indices:
                 patch1, _, _ = self.dataset[idx]
                 # Render patch with RGB input (from VICReg .h5) and RGB output for display
-                patch_np = renderer.render_patch(patch1, input_format="RGB", output_format="RGB")
+                patch_np = renderer.render_patch(patch1, input_format="BGR", output_format="RGB")
                 cluster_patches.append(patch_np)
 
             # Create a grid for this cluster
@@ -360,7 +363,7 @@ class GenerateClusters:
             
             # Clean up to free memory
             del cluster_patches
-            gc.collect()  # Optional: Force garbage collection if memory is tight
+            gc.collect()
 
         def numpy_to_pixbuf(array):
             height, width, channels = array.shape
@@ -388,26 +391,36 @@ class GenerateClusters:
             ranking_field.set_text("0")
 
             vbox_image = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-            vbox_image.append(image_widget)
-            vbox_image.append(Gtk.Label(label=f"Label {i + 1}"))
-            vbox_image.append(text_field)
-            vbox_image.append(Gtk.Label(label="Preference"))
-            vbox_image.append(ranking_field)
+            vbox_image.pack_start(
+                Gtk.Label(label=f"Cluster {i+1}  ({len(self.all_cluster_image_indices[i])} samples)"),
+                expand=False, fill=True, padding=5
+            )
+            vbox_image.pack_start(image_widget, expand=False, fill=True, padding=0)
+            vbox_image.pack_start(Gtk.Label(label=f"Label {i + 1}"), expand=False, fill=True, padding=0)
+            vbox_image.pack_start(text_field, expand=False, fill=True, padding=0)
+            vbox_image.pack_start(Gtk.Label(label="Preference"), expand=False, fill=True, padding=0)
+            vbox_image.pack_start(ranking_field, expand=False, fill=True, padding=0)
 
-            hbox_images.append(vbox_image)
+            hbox_images.pack_start(vbox_image, expand=True, fill=True, padding=0)
             self.labels_and_rankings.append((text_field, ranking_field))
 
+        # Remove previous separator, hbox_images, and save_button if generated_flag is True
         if self.generated_flag:
-            for _ in range(3):
-                self.vbox.remove(self.vbox.get_last_child())
+            children = self.vbox.get_children()
+            if len(children) >= 3:
+                for _ in range(3):
+                    self.vbox.remove(children[-1])  # Remove last child
+                    children = self.vbox.get_children()  # Update children list
         self.generated_flag = True
 
-        self.vbox.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        self.vbox.append(hbox_images)
+        self.vbox.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), expand=False, fill=True, padding=0)
+        self.vbox.pack_start(hbox_images, expand=True, fill=True, padding=0)
 
         save_button = Gtk.Button(label="Save Labels and Preferences")
         save_button.connect("clicked", self.on_save_button_clicked)
-        self.vbox.append(save_button)
+        self.vbox.pack_start(save_button, expand=False, fill=True, padding=0)
+
+        self.vbox.show_all()
 
     def on_save_button_clicked(self, button):
         vicreg_h5_path = self.spf.data_h5_path
@@ -416,14 +429,12 @@ class GenerateClusters:
         config_path = os.path.join(script_dir, "homography", "config.yaml")
         dataset_save_path = os.path.join(save_path, "labeled_data.h5")
 
-        # Precompute paths and ensure directory exists
         os.makedirs(save_path, exist_ok=True)
         for file in os.listdir(save_path):
             file_path = os.path.join(save_path, file)
             if os.path.isfile(file_path) and file_path.endswith(".jpg"):
                 os.unlink(file_path)
 
-        # Collect user-provided labels and preferences
         user_labels_and_rankings = []
         for text_field, ranking_field in self.labels_and_rankings:
             label = text_field.get_text()
@@ -443,30 +454,64 @@ class GenerateClusters:
                 return
             user_labels_and_rankings.append((label, ranking))
 
-        # Parallelize image saving
-        num_images = len(self.images)
+        label_to_new_id = {}
+        current_id = 0
+        for label, _ in user_labels_and_rankings:
+            if label not in label_to_new_id:
+                label_to_new_id[label] = current_id
+                current_id += 1
+
+        new_cluster_labels = np.zeros_like(self.cluster_labels, dtype=int)
+        for cluster_idx, indices in enumerate(self.all_cluster_image_indices):
+            user_label = user_labels_and_rankings[cluster_idx][0]
+            new_id = label_to_new_id[user_label]
+            for idx in indices:
+                new_cluster_labels[idx] = new_id
+
+        unique_labels = sorted(label_to_new_id.keys(), key=lambda x: label_to_new_id[x])
+        new_terrains = []
+        for label in unique_labels:
+            for orig_label, preference in user_labels_and_rankings:
+                if orig_label == label:
+                    new_terrains.append({
+                        'name': label,
+                        'label': label_to_new_id[label],
+                        'preference': preference
+                    })
+                    break
+
+        cluster_to_terrain = {
+            label_to_new_id[label]: {'terrain_label': label, 'preference': preference}
+            for label, preference in user_labels_and_rankings
+        }
+
+        # Plot clusters with new labels
+        self.cluster.plot_clusters_with_labels(
+            self.representation_vectors_np,
+            new_cluster_labels,
+            label_to_new_id,
+            len(unique_labels),
+            save_plot_path=save_path
+        )
+
+        # Parallelize image saving with unique labels
+        unique_images = []
+        unique_label_prefs = []
+        seen_labels = set()
+        for i, (label, pref) in enumerate(user_labels_and_rankings):
+            if label not in seen_labels:
+                unique_images.append(self.images[i])
+                unique_label_prefs.append((label, pref))
+                seen_labels.add(label)
+
+        num_images = len(unique_images)
         if num_images > 1:  # Only parallelize if worth it
             with Pool(processes=min(os.cpu_count(), num_images)) as pool:
-                pool.map(save_image, [(i, self.images[i], user_labels_and_rankings[i][0], save_path) 
+                pool.map(save_image, [(i, unique_images[i], unique_label_prefs[i][0], save_path) 
                                     for i in range(num_images)])
         else:
-            for i, image in enumerate(self.images):
-                save_image((i, image, user_labels_and_rankings[i][0], save_path))
-
-        # Prepare config
-        existing_config = {}
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as file:
-                existing_config = yaml.safe_load(file) or {}
-
-        new_terrains = [
-            {'name': label, 'label': idx, 'preference': preference}
-            for idx, (label, preference) in enumerate(user_labels_and_rankings)
-        ]
-        cluster_to_terrain = {
-            cluster_idx: {'terrain_label': label, 'preference': preference}
-            for cluster_idx, (label, preference) in enumerate(user_labels_and_rankings)
-        }
+            for i, image in enumerate(unique_images):
+                save_image((i, image, unique_label_prefs[i][0], save_path))
 
         # Preallocate and batch-write HDF5 data
         num_samples = len(self.dataset)
@@ -507,8 +552,8 @@ class GenerateClusters:
                     if inertial is not None and isinstance(inertial, torch.Tensor):
                         inertial = inertial.numpy()
 
-                    terrain_label = cluster_to_terrain[self.cluster_labels[idx]]['terrain_label']
-                    preference = cluster_to_terrain[self.cluster_labels[idx]]['preference']
+                    terrain_label = cluster_to_terrain[new_cluster_labels[idx]]['terrain_label']
+                    preference = cluster_to_terrain[new_cluster_labels[idx]]['preference']
 
                     batch_patches.append(patch)
                     if inertial_exists:
@@ -525,7 +570,11 @@ class GenerateClusters:
 
         print(f"Saved labeled data to: {dataset_save_path}")
 
-        # Update config
+        existing_config = {}
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as file:
+                existing_config = yaml.safe_load(file) or {}
+
         existing_config['terrains'] = new_terrains
         with open(config_path, "w") as file:
             yaml.dump(existing_config, file, default_flow_style=None, sort_keys=False)
@@ -536,18 +585,13 @@ class GenerateClusters:
             modal=True,
             message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
-            text="Terrains updated in config.yaml and labeled data saved.",
+            text="Terrains updated in config.yaml, labeled data saved, and cluster plot generated.",
         )
         success_dialog.show()
         success_dialog.connect("response", lambda dialog, response: dialog.destroy())
 
 def get_children(box):
-    children = []
-    child = box.get_first_child()
-    while child:
-        children.append(child)
-        child = child.get_next_sibling()
-    return children
+    return box.get_children()
 
 app = ClusterUI()
 exit_status = app.run(sys.argv)

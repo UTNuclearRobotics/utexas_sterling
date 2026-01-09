@@ -1,6 +1,5 @@
 import argparse
 import os
-import pickle
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +15,7 @@ import gc
 
 
 # GCD of 1280 and 720: 1,2,4,5,8,10,16,20,40,80
-CELL_SIZE = 40
+CELL_SIZE = 128
 
 
 class BEVCostmap:
@@ -86,6 +85,7 @@ class BEVCostmap:
             #preferences = preferences * 255
             uvis_costs = uvis_pred.squeeze(-1).cpu().numpy().astype(np.uint8)
             final_costs = final_cost.squeeze(-1).cpu().numpy().astype(np.uint8)
+            final_costs = np.clip(final_costs, 1, 100)
             return uvis_costs, final_costs
 
     def BEV_to_costmap(self, bev_img, cell_size):
@@ -100,8 +100,8 @@ class BEVCostmap:
         costmap = np.empty((num_cells_y, num_cells_x), dtype=np.uint8)
 
         mask = np.zeros((height, width), dtype=np.uint8)
-        triangle_left = np.array([[0, height], [0, 3 * height // 4], [width // 4, height]], dtype=np.int32)
-        triangle_right = np.array([[width, height], [width, 3 * height // 4], [width - width // 4, height]], dtype=np.int32)
+        triangle_left = np.array([[0, height], [0, 1 * height // 4], [(width // 4)+256, height]], dtype=np.int32)
+        triangle_right = np.array([[width, height], [width, 1 * height // 4], [(width - width // 4)-256, height]], dtype=np.int32)
         cv2.fillPoly(mask, [triangle_left, triangle_right], 255)
         mask = mask[:effective_height, :effective_width]
 
@@ -133,7 +133,8 @@ class BEVCostmap:
         costmap[black_cells] = 255
         costmap[~black_cells] = final_cost
 
-        inv_costmap = 255 - costmap
+        #inv_costmap = 255 - costmap
+        inv_costmap = costmap
 
         # Prepare costmap for video: resize to match bev_img dimensions and convert to 3 channels
         costmap_resized = cv2.resize(inv_costmap, (effective_width, effective_height), interpolation=cv2.INTER_NEAREST)
@@ -181,13 +182,6 @@ class BEVCostmap:
             if img_cost.shape[1] != img_BEV.shape[1] or img_cost.shape[0] != img_BEV.shape[0]:
                 img_cost = cv2.resize(img_cost, (img_BEV.shape[1], img_BEV.shape[0]), interpolation=cv2.INTER_AREA)
 
-            # Perform color conversion only if necessary
-            if img_BEV.shape[-1] == 3 and img_BEV.max() > 1:  # Simplified check
-                if img_BEV.flags.writeable:  # Ensure array is writeable
-                    img_BEV = cv2.cvtColor(img_BEV, cv2.COLOR_RGB2BGR)
-                else:
-                    img_BEV = cv2.cvtColor(img_BEV.copy(), cv2.COLOR_RGB2BGR)
-
             # Normalize only if not already uint8 (batch this if possible)
             if img_BEV.dtype != np.uint8:
                 img_BEV = img_BEV.astype(np.float32)
@@ -202,6 +196,8 @@ class BEVCostmap:
                 if img_max > img_min:
                     img_cost = (img_cost - img_min) / (img_max - img_min + 1e-6) * 255
                 img_cost = img_cost.astype(np.uint8)
+
+            img_BEV = cv2.cvtColor(img_BEV, cv2.COLOR_RGB2BGR)
 
             # Concatenate vertically
             combined_frame = cv2.vconcat([img_cost, img_BEV])
@@ -223,7 +219,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get BEV cost visual using trained preference predictor.")
     parser.add_argument("-m","-model_bag", type=str, required=True, help="Bag directory with model files inside.")
     parser.add_argument("-b","-synced_bag", type=str, required=True, help="Bag directory with synchronized HDF5 file inside.")
-    parser.add_argument("-a","-use_adapted", type=bool, default=True, help="Use adapted models if True, else use preadapted model.")
+    parser.add_argument("-a","-use_adapted", type=bool, default=False, help="Use adapted models if True, else use preadapted model.")
     parser.add_argument("-v", "-save_vid", type=bool, default=False, help="Save video if True or play live if False.")
     args = parser.parse_args()
 
@@ -239,15 +235,14 @@ if __name__ == "__main__":
     h5_file_path = os.path.join(bag_path, h5_files[0])
 
     H = get_homography_params().homography_matrix()
-    # Assuming RobotDataAtTimestep needs to be modified to handle HDF5
-    # You'll need to adjust this based on your HDF5 file structure
     robot_data = RobotDataAtTimestep(h5_file_path)  
 
     # Search for pre-trained weights
     models_dir = os.path.join(args.m, "models")
-    bev_costmap = BEVCostmap(models_dir, save_path=bag_path, adapted=adapted)
+    save_path = bag_path if save_vid else None
+    bev_costmap = BEVCostmap(models_dir, save_path=save_path, adapted=adapted)
     max_timesteps = robot_data.getNTimesteps()
-    start_timestep = min(2300, max_timesteps)
+    start_timestep = min(3000, max_timesteps)
     frame_count = 0
     video_writer = None
     frame_size = None

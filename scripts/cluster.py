@@ -145,37 +145,58 @@ class PatchRenderer:
 
 class Cluster:
     def __init__(self, vicreg_h5_path, synced_h5_path, model_path, batch_size=256):
-        """
-        Initialize the Cluster class with paths to .h5 files and a model.
-
-        Args:
-            vicreg_h5_path (str): Path to VICReg .h5 file.
-            synced_h5_path (str): Path to synced .h5 file.
-            model_path (str): Path to pre-trained model weights.
-            batch_size (int): Batch size for DataLoader.
-        """
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Validate file paths
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")        
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found at: {model_path}")
         if not os.path.exists(vicreg_h5_path):
             raise FileNotFoundError(f"VICReg .h5 file not found at: {vicreg_h5_path}")
         if not os.path.exists(synced_h5_path):
             raise FileNotFoundError(f"Synced .h5 file not found at: {synced_h5_path}")
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at: {model_path}")
+
+        # Convert to absolute paths
+        model_path = os.path.abspath(model_path)
+        vicreg_h5_path = os.path.abspath(vicreg_h5_path)
+        synced_h5_path = os.path.abspath(synced_h5_path)
 
         # Load model weights
         self.model = SterlingRepresentation("cpu").to("cpu")
         self.model.load_state_dict(torch.load(model_path, weights_only=True), strict=False)
 
-        # Create dataset and dataloader with lazy loading
-        self.dataset = TerrainDataset(
-            synced_h5_path=synced_h5_path,
-            vicreg_h5_path=vicreg_h5_path,
-            incl_orientation=False
-        )
-        self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=False)
+        # Create dataset and dataloader
+        try:
+            self.dataset = TerrainDataset(
+                synced_h5_path=synced_h5_path,
+                vicreg_h5_path=vicreg_h5_path,
+                incl_orientation=True
+            )
+        except Exception as e:
+            print(f"Error initializing TerrainDataset: {e}")
+            raise
+
+        self.dataloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.batch_size = batch_size
+
+    def get_embeddings(self):
+        """Generate and return embeddings for all samples."""
+        self.model.cpu()
+        self.model.eval()
+        num_samples = len(self.dataloader.dataset)
+        embedding_size = 2 * self.model.latent_size
+        temp_file = "temp_embeddings.dat"
+        representation_vectors_np = np.memmap(temp_file, dtype='float32', mode='w+', shape=(num_samples, embedding_size))
+
+        with torch.no_grad():
+            start_idx = 0
+            for batch in self.dataloader:
+                patch1, _, inertial = batch
+                patch1 = patch1.cpu()
+                inertial = inertial.cpu()
+                embeddings = self.model.get_terrain_embedding(patch1, inertial).cpu().numpy()
+                batch_size = embeddings.shape[0]
+                representation_vectors_np[start_idx:start_idx + batch_size] = embeddings
+                start_idx += batch_size
+
+        return representation_vectors_np
 
     def generate_clusters(
         self,
@@ -234,58 +255,51 @@ class Cluster:
         for idx, cluster in enumerate(cluster_labels):
             all_cluster_image_indices[cluster].append(idx)  # Assign image index to corresponding cluster
 
-        # Plot clusters
-        save_plot_dir = os.path.dirname(save_model_path)
-        self.plot_clusters(representation_vectors_np, torch.tensor(cluster_labels), k, save_plot_path=save_plot_dir)
-        
         # Clean up temporary file
         del representation_vectors_np
         os.remove(temp_file)
 
         return all_cluster_image_indices
 
-    def plot_clusters(self, representation_vectors_np, min_indices, k, save_plot_path=None):
+    def plot_clusters_with_labels(self, representation_vectors_np, cluster_labels, label_to_id, k, save_plot_path=None):
         """
-        Visualizes the k-means clusters after performing dimensionality reduction using PCA.
+        Visualizes the k-means clusters after performing dimensionality reduction using PCA,
+        using user-provided labels and new cluster IDs.
 
         Args:
-            representation_vectors (torch.Tensor): Combined embeddings.
-            min_indices (torch.Tensor): Cluster labels.
-            k (int): Number of clusters.
+            representation_vectors_np (np.ndarray): Combined embeddings.
+            cluster_labels (np.ndarray): New cluster labels based on user input.
+            label_to_id (dict): Mapping from user-provided labels to new cluster IDs.
+            k (int): Number of unique clusters (after merging).
             save_plot_path (str): Directory to save the plot.
         """
-
-        # Apply PCA for dimensionality reduction (First to 20D, then to 2D)
         pca_high = PCA(n_components=20, random_state=42)
         intermediate_vectors = pca_high.fit_transform(representation_vectors_np)
-
         pca_final = PCA(n_components=2, whiten=True, random_state=42)
         reduced_vectors = pca_final.fit_transform(intermediate_vectors)
 
-        # Compute centroids in PCA-reduced space
         reduced_centroids = np.array([
-            reduced_vectors[min_indices == i].mean(axis=0) for i in range(k)
+            reduced_vectors[cluster_labels == i].mean(axis=0) for i in range(k)
         ])
 
-        # Plot clusters
         plt.figure(figsize=(8, 6))
-        for cluster_idx in range(k):
-            cluster_points = reduced_vectors[min_indices == cluster_idx]
-            plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=f"Cluster {cluster_idx}", alpha=0.6)
+        for cluster_id in range(k):
+            cluster_points = reduced_vectors[cluster_labels == cluster_id]
+            user_label = next((label for label, cid in label_to_id.items() if cid == cluster_id), f"Cluster {cluster_id}")
+            plt.scatter(cluster_points[:, 0], cluster_points[:, 1], label=user_label, alpha=0.6)
 
         plt.scatter(reduced_centroids[:, 0], reduced_centroids[:, 1], c="black", marker="x", label="Centroids")
-        plt.title(f"K-means Clusters with k={k}")
+        plt.title(f"K-means Clusters with k={k} (User Labels)")
         plt.xlabel("PCA Component 1")
         plt.ylabel("PCA Component 2")
         plt.legend()
         plt.grid(True)
 
-        # Save the plot
         if save_plot_path:
             os.makedirs(save_plot_path, exist_ok=True)
-            plot_file_path = os.path.join(save_plot_path, f"clusters_k{k}.png")
+            plot_file_path = os.path.join(save_plot_path, f"clusters_k{k}_labeled.png")
             plt.savefig(plot_file_path, dpi=300, bbox_inches='tight')
-            print(f"Saved cluster plot to: {plot_file_path}")
+            print(f"Saved labeled cluster plot to: {plot_file_path}")
         
         plt.close()
 

@@ -3,7 +3,7 @@ import argparse
 import os
 import numpy as np
 from tqdm import tqdm
-from bev_costmap import BEVCostmap
+from bev_costmap_patern import BEVCostmap
 from homography_params import get_homography_params
 from robot_data_at_timestep import RobotDataAtTimestep  
 from image_stitcher import MapViewer

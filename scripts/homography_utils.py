@@ -3,6 +3,39 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from concurrent.futures import ThreadPoolExecutor
 
+def undistort_image(image, camera_matrix, dist_coeffs, crop=True):
+    """
+    Undistorts an image using camera matrix and distortion coefficients.
+    
+    Args:
+        image (np.ndarray): Input image to undistort (BGR format from cv2.imread).
+        camera_matrix (np.ndarray): 3x3 camera matrix [[fx, 0, cx], [0, fy, cy], [0, 0, 1]].
+        dist_coeffs (np.ndarray): 1D array of distortion coefficients (e.g., [k1, k2, p1, p2, k3]).
+        crop (bool): If True, crops the undistorted image using ROI to remove black borders.
+    
+    Returns:
+        np.ndarray: Undistorted image (cropped if crop=True).
+    """
+    # Get image dimensions
+    h, w = image.shape[:2]
+    
+    # Compute optimal new camera matrix to adjust field of view
+    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
+        camera_matrix, dist_coeffs, (w, h), 1, (w, h)
+    )
+    
+    # Undistort the image
+    undistorted_image = cv2.undistort(
+        image, camera_matrix, dist_coeffs, None, new_camera_matrix
+    )
+    
+    # Crop the image using ROI if specified
+    if crop:
+        x, y, w, h = roi
+        undistorted_image = undistorted_image[y:y+h, x:x+w]
+    
+    return undistorted_image
+
 def rotation_matrix_to_euler_angles_scipy(R_matrix, order='xyz', degrees=True):
     """
     Convert a rotation matrix to Euler angles using SciPy.
@@ -104,8 +137,8 @@ def plot_BEV_full(img, H, patch_size=(128, 128)):
         stitched_image: Reconstructed bird's-eye view image.
     """
     # Define horizontal and vertical shifts
-    num_patches_x = 6
-    num_patches_y = 10
+    num_patches_x = 14
+    num_patches_y = 15
     shift_step = 128
 
     # Compute all shifts using vectorized NumPy operations
