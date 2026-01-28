@@ -278,7 +278,7 @@ class TerrainDataset(Dataset):
                     try:
                         self.vicreg_h5 = h5py.File(self.vicreg_h5_path, 'r')
                         
-                        shifts_per_timestep = 5
+                        shifts_per_timestep = 3
                         total_shifts = self.num_timesteps * shifts_per_timestep
                         self.length = total_shifts
                         

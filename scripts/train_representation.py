@@ -136,12 +136,12 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, 
         num_workers=0, pin_memory=False, collate_fn=custom_collate, 
-        worker_init_fn=worker_init_fn  # Use the standalone function
+        worker_init_fn=worker_init_fn
     )
     val_dataloader = DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False, 
         num_workers=0, pin_memory=False, collate_fn=custom_collate, 
-        worker_init_fn=worker_init_fn  # Use the standalone function
+        worker_init_fn=worker_init_fn
     )
 
     # Initialize model with pre-trained weights
@@ -157,7 +157,7 @@ if __name__ == "__main__":
                             for file_name in weight_files)
 
     # Define optimizer with a lower learning rate for fine-tuning
-    lr = 1e-4 if weights_loaded else 3e-4  # Lower LR if fine-tuning
+    lr = 1e-4 if weights_loaded else 3e-4
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5, amsgrad=True)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
@@ -169,11 +169,14 @@ if __name__ == "__main__":
 
     # Optionally freeze encoders for initial epochs
     freeze_epochs = 10 if weights_loaded else 0
+    encoders_unfrozen = False
+
     if freeze_epochs > 0:
         for param in model.visual_encoder.parameters():
             param.requires_grad = False
         for param in model.proprioceptive_encoder.parameters():
             param.requires_grad = False
+        print(f"Encoders frozen for first {freeze_epochs} epochs.")
 
     # Training and validation loop
     best_val_loss = float('inf')
@@ -194,7 +197,8 @@ if __name__ == "__main__":
                 param.requires_grad = True
             for param in model.proprioceptive_encoder.parameters():
                 param.requires_grad = True
-            print("Unfrozen visual and proprioceptive encoders for full fine-tuning.")
+            encoders_unfrozen = True 
+            print("Unfrozen visual and proprioceptive encoders → full fine-tuning begins.")
 
         avg_train_loss = total_train_loss / len(train_dataloader)
 
@@ -211,10 +215,10 @@ if __name__ == "__main__":
 
         print(f"Epoch [{epoch+1}/{args.epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
 
-        # Save model if validation loss improves
-        if avg_val_loss < best_val_loss:
+        # Save model ONLY if encoders are unfrozen AND val loss improved
+        if encoders_unfrozen and avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), save_path)
-            print(f"Saved model with validation loss: {best_val_loss:.4f}")
+            print(f"Saved improved model (post-unfreeze) with validation loss: {best_val_loss:.4f}")
 
     dataset.__del__()

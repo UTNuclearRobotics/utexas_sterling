@@ -20,12 +20,11 @@ import shutil
 import gc
 import gi
 import glob
+gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk, GdkPixbuf
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import yaml
-
-gi.require_version("Gtk", "3.0")
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 
@@ -221,22 +220,43 @@ class OutlierLabelUI(Gtk.Application):
 
         # Outlier clusters (K-means)
         outlier_phi_pro = self.adapt_phi_pro[self.outlier_indices].cpu().numpy()
-        max_possible_clusters = min(len(self.outlier_indices), 10)
-        if max_possible_clusters <= 1:
-            outlier_group_labels = np.zeros(len(self.outlier_indices), dtype=int)
+        n_out = len(outlier_phi_pro)
+
+        if n_out <= 3:
+            outlier_group_labels = np.zeros(n_out, dtype=int)
+            print(f"Too few outliers ({n_out}), assigning all to group 0")
         else:
+            max_possible_clusters = min(10, n_out - 1)
+            best_labels = np.zeros(n_out, dtype=int)
             best_n_clusters = 1
-            best_score = -1
-            for n in range(2, min(max_possible_clusters + 1, len(self.outlier_indices) // 2 + 1)):
-                kmeans = KMeans(n_clusters=n, random_state=42)
+            best_score = -1.0
+
+            for n in range(2, max_possible_clusters + 1):
+                kmeans = KMeans(n_clusters=n, random_state=42, n_init=10)
                 labels = kmeans.fit_predict(outlier_phi_pro)
-                score = silhouette_score(outlier_phi_pro, labels)
-                if score > best_score:
-                    best_score = score
-                    best_n_clusters = n
-            kmeans = KMeans(n_clusters=best_n_clusters, n_init=10, random_state=42)
-            outlier_group_labels = kmeans.fit_predict(outlier_phi_pro)
-            print(f"Automatically selected {best_n_clusters} clusters for outliers based on silhouette score: {best_score:.3f}")
+                
+                # Critical: check actual number of unique clusters after fitting
+                n_unique = len(np.unique(labels))
+                if n_unique < 2:
+                    continue  # skip – useless for silhouette
+
+                try:
+                    score = silhouette_score(outlier_phi_pro, labels)
+                    if score > best_score:
+                        best_score = score
+                        best_n_clusters = n
+                        best_labels = labels.copy()  # save them
+                except ValueError as e:
+                    if "Number of labels is 1" in str(e):
+                        continue
+                    raise
+
+            if best_score > -1:  # we found at least one valid clustering
+                outlier_group_labels = best_labels
+                print(f"Selected {best_n_clusters} clusters for {n_out} outliers (silhouette: {best_score:.3f})")
+            else:
+                outlier_group_labels = np.zeros(n_out, dtype=int)
+                print(f"No valid multi-cluster solution for {n_out} outliers → using 1 group")
 
         unique_outlier_groups = np.unique(outlier_group_labels)
         outlier_cluster_indices = [

@@ -463,7 +463,7 @@ if __name__ == "__main__":
     
     camera_base_offset = [0.2286, 0, 0.5715]
     patch_size = 128
-    num_patches = 2
+    num_patches = 1
     lateral_pixel_shift = patch_size // 2
 
     if os.path.exists(vicreg_data_path):

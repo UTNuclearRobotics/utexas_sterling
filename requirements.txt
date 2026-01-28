@@ -6,7 +6,7 @@ glfw
 keyboard
 kneed
 matplotlib
-numpy
+numpy<2
 opencv-python
 pillow
 pycairo
@@ -25,3 +25,4 @@ tqdm
 rosbags
 h5py
 tensorflow>=2.15.0
+psutil

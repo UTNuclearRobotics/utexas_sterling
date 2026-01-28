@@ -219,7 +219,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Get BEV cost visual using trained preference predictor.")
     parser.add_argument("-m","-model_bag", type=str, required=True, help="Bag directory with model files inside.")
     parser.add_argument("-b","-synced_bag", type=str, required=True, help="Bag directory with synchronized HDF5 file inside.")
-    parser.add_argument("-a","-use_adapted", type=bool, default=False, help="Use adapted models if True, else use preadapted model.")
+    parser.add_argument("-a","-use_adapted", type=bool, default=True, help="Use adapted models if True, else use preadapted model.")
     parser.add_argument("-v", "-save_vid", type=bool, default=False, help="Save video if True or play live if False.")
     args = parser.parse_args()
 
@@ -242,7 +242,7 @@ if __name__ == "__main__":
     save_path = bag_path if save_vid else None
     bev_costmap = BEVCostmap(models_dir, save_path=save_path, adapted=adapted)
     max_timesteps = robot_data.getNTimesteps()
-    start_timestep = min(3000, max_timesteps)
+    start_timestep = min(7000, max_timesteps)
     frame_count = 0
     video_writer = None
     frame_size = None
